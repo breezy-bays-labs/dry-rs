@@ -27,3 +27,16 @@ pub fn run() -> ExitCode {
     println!("dry4rs (skeleton) — see https://github.com/breezy-bays-labs/dry-rs");
     ExitCode::SUCCESS
 }
+
+#[cfg(test)]
+mod tests {
+    use super::run;
+
+    #[test]
+    fn run_returns_without_panic() {
+        // Exercises the placeholder body so the coverage gate stays
+        // honest at the bootstrap PR. The real `run()` body lands in
+        // PR 8 with proper integration coverage.
+        let _ = run();
+    }
+}
