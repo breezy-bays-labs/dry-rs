@@ -1,0 +1,187 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: target
+  CARGO_TERM_COLOR: always
+
+# Workflow-level timeout. Per-job 15 min ceiling guards against a wedged
+# runner draining minutes overnight; current jobs complete in <2 min so
+# this is a generous backstop, not a tight bound.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: dry-rs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: Test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x86
+          - os: macos-latest
+            name: macos-arm
+          - os: macos-15-intel
+            name: macos-x86
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: dry-rs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9
+      - run: cargo nextest run --workspace --all-targets --locked
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: dry-rs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.6
+      # Threshold rationale: domain-only achieves >95% line coverage
+      # trivially (constructors + getters covered by serde tests).
+      # Setting at 85% is conservative — accommodates the parser-heavy
+      # PR (PR 5) where unreachable error branches legitimately inflate
+      # uncovered lines, but catches the agentic-dev failure mode where
+      # a future PR adds 200 lines of code and 30 lines of test. Promote
+      # to 90% once comparison-engine + reporter coverage settles.
+      - run: cargo llvm-cov nextest --workspace --locked --fail-under-lines 85 --lcov --output-path lcov.info
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lcov
+          path: lcov.info
+          retention-days: 7
+
+  msrv:
+    name: MSRV (1.85)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: dry-rs-msrv
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo check --workspace --all-targets --locked
+
+  deny:
+    name: cargo-deny (advisories + licenses + bans)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      # SHA-pinned: cargo-deny is the supply-chain gate itself, so a
+      # tag-poisoning attack on the action would silently disable every
+      # other supply-chain check. Tag v2 -> 91bf2b6 (verified via
+      # `gh api repos/EmbarkStudios/cargo-deny-action/git/ref/tags/v2`).
+      - uses: EmbarkStudios/cargo-deny-action@91bf2b620e09e18d6eb78b92e7861937469acedb # v2
+        with:
+          command: check
+
+  ast-purity:
+    name: dry-core AST-library purity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The hexagonal layering ADR
+    # (`ops/decisions/dry-rs/adr-hexagonal-layout.md`, filed in PR 2)
+    # bans AST libraries from `dry-core`'s source. The structural
+    # mechanism is `crates/dry-core/Cargo.toml` itself (a wrong dep
+    # would have to be added there to be `use`d), but `serde_derive`
+    # already pulls `syn` and `proc-macro2` transitively as proc-macro
+    # deps -- cargo-deny's transitive-ban mechanism (`bans.deny.wrappers`)
+    # would either false-positive on serde_derive's chain or require a
+    # fragile, expanding wrapper list. A source-level grep is the right
+    # tool: the rule is "no AST-library imports inside
+    # crates/dry-core/src/," and grep enforces exactly that.
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject AST-library imports in dry-core
+        # Static pattern, no untrusted-input interpolation. Regex notes:
+        #   - Matches both `use` and `extern crate` forms.
+        #   - Optional `(::)?` handles absolute-path imports (`use ::syn::Foo`).
+        #   - Trailing `([_:; ]|$)` is a portable word-boundary substitute
+        #     that works on GNU and BSD grep (avoids `\b`/`\w` non-portable
+        #     shortcuts). Catches `syn::`, `syn;`, `syn_codegen::`,
+        #     `swc_ecma_parser::`, `tree_sitter_typescript::`, etc.;
+        #     rejects false positives like `use syntactic_analysis::X`.
+        run: |
+          set -euo pipefail
+          if grep -rE '^[[:space:]]*(use|extern[[:space:]]+crate)[[:space:]]+(::)?(syn|quote|proc_macro2?|tree_sitter|swc|oxc)([_:; ]|$)' crates/dry-core/src/; then
+            echo "::error::dry-core must not import AST libraries -- see decisions/dry-rs/adr-hexagonal-layout.md"
+            exit 1
+          fi
+          echo "dry-core is AST-library-pure"
+
+  docs:
+    name: cargo doc (warnings as errors)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: dry-rs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo doc --workspace --no-deps --document-private-items --locked
+
+  # cargo-public-api (semver-style public API gate) and cargo-mutants
+  # (mutation testing) are deliberately deferred. cargo-public-api
+  # lands at v1.0 when semver gating begins; cargo-mutants lands with
+  # the comparison engine PR (PR 6) when mutating real logic earns its
+  # keep. Self-check, dry-self, and crap-self land with PR 9 (the
+  # self-referential test + symmetric dogfood + composite action).

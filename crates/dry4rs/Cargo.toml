@@ -1,0 +1,33 @@
+[package]
+name = "dry4rs"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+description = "Structural duplication detector for Rust — finds Jaccard-similar subforms across functions, methods, blocks, and expression chains. Rust-source adapter for the dry-core analyzer."
+keywords = ["dry", "duplication", "quality", "static-analysis", "jaccard"]
+categories = ["development-tools", "command-line-utilities"]
+readme = "../../README.md"
+rust-version.workspace = true
+
+# Binstall metadata is intentionally not wired during v0.x — see
+# CLAUDE.md "v0.x -> v1.0 transition" for the decoupled per-crate
+# release gate. When dry4rs v1.0 lands, mirror crap4rs's
+# [package.metadata.binstall] block.
+
+[lib]
+name = "dry4rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dry4rs"
+path = "src/main.rs"
+
+[dependencies]
+# Language-agnostic core — domain types, port traits, comparison
+# engine, reporters, CLI surface. dry4rs adds only the Rust-specific
+# parser adapter (lands with PR 5 via syn/proc-macro2/quote — at
+# bootstrap PR 1 those deps are deliberately absent).
+dry-core = { path = "../dry-core", version = "0.1.0" }

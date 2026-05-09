@@ -1,0 +1,55 @@
+# Pre-commit and pre-push hooks for dry-rs.
+#
+# After cloning, run `lefthook install` once to wire git hooks. CI runs
+# the same gates plus the coverage threshold; pre-push catches everything
+# coverage-independent so most pushes don't burn CI minutes on
+# easily-caught local issues.
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      glob: "*.rs"
+      run: cargo fmt --all --check
+      timeout: 60s
+    gitleaks:
+      run: gitleaks protect --staged --redact
+      timeout: 60s
+
+pre-push:
+  parallel: false
+  commands:
+    # Same battery the `Format`, `Clippy`, `Test (linux-x86)`,
+    # `cargo-deny`, and `cargo doc` CI jobs run. Pedantic clippy fires
+    # via `#![warn(clippy::pedantic, clippy::cargo)]` at the crate root.
+    fmt:
+      run: cargo fmt --all --check
+      timeout: 60s
+    ast-purity:
+      # Mirror the `ast-purity` CI job. Rejects AST-library imports in
+      # dry-core; per `deny.toml` AST-library policy comment, this is
+      # the source-level backstop for the structural Cargo.toml ban.
+      # Regex matches both `use` and `extern crate` forms; trailing
+      # `([_:; ]|$)` is a portable word-boundary substitute (GNU + BSD
+      # grep). Rejects false positives like `use syntactic_analysis::X`.
+      run: |
+        set -euo pipefail
+        if grep -rE '^[[:space:]]*(use|extern[[:space:]]+crate)[[:space:]]+(::)?(syn|quote|proc_macro2?|tree_sitter|swc|oxc)([_:; ]|$)' crates/dry-core/src/; then
+          echo "dry-core must not import AST libraries — see decisions/dry-rs/adr-hexagonal-layout.md"
+          exit 1
+        fi
+      timeout: 30s
+    clippy:
+      run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      timeout: 300s
+    test:
+      run: cargo nextest run --workspace --all-targets --locked
+      timeout: 300s
+    deny:
+      run: cargo deny check
+      timeout: 60s
+    docs:
+      env:
+        RUSTDOCFLAGS: -D warnings
+      run: cargo doc --workspace --no-deps --document-private-items --locked
+      timeout: 120s
