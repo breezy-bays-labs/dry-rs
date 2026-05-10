@@ -41,11 +41,11 @@ deny = []
 
 # AST-library policy.
 #
-# The hexagonal layering ADR (`ops/decisions/dry-rs/adr-hexagonal-layout.md`,
-# filed in PR 2) bans AST libraries (`syn`, `swc_*`, `oxc_*`,
-# `tree-sitter*`, `proc-macro2`, `quote`) from `dry-core` so the same
-# library can be linked by every adapter binary in the workspace
-# (dry4rs via syn, dry4ts via swc/oxc, future adapters).
+# The hexagonal layering ADR (`ops/decisions/dry-rs/adr-hexagonal-layout.md`)
+# bans AST libraries (`syn`, `swc_*`, `oxc_*`, `tree-sitter*`,
+# `proc-macro2`, `quote`, `rustc_ast`, `rustc_parse`) from `dry-core`
+# so the same library can be linked by every adapter binary in the
+# workspace (dry4rs via syn, dry4ts via swc/oxc, future adapters).
 #
 # This `deny.toml` does NOT encode the per-crate transitive ban via
 # `bans.deny.wrappers`, because:
@@ -67,9 +67,18 @@ deny = []
 #    forbids the corresponding `use` line.
 # 2. **Source-level grep** — the `ast-purity` CI job in
 #    `.github/workflows/ci.yml` rejects any `use|extern crate` line
-#    referencing `syn`/`quote`/`proc_macro2?`/`tree_sitter`/`swc`/`oxc`
-#    inside `crates/dry-core/src/`. Catches the case where an AST lib
-#    is added as a dep AND imported in the same PR.
+#    referencing `syn`/`quote`/`proc_macro2?`/`tree_sitter`/`swc`/`oxc`/
+#    `rustc_ast`/`rustc_parse` inside `crates/dry-core/src/`. The
+#    `rustc_ast`/`rustc_parse` alternation closes the rustc-private
+#    parser leak vector (CAO Finding 3.1 of the PR 2 ADR audit).
+#    Catches the case where an AST lib is added as a dep AND imported
+#    in the same PR.
+#
+# A complementary `span-locations-check` CI job enforces the
+# `proc-macro2 = { features = ["span-locations"] }` requirement
+# mechanically (per the ADR's per-crate dep table footnote) — silent
+# breakage of `Span::start()` / `Span::end()` is structurally rejected,
+# not just documented.
 #
 # Operator backstop: `cargo tree -p dry-core --invert syn` should show
 # only proc-macro chains (lines marked `(proc-macro)` like
