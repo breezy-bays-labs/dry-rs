@@ -135,7 +135,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # The hexagonal layering ADR
-    # (`ops/decisions/dry-rs/adr-hexagonal-layout.md`, filed in PR 2)
+    # (`ops/decisions/dry-rs/adr-hexagonal-layout.md`)
     # bans AST libraries from `dry-core`'s source. The structural
     # mechanism is `crates/dry-core/Cargo.toml` itself (a wrong dep
     # would have to be added there to be `use`d), but `serde_derive`
@@ -154,15 +154,59 @@ jobs:
         #   - Trailing `([_:; ]|$)` is a portable word-boundary substitute
         #     that works on GNU and BSD grep (avoids `\b`/`\w` non-portable
         #     shortcuts). Catches `syn::`, `syn;`, `syn_codegen::`,
-        #     `swc_ecma_parser::`, `tree_sitter_typescript::`, etc.;
-        #     rejects false positives like `use syntactic_analysis::X`.
+        #     `swc_ecma_parser::`, `tree_sitter_typescript::`, `rustc_ast::`,
+        #     `rustc_parse::`, etc.; rejects false positives like
+        #     `use syntactic_analysis::X`.
+        #   - `rustc_ast` / `rustc_parse` added per CAO Finding 3.1 of the
+        #     PR 2 ADR audit -- closes the rustc-private parser leak vector.
         run: |
           set -euo pipefail
-          if grep -rE '^[[:space:]]*(use|extern[[:space:]]+crate)[[:space:]]+(::)?(syn|quote|proc_macro2?|tree_sitter|swc|oxc)([_:; ]|$)' crates/dry-core/src/; then
-            echo "::error::dry-core must not import AST libraries -- see decisions/dry-rs/adr-hexagonal-layout.md"
+          if grep -rE '^[[:space:]]*(use|extern[[:space:]]+crate)[[:space:]]+(::)?(syn|quote|proc_macro2?|tree_sitter|swc|oxc|rustc_ast|rustc_parse)([_:; ]|$)' crates/dry-core/src/; then
+            echo "::error::dry-core must not import AST libraries -- see ops/decisions/dry-rs/adr-hexagonal-layout.md"
             exit 1
           fi
           echo "dry-core is AST-library-pure"
+
+  span-locations-check:
+    name: proc-macro2 span-locations enforcement
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The hexagonal layering ADR per-crate dep table footnote requires
+    # ALL Rust adapters using `proc-macro2` to enable the `span-locations`
+    # feature flag. Without it, `Span::start()` and `Span::end()` silently
+    # return `LineColumn { line: 0, column: 0 }` regardless of source
+    # position -- a permanent silent-breakage trap for any reporter
+    # consuming spans (every reporter dry-rs ships).
+    #
+    # The check uses `cargo metadata + jq` because it has to be robust
+    # against three valid Cargo declaration forms: inline
+    # `proc-macro2 = { version = "1", features = ["span-locations"] }`,
+    # block `[dependencies.proc-macro2]` with a separate `features` line,
+    # and workspace re-export `proc-macro2 = { workspace = true }` (where
+    # the features come from `[workspace.dependencies]`). cargo metadata
+    # resolves all three to the same JSON shape so a single jq query
+    # covers all of them.
+    #
+    # At PR 2 time this check vacuously passes (no `proc-macro2` deps
+    # exist in any workspace member yet); it activates structurally when
+    # PR 5 lands the syn-based normalizer in `crates/dry4rs/`.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Reject proc-macro2 deps without span-locations feature
+        run: |
+          set -euo pipefail
+          missing=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] as $p | $p.dependencies[] | select(.name == "proc-macro2") | select((.features // []) | index("span-locations") | not) | "\($p.name): proc-macro2 dependency missing span-locations feature flag"')
+          if [[ -n "$missing" ]]; then
+            echo "::error::Silent-breakage trap: proc-macro2 dep without span-locations feature"
+            echo "$missing"
+            echo ""
+            echo "Fix: add 'features = [\"span-locations\"]' to the proc-macro2 dep declaration."
+            echo "See ops/decisions/dry-rs/adr-hexagonal-layout.md per-crate dep table footnote."
+            exit 1
+          fi
+          echo "All proc-macro2 dependencies have span-locations feature enabled (or no proc-macro2 deps yet)."
 
   docs:
     name: cargo doc (warnings as errors)

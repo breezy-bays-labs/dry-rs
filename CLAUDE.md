@@ -15,8 +15,8 @@ Hexagonal (ports & adapters), strict dependency direction enforced by
 Cargo crate boundaries: `dry-core` lists no AST library in its deps;
 adapter crates depend on `dry-core` and add their own parser library.
 A wrong inward import is a build error, not a review catch. The
-hexagonal-layering ADR (filed in PR 2 at
-`ops/decisions/dry-rs/adr-hexagonal-layout.md`) carries the full
+hexagonal-layering ADR
+(`ops/decisions/dry-rs/adr-hexagonal-layout.md`) carries the full
 layering invariant + per-crate dep table; this section sketches it.
 
 ```
@@ -60,7 +60,7 @@ not parallel detector modules — the tool has one algorithm).
 ## Wire envelope
 
 Mirrors scrap-rs's nested JSON envelope. The nested-envelope ADR
-(filed in PR 2 at `ops/decisions/dry-rs/adr-nested-json-envelope.md`)
+(`ops/decisions/dry-rs/adr-nested-json-envelope.md`)
 carries the full forward-compat rules; highlights:
 
 - `schema_version: u32` — bumps only on breaking changes; additive
