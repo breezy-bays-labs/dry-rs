@@ -30,11 +30,13 @@
 mod enums;
 mod form;
 mod identity;
+mod r#match;
 mod score;
 mod span;
 
 pub use enums::{FormKind, Severity, Tier};
 pub use form::{FormRef, NormalizedForm};
 pub use identity::{FilePath, Fingerprint};
+pub use r#match::Match;
 pub use score::{Score, ScoreError};
 pub use span::{LineColumn, Span, SpanError};
