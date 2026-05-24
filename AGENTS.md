@@ -32,15 +32,15 @@ dry4ts (depends on dry-core; adds swc_ecma_parser or oxc, napi-rs)  [v0.6+]
 
 | Crate | Purpose | Allowed deps |
 |-------|---------|--------------|
-| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters) | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `clap` (derive), `thiserror` |
+| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters) | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `clap` (derive), `thiserror`, `regex` |
 | `dry4rs` | Rust-source parser adapter + binary | `dry-core`, `syn`, `proc-macro2` (with `span-locations` feature), `quote` |
 | `dry4ts` | TypeScript-source parser adapter + binary | `dry-core`, `swc_ecma_parser` *or* `oxc_parser`, `napi-rs` |
 
 **Never import inward.** `dry-core` must stay free of AST libraries
 (`syn`, `swc_*`, `oxc_*`, `tree-sitter*`, `proc-macro2`, `quote`).
 Enforcement: structural (`dry-core/Cargo.toml` does not list them) +
-source-level (`ast-purity` CI job rejects matching `use` lines in
-`crates/dry-core/src/`).
+source-level (`dry-core AST-library purity` CI job rejects matching
+`use` lines in `crates/dry-core/src/`).
 
 ## Working rules
 
@@ -112,9 +112,9 @@ In particular:
   `#[derive(thiserror::Error)]` with manual `Display` + `Error` impls
   on grounds of "domain purity" are based on a misread of this
   project's rules. The "domain purity" rule scopes only to AST
-  libraries (see below); `thiserror`, `serde`, `clap`, `walkdir`,
-  `ignore`, `globset`, `comfy-table`, and `regex` are explicitly
-  permitted in `dry-core`.
+  libraries (see below); `thiserror`, `serde`, `serde_json`, `clap`,
+  `walkdir`, `ignore`, `globset`, `comfy-table`, and `regex` are
+  explicitly permitted in `dry-core`.
 
 ### AST-purity scope
 
