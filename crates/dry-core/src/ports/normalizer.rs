@@ -67,16 +67,18 @@ pub trait NormalizerPort {
     /// `source` is the file's raw bytes (the wrapper owning file I/O
     /// reads them before calling this); `path` is the location the
     /// bytes came from. The adapter does NOT open `path` — that
-    /// would re-introduce I/O on the port surface. Instead, `path`
-    /// is the *diagnostic anchor*: the adapter passes it through to
-    /// any `NormalizeError::Parse { span, .. }` so error messages
-    /// localize to a real file, and the adapter may consult `path`
-    /// to compute language-specific qualified names (e.g., Rust's
-    /// `path/to/mod.rs` → outer module name `mod`). The orchestrator
+    /// would re-introduce I/O on the port surface. The orchestrator
     /// that calls `normalize` is the one that associates each
-    /// returned `NormalizedForm` with the `FilePath` — `FormRef`
-    /// (which DOES carry `file: FilePath`) is constructed at the
-    /// reporter / `Match` boundary, not by the adapter.
+    /// returned `NormalizedForm` (and any returned `NormalizeError`)
+    /// with the `FilePath` — `FormRef` (which DOES carry `file:
+    /// FilePath`) is constructed at the reporter / `Match` boundary,
+    /// not by the adapter; the wrapper that holds `path` annotates
+    /// returned errors with file context above the trait surface.
+    ///
+    /// The adapter may consult `path` to compute language-specific
+    /// qualified names (e.g., Rust's `path/to/mod.rs` → outer module
+    /// name `mod`); other than that, the trait surface treats `path`
+    /// as a purely value-bearing companion to `source`.
     ///
     /// # Errors
     ///
