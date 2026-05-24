@@ -124,6 +124,13 @@ mod tests {
     }
 
     #[test]
+    fn file_path_from_path_ref_clones_into_pathbuf() {
+        let raw = Path::new("src/lib.rs");
+        let p = FilePath::from(raw);
+        assert_eq!(p.as_path(), raw);
+    }
+
+    #[test]
     fn file_path_from_str_via_new_round_trips() {
         let p = FilePath::new("src/lib.rs");
         assert_eq!(p.as_path(), Path::new("src/lib.rs"));
