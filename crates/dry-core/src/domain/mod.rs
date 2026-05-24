@@ -28,9 +28,11 @@
 //! pinned in the O8 ADR landing with PR 4.
 
 mod enums;
+mod identity;
 mod score;
 mod span;
 
 pub use enums::{FormKind, Severity, Tier};
+pub use identity::{FilePath, Fingerprint};
 pub use score::{Score, ScoreError};
 pub use span::{LineColumn, Span, SpanError};
