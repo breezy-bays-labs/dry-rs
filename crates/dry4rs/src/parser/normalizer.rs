@@ -6,6 +6,8 @@
 use dry_core::domain::{FilePath, NormalizedForm};
 use dry_core::ports::{NormalizeError, NormalizerPort, PlaceholderPolicy};
 
+use super::walker::walk_file;
+
 /// The Rust adapter that converts Rust source into [`NormalizedForm`]s
 /// for the comparison engine.
 ///
@@ -65,14 +67,11 @@ impl NormalizerPort for SynNormalizer {
         source: &str,
         _path: &FilePath,
     ) -> Result<Vec<NormalizedForm>, NormalizeError> {
-        // Trigger syn::parse_file so an invalid source produces the
-        // contractual `NormalizeError::Parse`. The walker that emits
-        // forms is wired construct-by-construct in subsequent commits.
-        let _file = syn::parse_file(source).map_err(|err| NormalizeError::Parse {
+        let file = syn::parse_file(source).map_err(|err| NormalizeError::Parse {
             message: err.to_string(),
             span: None,
         })?;
-        Ok(Vec::new())
+        Ok(walk_file(&file))
     }
 
     /// The v0.1 placeholder policy — opaque, versioned default.

@@ -1,11 +1,13 @@
-//! Rust-source [`NormalizerPort`] implementation via `syn`.
+//! Rust-source [`dry_core::ports::NormalizerPort`] implementation via
+//! `syn`.
 //!
 //! The [`SynNormalizer`] type implements
 //! [`dry_core::ports::NormalizerPort`] for Rust source files. It walks
-//! the `syn` AST depth-first, emits one [`NormalizedForm`] per
-//! function-shaped body (`ItemFn`, `ImplItemFn`, `TraitItemFn` with a
-//! default body, `ExprClosure`), and constructs `fingerprint_set` via
-//! per-subform typed-placeholder hashing.
+//! the `syn` AST depth-first, emits one
+//! [`dry_core::domain::NormalizedForm`] per function-shaped body
+//! (`ItemFn`, `ImplItemFn`, `TraitItemFn` with a default body,
+//! `ExprClosure`), and constructs `fingerprint_set` via per-subform
+//! typed-placeholder hashing.
 //!
 //! The full rule set is pinned in the O5 ADR
 //! (`ops/decisions/dry-rs/adr-rust-normalization-rules.md`):
@@ -30,5 +32,7 @@
 //!   `NormalizeError::Parse`; no panic.
 
 mod normalizer;
+mod token;
+mod walker;
 
 pub use normalizer::SynNormalizer;
