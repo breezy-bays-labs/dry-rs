@@ -267,6 +267,13 @@ impl FormEmitter {
     /// `#[warn(...)]`, `#[cfg(...)]`, `#[deprecated(...)]`) contribute
     /// no fingerprint. Preserved attributes contribute an `Attr(<name>)`
     /// token to the form's fingerprint stream.
+    ///
+    /// Attribute names are NOT recorded into `identifier_set` — the
+    /// O11 rename-signal contract uses `identifier_set` for renameable
+    /// identifiers (locals, fn names, type names, field names). An
+    /// attribute name like `"test"` or `"inline"` is part of the
+    /// language vocabulary, not a renameable identifier, and including
+    /// it would create false rename-diff signal at v0.2+.
     fn hash_attrs(&mut self, attrs: &[syn::Attribute]) {
         let mut hasher = DefaultHasher::new();
         "Attrs".hash(&mut hasher);
@@ -276,8 +283,7 @@ impl FormEmitter {
                 continue;
             };
             any_preserved = true;
-            self.feed_token(&mut hasher, &NormalizedToken::Attr(name.clone()));
-            self.record_identifier(name);
+            self.feed_token(&mut hasher, &NormalizedToken::Attr(name));
         }
         if any_preserved {
             let fp = hasher.finish();
