@@ -36,14 +36,17 @@ pub fn render(report: &Report) -> String {
 
     let mut out = String::new();
 
-    // Group matches by tier, preserving the tier ordering
-    // (AutoRefactor < ReviewFirst < Advisory by derived `Ord`).
-    let mut groups: Vec<(Tier, Vec<&Match>)> = Vec::new();
-    for tier in [Tier::AutoRefactor, Tier::ReviewFirst, Tier::Advisory] {
-        let bucket: Vec<&Match> = report.matches.iter().filter(|m| m.tier == tier).collect();
-        if !bucket.is_empty() {
-            groups.push((tier, bucket));
-        }
+    // Group matches by tier via BTreeMap so the iteration is robust to
+    // `Tier` gaining a new variant (Tier is `#[non_exhaustive]`; a
+    // hand-rolled loop over [AutoRefactor, ReviewFirst, Advisory] would
+    // silently omit any new tier from the text report). The derived
+    // `Ord` on Tier orders by declaration: AutoRefactor < ReviewFirst <
+    // Advisory, which is the canonical tier ordering for display.
+    // Gemini callout (PR #30 review, 2026-05-24).
+    let mut groups: std::collections::BTreeMap<Tier, Vec<&Match>> =
+        std::collections::BTreeMap::new();
+    for m in &report.matches {
+        groups.entry(m.tier).or_default().push(m);
     }
 
     for (tier, mut bucket) in groups {
