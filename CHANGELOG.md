@@ -46,6 +46,18 @@ full release roadmap.
   Vacuously passes at PR 2 time (no `proc-macro2` deps yet); activates
   structurally when PR 5 lands the syn-based normalizer. Mirrored as a
   pre-push hook in `lefthook.yml`.
+- Bot context availability infrastructure (closes #24): `AGENTS.md`
+  carries a new "For automated code reviewers" section distilling the
+  load-bearing rules from private ADRs (allowed deps per crate,
+  AST-purity scope, locked wire shapes, `#[non_exhaustive]`
+  discipline, `const fn` + `Drop` Rust-1.61 rule); `.coderabbit.yaml`
+  carries path-scoped `path_instructions` for
+  `crates/dry-core/src/domain/**` and `crates/dry-core/**` so
+  CodeRabbit grounds its suggestions in the rules; `.gemini/styleguide.md`
+  mirrors the rules in prose for `gemini-code-assist`;
+  `.gemini/config.yaml` sets noise thresholds. Drift CI deferred to
+  #26 (`priority:later`). Pattern tracked at org level in
+  `ops/decisions/org/adr-bot-context-availability.md`.
 
 ### Changed
 
