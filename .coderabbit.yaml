@@ -1,0 +1,89 @@
+# CodeRabbit configuration for dry-rs.
+#
+# See https://docs.coderabbit.ai/reference/configuration and
+# `AGENTS.md` § "For automated code reviewers" for the rules behind
+# these path_instructions. Org-level pattern tracked at
+# ops/decisions/org/adr-bot-context-availability.md.
+
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: en-US
+reviews:
+  profile: chill
+  poem: false
+  in_progress_fortune: false
+  enable_prompt_for_ai_agents: false
+  high_level_summary: true
+  review_status: false
+  collapse_walkthrough: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    ignore_title_keywords: ["WIP", "wip:", "draft", "DO NOT MERGE"]
+
+  path_instructions:
+    - path: "crates/dry-core/src/domain/**"
+      instructions: |
+        Wire envelope is locked at v0.1. Do NOT suggest:
+          - Replacing `Match.score: f64` with `Score` newtype — the wire
+            contract requires a primitive (see AGENTS.md § "Locked wire
+            shapes").
+          - Changing `Match`'s three reserved score slots from
+            `#[serde(default)]` to `skip_serializing_if = "Option::is_none"`
+            — slots must serialize as `null`, not be omitted.
+          - Wrapping `NormalizedForm.fingerprint_set: HashSet<u64>` in
+            `HashSet<Fingerprint>` — raw `u64` is deliberate (hot-path
+            Jaccard input; `Fingerprint` is reporter-side identity only).
+          - Adding `#[non_exhaustive]` to result structs (`Match`, `Score`,
+            `Span`, `Fingerprint`, `Report`, `Summary`, `NormalizedForm`,
+            `FormRef`). Structs evolve via constructor pattern; only enums
+            carry `#[non_exhaustive]`.
+          - Removing `#[non_exhaustive]` from enums (`Tier`, `Severity`,
+            `FormKind`, `NormalizeError`, `SpanError`, `ScoreError`).
+
+    - path: "crates/dry-core/**"
+      instructions: |
+        Allowed deps for `dry-core` are listed in AGENTS.md § "Allowed
+        dependencies per crate" and the per-crate dep table at the top
+        of AGENTS.md. In particular:
+          - `thiserror` IS allowed. Do NOT suggest replacing
+            `#[derive(thiserror::Error)]` with manual `Display` + `Error`
+            impls citing "domain purity" — the purity rule scopes to AST
+            libraries only.
+          - `serde`, `serde_json`, `clap` (derive), `walkdir`, `ignore`,
+            `globset`, `comfy-table`, and `regex` are all permitted.
+
+        AST-purity scope is EXACTLY:
+          syn, quote, proc-macro2, swc_*, oxc_*, tree-sitter*,
+          rustc_ast, rustc_parse
+        Do NOT extend the AST-purity rule to other external crates.
+
+    - path: "crates/dry4rs/**"
+      instructions: |
+        `dry4rs` uses `syn`, `proc-macro2`, `quote`. `proc-macro2` MUST
+        carry the `span-locations` feature flag (CI enforces this via
+        the `span-locations-check` job; lefthook mirrors). Do NOT
+        suggest removing this feature flag.
+
+    - path: "**/Cargo.toml"
+      instructions: |
+        If a new dependency is being added to `crates/dry-core/`, verify
+        it appears in AGENTS.md § per-crate dep table or that the PR
+        amends AGENTS.md to add it. Adapter crates (`dry4rs`, future
+        `dry4ts`) have their own allowed lists.
+
+    - path: "**/*.rs"
+      instructions: |
+        The workspace pins `rust-version = "1.85"` (edition 2024). Two
+        non-obvious rules apply:
+          - `const fn` accepts parameters implementing `Drop` since Rust
+            1.61. A `pub const fn new(forms: Vec<T>, ...)` is valid. Do
+            NOT suggest removing `const` on constructors taking owned
+            collections / paths / summaries.
+          - All public enums in `dry-core::domain` carry
+            `#[non_exhaustive]` deliberately. Do NOT suggest removing.
+
+  tools:
+    ast-grep:
+      essential_rules: true

@@ -1,0 +1,24 @@
+# Gemini Code Assist configuration for dry-rs.
+#
+# Style guidance lives in .gemini/styleguide.md and AGENTS.md
+# § "For automated code reviewers".
+#
+# Org-level pattern tracked at
+# ops/decisions/org/adr-bot-context-availability.md.
+
+have_fun: false
+
+memory_config:
+  disabled: false
+
+code_review:
+  disable: false
+  comment_severity_threshold: MEDIUM
+  max_review_comments: -1
+  pull_request_opened:
+    help: false
+    summary: true
+    code_review: true
+    include_drafts: false
+
+ignore_patterns: []
