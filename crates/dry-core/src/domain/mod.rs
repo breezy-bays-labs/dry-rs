@@ -27,8 +27,10 @@
 //! The cross-language `NormalizedForm.node_count` semantics will be
 //! pinned in the O8 ADR landing with PR 4.
 
+mod enums;
 mod score;
 mod span;
 
+pub use enums::{FormKind, Severity, Tier};
 pub use score::{Score, ScoreError};
 pub use span::{LineColumn, Span, SpanError};

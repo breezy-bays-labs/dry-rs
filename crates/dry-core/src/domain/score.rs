@@ -4,11 +4,11 @@
 //! values outside the closed unit interval. Once constructed, a
 //! [`Score`] is guaranteed to hold a finite `f64` in `[0.0, 1.0]`.
 //!
-//! Per the wire-format ADR (`adr-nested-json-envelope.md`), `score` on
-//! [`crate::domain::Match`] is **pure Jaccard at all schema versions**
-//! — Uncle Bob's mathematical anchor inherited verbatim from dry4clj.
-//! Composite or rename-aware scoring lives in separate fields
-//! (`structural_score`, `composite_score`).
+//! Per the wire-format ADR (`adr-nested-json-envelope.md`), the
+//! `score` field on `Match` is **pure Jaccard at all schema
+//! versions** — Uncle Bob's mathematical anchor inherited verbatim
+//! from dry4clj. Composite or rename-aware scoring lives in separate
+//! fields (`structural_score`, `composite_score`).
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
