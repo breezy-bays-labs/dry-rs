@@ -56,7 +56,8 @@ proptest! {
     }
 
     // Property: every finite value strictly below 0.0 is rejected
-    // with `OutOfRange` (not `Nan`).
+    // with `OutOfRange` (not `Nan`). The carried value equals the
+    // input exactly (no rounding inside `Score::try_new`).
     #[test]
     fn score_try_new_rejects_every_negative_value(value in f64::MIN..0.0f64) {
         // `value` is generated strictly below 0.0; guard against the
@@ -65,20 +66,23 @@ proptest! {
         prop_assume!(value < 0.0);
         match Score::try_new(value) {
             Err(ScoreError::OutOfRange { value: v }) => {
-                prop_assert!((v - value).abs() < f64::EPSILON);
+                prop_assert_eq!(v, value);
             }
             other => prop_assert!(false, "expected OutOfRange, got {other:?}"),
         }
     }
 
     // Property: every finite value strictly above 1.0 is rejected
-    // with `OutOfRange`.
+    // with `OutOfRange`. The carried value equals the input exactly
+    // (no rounding inside `Score::try_new`).
     #[test]
     fn score_try_new_rejects_every_value_above_one(value in 1.0f64..f64::MAX) {
         prop_assume!(value > 1.0);
         match Score::try_new(value) {
             Err(ScoreError::OutOfRange { value: v }) => {
-                prop_assert!((v - value).abs() < f64::EPSILON || (v.is_finite() && value.is_finite()));
+                // `Score::try_new` does not transform the input; the
+                // carried value must equal the rejected input bit-for-bit.
+                prop_assert_eq!(v, value);
             }
             other => prop_assert!(false, "expected OutOfRange, got {other:?}"),
         }
