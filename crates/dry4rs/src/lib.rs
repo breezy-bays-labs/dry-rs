@@ -1,10 +1,12 @@
 //! `dry4rs` — Rust-source adapter for the dry structural duplication
 //! detector.
 //!
-//! Owns the syn-based parser adapter (lands with PR 5). Domain types,
+//! Owns the [`parser`] module — the syn-based
+//! [`dry_core::ports::NormalizerPort`] implementation. Domain types,
 //! port traits, comparison engine, reporters, file walker, and the
 //! entire CLI surface live in [`dry_core`]; this crate provides only
-//! what is genuinely Rust-source-specific.
+//! what is genuinely Rust-source-specific (the [`syn`] AST walk and
+//! the typed-placeholder fingerprinting rule set).
 //!
 //! For consumer convenience the `dry_core` modules are re-exported
 //! here, so downstream code that wants the full analyzer surface can
@@ -16,6 +18,8 @@
 
 #![warn(missing_docs)]
 #![warn(clippy::pedantic, clippy::cargo)]
+
+pub mod parser;
 
 pub use dry_core::{adapters, cli, comparison, domain, ports};
 
