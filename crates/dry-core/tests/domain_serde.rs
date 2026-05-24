@@ -111,6 +111,49 @@ fn normalized_form_round_trips() {
 }
 
 #[test]
+fn normalized_form_round_trips_with_context_populated() {
+    // PR 4: O8/O11 context fields populate adapter-side; round-trip
+    // through the public API verifies serde wires `identifier_set` and
+    // `qualified_name` correctly via the `Vec<String>` shape pinned in
+    // `adr-normalized-form-schema.md`.
+    let fps: HashSet<u64> = [1_u64, 2, 3].into_iter().collect();
+    let original = NormalizedForm::with_context(
+        FormKind::Production,
+        fps,
+        vec!["x".into(), "y".into(), "z".into()],
+        vec!["my_module".into(), "MyType".into(), "foo".into()],
+        Span::try_new(LineColumn::new(1, 0), LineColumn::new(3, 12)).unwrap(),
+        17,
+        3,
+    );
+    let json = serde_json::to_string(&original).unwrap();
+    let back: NormalizedForm = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, original);
+}
+
+#[test]
+fn normalized_form_envelope_missing_context_fields_deserializes() {
+    // Backward-compat across the PR 3 → PR 4 boundary: a wire envelope
+    // emitted before `identifier_set` + `qualified_name` existed
+    // deserializes cleanly with both as empty Vecs via
+    // `#[serde(default)]`. This is the contract that lets the v0.1
+    // wire shape gain these slots without bumping `schema_version`.
+    let json = r#"{
+        "kind": "production",
+        "fingerprint_set": [10, 20, 30],
+        "span": {"start": {"line": 1, "column": 0}, "end": {"line": 4, "column": 0}},
+        "node_count": 9,
+        "line_count": 4
+    }"#;
+    let form: NormalizedForm =
+        serde_json::from_str(json).expect("PR 3-era envelope must deserialize cleanly");
+    assert!(form.identifier_set.is_empty());
+    assert!(form.qualified_name.is_empty());
+    assert_eq!(form.node_count, 9);
+    assert_eq!(form.line_count, 4);
+}
+
+#[test]
 fn form_ref_round_trips() {
     let original = make_form_ref();
     let json = serde_json::to_string(&original).unwrap();
