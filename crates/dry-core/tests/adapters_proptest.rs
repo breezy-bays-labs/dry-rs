@@ -6,7 +6,7 @@
 //! that downstream PRs (PR 8 CLI surface, PR 9 self-check) and the
 //! `wire_envelope_snapshot` mechanical lock rely on.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use dry_core::adapters::reporters::github_annotations;
@@ -220,13 +220,4 @@ proptest! {
 fn json_render_succeeds_on_empty_report() {
     let json = render_json(&Report::empty_passed(), fixed_meta()).unwrap();
     assert!(json.contains("\"matches\": []"));
-}
-
-// The `HashSet<u64>` field on NormalizedForm is referenced in the
-// adapters tests indirectly (via Report containing Matches containing
-// FormRefs); the `use HashSet` here keeps the test file compiling
-// even if a future refactor re-exposes the field.
-#[allow(dead_code)]
-fn _touch_hashset() -> HashSet<u64> {
-    HashSet::new()
 }
