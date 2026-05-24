@@ -35,10 +35,13 @@ serde = { workspace = true }
 # get `std::error::Error` with `#[source]` chaining without
 # hand-rolled boilerplate.
 thiserror = { workspace = true }
-# `SourceError::InvalidGlob` carries the underlying `globset::Error`
-# via `#[source]`. Pulled into `dry-core` because globset is on the
-# allowed dep list (CLAUDE.md) and the error type itself is part of
-# the port surface.
+# Reserved for the free-function file walker landing in PR 7 — the
+# walker rejects empty/whitespace-only patterns and surfaces compile
+# errors from `globset::Glob::new(...)` through its own error type.
+# Pulled now to keep the workspace dep declaration centralized; the
+# port surface (PR 4) does NOT consume globset (file enumeration is a
+# free function per the hexagonal-layout ADR's "language-agnostic core"
+# section, not a port — `NormalizerPort` is the single port trait).
 globset = { workspace = true }
 
 [dev-dependencies]
