@@ -21,8 +21,8 @@
 //!
 //! **Cross-language schema** ([`crate::domain::NormalizedForm`])
 //! pinned by the O8 ADR (`adr-normalized-form-schema.md`, filed with
-//! PR 4 alongside the trait): identifier_set + qualified_name +
-//! node_count semantics every adapter honors.
+//! PR 4 alongside the trait): `identifier_set` + `qualified_name` +
+//! `node_count` semantics every adapter honors.
 //!
 //! Module roster:
 //! - `normalizer` — [`NormalizerPort`] + [`NormalizeError`] + [`PlaceholderPolicy`]

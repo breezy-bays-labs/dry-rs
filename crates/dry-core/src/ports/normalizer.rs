@@ -26,12 +26,12 @@
 //! v0.5 size-bucketed parallel comparison-engine path is the
 //! anticipated bound site (see roadmap §"Performance at scale").
 //!
-//! **Cross-language schema** — [`NormalizedForm`] (kind, fingerprint_set,
-//! identifier_set, qualified_name, span, node_count, line_count) is
-//! the shared IR every adapter produces. The O8 ADR
-//! (`adr-normalized-form-schema.md`) pins the field semantics; every
-//! adapter honors the same `node_count` heuristic so threshold
-//! semantics stay unified across languages.
+//! **Cross-language schema** — [`NormalizedForm`] (with `kind`,
+//! `fingerprint_set`, `identifier_set`, `qualified_name`, `span`,
+//! `node_count`, `line_count`) is the shared IR every adapter
+//! produces. The O8 ADR (`adr-normalized-form-schema.md`) pins the
+//! field semantics; every adapter honors the same `node_count`
+//! heuristic so threshold semantics stay unified across languages.
 
 use crate::domain::{FilePath, NormalizedForm};
 
