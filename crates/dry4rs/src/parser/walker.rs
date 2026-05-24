@@ -485,7 +485,9 @@ impl FormEmitter {
         }
         let fp = hasher.finish();
         self.fingerprint_set.insert(fp);
-        self.node_count = self.node_count.saturating_add(1);
+        // node_count is per-leaf (O8 ADR); the subform itself does NOT
+        // contribute. Any leaf tokens fed via feed_token during the
+        // match arms above already incremented node_count.
         fp
     }
 
@@ -631,7 +633,9 @@ impl FormEmitter {
         }
         let fp = hasher.finish();
         self.fingerprint_set.insert(fp);
-        self.node_count = self.node_count.saturating_add(1);
+        // node_count is per-leaf (O8 ADR); the pattern subform itself
+        // does NOT contribute. Leaf tokens fed via feed_token during
+        // the match arms above already incremented node_count.
         fp
     }
 
