@@ -28,6 +28,22 @@ proptest = "1"
 thiserror = "2"
 globset = "0.4"
 static_assertions = "1"
+# Rust AST parser for dry4rs's SynNormalizer (lands with PR 5). The
+# `full` feature enables every syn item / expr / stmt visitor needed
+# to walk function bodies; `extra-traits` derives `Debug` / `PartialEq`
+# on syn types for test ergonomics. Restricted to `dry4rs` per the
+# hexagonal layering ADR (`ops/decisions/dry-rs/adr-hexagonal-layout.md`)
+# — `dry-core` must not import AST libraries. Source-level enforcement
+# is the `dry-core AST-library purity` CI job.
+syn = { version = "2", features = ["full", "extra-traits"] }
+# Span tracking for syn-emitted errors and form positions. The
+# `span-locations` feature is LOAD-BEARING: without it,
+# `proc_macro2::Span::start()` / `end()` silently return
+# `LineColumn { line: 0, column: 0 }` regardless of source position.
+# Enforcement: `proc-macro2 span-locations enforcement` CI job +
+# lefthook pre-push (`span-locations` hook). See the ADR per-crate
+# dep table footnote.
+proc-macro2 = { version = "1", features = ["span-locations"] }
 
 # Workspace-wide lint config lands as the comparison engine + CLI come
 # online (PRs 6 + 8). dry4ts joins this workspace at v0.6+ when its

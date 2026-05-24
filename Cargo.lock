@@ -89,6 +89,9 @@ name = "dry4rs"
 version = "0.1.0"
 dependencies = [
  "dry-core",
+ "proc-macro2",
+ "proptest",
+ "syn",
 ]
 
 [[package]]
