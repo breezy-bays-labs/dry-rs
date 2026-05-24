@@ -1,5 +1,5 @@
-//! JSON reporter — renders a [`Report`](crate::domain::Report) as the
-//! locked v0.1 wire envelope.
+//! JSON reporter — renders a [`Report`] as the locked v0.1 wire
+//! envelope.
 //!
 //! Per `ops/decisions/dry-rs/adr-nested-json-envelope.md`, this module
 //! owns the construction of the nested envelope:

@@ -10,6 +10,8 @@
 //! Implementation lands below; this docs block reserves the surface
 //! for the snapshot tests to import.
 
+use std::fmt::Write;
+
 use comfy_table::{Cell, ContentArrangement, Table, presets::ASCII_MARKDOWN};
 
 use crate::domain::{Match, Report, Tier};
@@ -62,7 +64,7 @@ pub fn render(report: &Report) -> String {
                 })
         });
 
-        out.push_str(&format!("\n{} ({})\n", tier_heading(tier), bucket.len()));
+        let _ = writeln!(out, "\n{} ({})", tier_heading(tier), bucket.len());
 
         let mut table = Table::new();
         table
@@ -74,7 +76,7 @@ pub fn render(report: &Report) -> String {
             let forms = m
                 .forms
                 .iter()
-                .map(|f| format_form_ref(f))
+                .map(format_form_ref)
                 .collect::<Vec<_>>()
                 .join("\n");
             let kind = m

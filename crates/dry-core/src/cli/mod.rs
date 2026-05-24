@@ -37,7 +37,7 @@ use crate::domain::FilePath;
 /// structs evolve via constructors and `Default`. This keeps
 /// hand-construction in tests cheap (`AnalysisConfig::new(roots)`
 /// without `..Default::default()` ceremony).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AnalysisConfig {
     /// Input roots the walker enumerates. Each root is walked
     /// recursively via the `ignore` crate (which honors `.gitignore`,
@@ -87,16 +87,6 @@ impl AnalysisConfig {
     pub const fn with_include_ignored(mut self, include_ignored: bool) -> Self {
         self.include_ignored = include_ignored;
         self
-    }
-}
-
-impl Default for AnalysisConfig {
-    fn default() -> Self {
-        Self {
-            roots: Vec::new(),
-            extensions: Vec::new(),
-            include_ignored: false,
-        }
     }
 }
 

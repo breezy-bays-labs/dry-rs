@@ -3,10 +3,10 @@
 //!
 //! The envelope is a serialization-layer concern, NOT a domain type
 //! (per the ADR's "It is not a domain type" rule, line 49). It wraps a
-//! [`Report`](crate::domain::Report) — the truthful-gate domain shape — plus
-//! versioning metadata (`schema_version`, `tool`, `tool_version`,
-//! `language`, `timestamp`, `threshold_mode`) and the optional
-//! [`ViewProjection`] / `delta` / `diagnostics` blocks.
+//! [`Report`] — the truthful-gate domain shape — plus versioning
+//! metadata (`schema_version`, `tool`, `tool_version`, `language`,
+//! `timestamp`, `threshold_mode`) and the optional [`ViewProjection`]
+//! / `delta` / `diagnostics` blocks.
 //!
 //! ## Locked shape (do not modify without a `schema_version` bump)
 //!

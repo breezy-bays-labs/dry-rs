@@ -35,8 +35,8 @@ use crate::domain::FilePath;
 /// sorted by full path before return, so two back-to-back calls
 /// produce identical output regardless of filesystem ordering. This
 /// determinism is contract-grade; the property test
-/// [`enumerate_determinism`](crate::adapters::source::tests::enumerate_determinism)
-/// locks it.
+/// `enumerate_is_deterministic_across_runs` in
+/// `crates/dry-core/tests/adapters_proptest.rs` locks it.
 ///
 /// **Skip-on-read-error policy**: when the walker encounters a path it
 /// cannot enumerate (permission denied, broken symlink, etc.), it
@@ -100,7 +100,7 @@ pub fn enumerate(config: &AnalysisConfig) -> Result<SourceOutcome, SourceError> 
                     let Some(ext) = path.extension() else {
                         continue;
                     };
-                    if !allowed_exts.iter().any(|allowed| *allowed == ext) {
+                    if !allowed_exts.contains(&ext) {
                         continue;
                     }
                 }

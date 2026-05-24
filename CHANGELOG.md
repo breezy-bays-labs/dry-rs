@@ -20,6 +20,49 @@ full release roadmap.
 
 ### Added
 
+- **PR 7 (#8)** — language-agnostic adapters in `dry_core::adapters`:
+  - `source::enumerate(&AnalysisConfig)` — file walker via the `ignore`
+    crate (honors `.gitignore` / `.ignore` / `.git/info/exclude` like
+    `rg` / `fd`). Deterministically sorted; `include_ignored` switch
+    for fixtures; skip-on-read-error policy via
+    `SourceWarning::Unreadable` accumulated alongside the path list.
+  - `reporters::json::render(&Report, EnvelopeMeta)` — locked v0.1
+    nested wire envelope (`schema_version` / `tool` / `tool_version` /
+    `language` / `timestamp` / `threshold_mode` / `result` / `view?` /
+    `delta?` / `diagnostics?`). The envelope struct lives in
+    `adapters/reporters/json/envelope.rs` (NOT a domain type, per
+    `adr-nested-json-envelope.md`). Caller-supplied timestamp keeps
+    the wire-envelope snapshot byte-stable.
+  - `reporters::text::render(&Report)` — comfy-table output grouped
+    by tier (`auto_refactor` -> `review_first` -> `advisory`), ASCII
+    Markdown preset, NO ANSI color (color is a CLI-flag concern at
+    PR 8).
+  - `reporters::github_annotations::render(&Report)` — GitHub Actions
+    workflow-command lines per Match. Tier->severity:
+    `auto_refactor -> ::error::`, `review_first -> ::warning::`,
+    `advisory -> ::notice::`. Two-tier GHA escape (message-data vs
+    property-value) prevents POSIX-path delimiters in `file=` from
+    corrupting the runner's parse.
+  - `cli::AnalysisConfig` — minimal v0.1 config the walker consumes
+    (`roots`, `extensions`, `include_ignored`). PR 8 extends with
+    clap-derive surface for `--threshold` / `--format` / `--top` etc.
+  - Mechanical wire-shape lock at
+    `crates/dry-core/tests/wire_envelope_snapshot.rs`: the executable
+    schema document for the v0.1 envelope. Three-null reserved slots
+    on Match, top-level key ordering, BTreeMap summary ordering, and
+    `view`/`delta`/`diagnostics` skip-when-None all locked.
+  - Insta snapshots for the github-annotations reporter
+    (`crates/dry-core/tests/github_annotations_snapshot.rs`) lock all
+    three tier mappings and the property-value escape rules.
+  - Property tests at `crates/dry-core/tests/adapters_proptest.rs`
+    cover: `enumerate` determinism across runs; `json::render`
+    totality; reserved-score-slot null emission; text-reporter
+    ANSI-cleanness; one annotation per Match with locked severity
+    prefix + required property keys.
+  - Workspace deps added: `walkdir`, `ignore`, `comfy-table` (all on
+    `dry-core`'s allowed list per `adr-hexagonal-layout.md`); promoted
+    `serde_json` from dev-only to runtime; added `tempfile` as a
+    dev-dep for walker fixtures.
 - Initial workspace bootstrap: `crates/dry-core` skeleton (lib only,
   AST-library-pure) with hexagonal module layout (`domain/`, `ports/`,
   `comparison/`, `adapters/`, `cli/`); `crates/dry4rs` skeleton (lib +
