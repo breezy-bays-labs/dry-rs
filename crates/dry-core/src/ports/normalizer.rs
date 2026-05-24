@@ -55,16 +55,28 @@ pub trait NormalizerPort {
     ///
     /// The file walker (`crate::adapters::source::enumerate`, lands
     /// in PR 7) filters by this list before invoking `normalize`. The
-    /// returned slice borrows static storage; adapters typically
-    /// return a `&'static [&'static str]` constant.
-    fn extensions(&self) -> &[&'static str];
+    /// `'static` return lifetime lets callers store the slice in
+    /// `'static`-bounded data structures (e.g., a global registry
+    /// keyed by extension); adapters typically return a static
+    /// constant like `&[".rs"]`, which Rust promotes to `&'static
+    /// [&'static str]` automatically.
+    fn extensions(&self) -> &'static [&'static str];
 
     /// Normalize the source file into the cross-language IR.
     ///
     /// `source` is the file's raw bytes (the wrapper owning file I/O
-    /// reads them before calling this); `path` accompanies `source`
-    /// for `FilePath` population on emitted forms — the adapter does
-    /// not read it from disk.
+    /// reads them before calling this); `path` is the location the
+    /// bytes came from. The adapter does NOT open `path` — that
+    /// would re-introduce I/O on the port surface. Instead, `path`
+    /// is the *diagnostic anchor*: the adapter passes it through to
+    /// any `NormalizeError::Parse { span, .. }` so error messages
+    /// localize to a real file, and the adapter may consult `path`
+    /// to compute language-specific qualified names (e.g., Rust's
+    /// `path/to/mod.rs` → outer module name `mod`). The orchestrator
+    /// that calls `normalize` is the one that associates each
+    /// returned `NormalizedForm` with the `FilePath` — `FormRef`
+    /// (which DOES carry `file: FilePath`) is constructed at the
+    /// reporter / `Match` boundary, not by the adapter.
     ///
     /// # Errors
     ///
@@ -132,10 +144,18 @@ pub enum NormalizeError {
     /// rule is not yet implemented — `dry4rs` v0.1 returns it for
     /// any construct outside the O5-ADR-scoped initial set; later
     /// PRs widen the supported set and shrink the unsupported one.
+    /// `span` localizes the offending construct when the adapter
+    /// recovers a position (the common case — the AST node carries
+    /// it); `None` for cases where the adapter recognized
+    /// unsupported-ness without a single-position anchor (e.g. a
+    /// whole-module attribute or a feature-gated cfg block).
     #[error("unsupported construct: {construct}")]
     Unsupported {
         /// Identifier-shaped name of the unsupported construct.
         construct: String,
+        /// Source position of the unsupported construct, when
+        /// recoverable.
+        span: Option<crate::domain::Span>,
     },
 }
 
@@ -222,11 +242,28 @@ mod error_smoke {
     }
 
     #[test]
-    fn unsupported_error_renders_construct_name() {
+    fn unsupported_error_renders_construct_name_without_span() {
         let err = NormalizeError::Unsupported {
             construct: "macro_rules!".into(),
+            span: None,
         };
         assert_eq!(err.to_string(), "unsupported construct: macro_rules!");
+        assert!(err.source().is_none());
+    }
+
+    #[test]
+    fn unsupported_error_carries_optional_span() {
+        let span = Span::try_new(LineColumn::new(7, 0), LineColumn::new(9, 5)).unwrap();
+        let err = NormalizeError::Unsupported {
+            construct: "async fn in trait".into(),
+            span: Some(span),
+        };
+        // The Display message intentionally omits span detail — the
+        // span lives on the variant for tooling consumers; the
+        // human-readable string stays compact.
+        assert_eq!(err.to_string(), "unsupported construct: async fn in trait");
+        // No `#[source]`; span is positional metadata, not an
+        // upstream error to chain.
         assert!(err.source().is_none());
     }
 
