@@ -1,0 +1,53 @@
+# .dry-rs-ignore.toml — v0.1 baseline allowlist for dry-rs.
+#
+# Schema-only at v0.1; ships with ZERO `[[allowed_match]]` entries by
+# design. Wiring this file into the gate is a v0.2 deliverable. The
+# v0.1 gate is the `dry-self` CI job + its insta snapshot in
+# `crates/dry4rs/tests/self_check.rs` — any drift in the comparison
+# engine's findings vs. the snapshotted summary (`total_forms` /
+# `matches_count` / `by_tier`) fails CI predictably.
+#
+# Why zero entries at v0.1
+# ------------------------
+#
+# The v0.1 wire envelope's `Match` shape does NOT expose per-match
+# fingerprints — only `forms` / `score` / `tier` / three reserved score
+# slots — so a fingerprint-keyed filter cannot ride the v0.1 wire. The
+# allowlist UX, including the loader that consumes this file, lands at
+# v0.2 alongside the rename-signal feature that promotes structural
+# scoring fields into the envelope (see
+# `ops/decisions/dry-rs/adr-nested-json-envelope.md` "Multi-score
+# envelope" + `ops/workspace/dry-rs/20260508-dry-rs-roadmap/roadmap.md`
+# §"v0.2 Allowlist UX").
+#
+# Schema (v0.1 forward-looking format)
+# -------------------------------------
+#
+# Each entry below documents an intentional duplication pattern that
+# should NOT trigger the gate. Future v0.2 loader will read this file,
+# match each entry's `fingerprints` against `NormalizedForm.fingerprint_set`
+# at comparison time, and skip the corresponding `Match` from the gate
+# verdict (the wire envelope's `result.matches` continues to surface
+# the finding; only the truthful-gate `passed` flag is affected). Until
+# v0.2 the file is documentation: it tells contributors what patterns
+# the project has deliberately chosen to leave duplicated.
+#
+# Example (commented out — DO NOT uncomment without a real fingerprint
+# pair, which v0.1 cannot supply):
+#
+# [[allowed_match]]
+# # The first fingerprint hash from each `NormalizedForm.fingerprint_set`
+# # captured for the pair. v0.2 uses these as the keying tuple; v0.1
+# # leaves the field unconsumed.
+# fingerprints = [0x1234abcd5678ef01, 0xfedcba9876543210]
+# # Human-readable explanation of why the duplication is intentional.
+# # MANDATORY — entries without a reason should be refactored, not
+# # ignored. The reason is what makes the allowlist a non-rotting
+# # surface; "tracked: dry-rs#N" or "adr: ops/decisions/dry-rs/<file>.md"
+# # are the two acceptable framings.
+# reason = "Symmetric helper duplicated across normalizer test modules per ADR-X"
+# # Optional re-evaluation date (ISO-8601 YYYY-MM-DD). When set, the
+# # v0.2+ loader emits a warning past this date that the exclusion is
+# # due for review. Empty / absent = permanent (only justified by an
+# # ADR reference in `reason`).
+# until = "2026-12-31"
