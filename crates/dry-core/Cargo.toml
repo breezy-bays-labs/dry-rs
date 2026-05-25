@@ -57,6 +57,14 @@ ignore = { workspace = true }
 # is a CLI-flag concern owned by the `--color always|auto|never` flag
 # landing in PR 8.
 comfy-table = { workspace = true }
+# CLI surface (PR 8) — `clap` with `derive` powers `Args` + the
+# subcommand enum; `clap_complete` powers `--completions <SHELL>`.
+# Both ship inside `dry-core::cli` because the CLI surface is
+# language-agnostic (adapter binaries provide only a 5-line `main()`
+# that calls `dry_core::cli::run::<MyNormalizer>()`). See the
+# hexagonal-layout ADR per-crate dep table.
+clap = { workspace = true }
+clap_complete = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

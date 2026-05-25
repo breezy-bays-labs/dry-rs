@@ -49,3 +49,10 @@ xxhash-rust = { workspace = true }
 # Property tests for normalizer invariants (determinism, parseable
 # input never panics, span round-trip consistency).
 proptest = { workspace = true }
+# JSON parsing for end-to-end pipeline tests (PR 8) — the binary
+# emits the wire envelope; tests parse it back to assert shape
+# invariants. Confined to dev-deps.
+serde_json = { workspace = true }
+# Tempdir fixtures for the CLI binary-smoke tests (PR 8). Confined to
+# dev-deps; the analyzer never reads tmp paths in production.
+tempfile = "3"

@@ -129,6 +129,54 @@ pub const REVIEW_FIRST_FLOOR: f64 = 0.85;
 /// (`dry_core::cli`, PR 8) is the input-validation boundary.
 #[must_use]
 pub fn compare(forms: &[NormalizedForm], threshold: f64) -> Vec<Match> {
+    compare_with(forms, threshold, &SyntheticPathResolver)
+}
+
+/// Compare with caller-supplied file paths attached to each form by
+/// index.
+///
+/// `paths.len()` MUST equal `forms.len()`; element `paths[i]` is the
+/// `FilePath` for `forms[i]`. The returned matches carry real paths
+/// on each [`FormRef`], not the synthetic stub that [`compare`] emits.
+///
+/// This is the CLI run-loop's entry point — the run loop tracks
+/// (path, form) pairs during normalization and threads both into the
+/// comparison engine. Library callers that don't track paths use
+/// [`compare`] (which falls back to a `qualified_name`-derived
+/// synthetic path).
+///
+/// # Panics
+///
+/// Panics on length mismatch between `forms` and `paths` in both
+/// debug AND release builds — `IndexedPathResolver::path_for` indexes
+/// `paths[i]` unconditionally, so a mismatch would panic with a
+/// cryptic `index out of bounds` deep in the engine. The explicit
+/// `assert_eq!` surfaces the contract violation up front with the
+/// argument lengths in the message. The threshold-range check is the
+/// same debug-only `debug_assert!` as [`compare`].
+#[must_use]
+pub fn compare_with_paths(
+    forms: &[NormalizedForm],
+    paths: &[FilePath],
+    threshold: f64,
+) -> Vec<Match> {
+    assert_eq!(
+        forms.len(),
+        paths.len(),
+        "compare_with_paths(): forms and paths must be the same length; \
+         got forms={} paths={}",
+        forms.len(),
+        paths.len()
+    );
+    compare_with(forms, threshold, &IndexedPathResolver { paths })
+}
+
+/// Internal entry point parameterized by a path-resolver strategy.
+fn compare_with(
+    forms: &[NormalizedForm],
+    threshold: f64,
+    resolver: &dyn PathResolver,
+) -> Vec<Match> {
     debug_assert!(
         threshold > 0.0 && threshold <= 1.0,
         "compare() threshold must lie in (0.0, 1.0]; got {threshold}"
@@ -142,15 +190,60 @@ pub fn compare(forms: &[NormalizedForm], threshold: f64) -> Vec<Match> {
     // collisions and partial-bucket mismatches leave their indices
     // unclaimed so Pass 2 (sliding-window) can compare them
     // pairwise.
-    pass1_hash_bucket(forms, &mut matches, &mut claimed);
+    pass1_hash_bucket(forms, resolver, &mut matches, &mut claimed);
 
     // Pass 2 — sliding-window Jaccard over forms NOT claimed by
     // Pass 1. Sorted ascending by `node_count` with the
     // break-math shortcut.
-    pass2_sliding_window(forms, threshold, &claimed, &mut matches);
+    pass2_sliding_window(forms, resolver, threshold, &claimed, &mut matches);
 
     sort_matches_for_output(&mut matches);
     matches
+}
+
+/// Path-resolver strategy used by the comparison engine to construct
+/// each [`FormRef`]'s `file` field. The library-facing `compare()` uses
+/// a synthetic stub derived from `qualified_name`; the CLI run loop
+/// uses an indexed strategy that maps `forms[i]` -> caller-supplied
+/// `paths[i]`.
+///
+/// Object-safe (used as `&dyn PathResolver`) — keeps the engine's two
+/// passes generic without forcing a type parameter on every helper.
+trait PathResolver {
+    /// Return the [`FilePath`] to embed in the `FormRef` for the form
+    /// at index `i` in the comparison engine's input slice.
+    fn path_for(&self, form: &NormalizedForm, i: usize) -> FilePath;
+}
+
+/// Library-facing fallback: synthesize a placeholder path from the
+/// form's `qualified_name`. Equivalent to the pre-PR-8 behavior; kept
+/// so `compare()` (the public legacy entry point) stays usable from
+/// the comparison-engine unit tests that don't thread paths.
+struct SyntheticPathResolver;
+
+impl PathResolver for SyntheticPathResolver {
+    fn path_for(&self, form: &NormalizedForm, _i: usize) -> FilePath {
+        let synthesized = if form.qualified_name.is_empty() {
+            std::path::PathBuf::from("<unknown>")
+        } else {
+            std::path::PathBuf::from(form.qualified_name.join("::"))
+        };
+        FilePath::from(synthesized)
+    }
+}
+
+/// CLI-facing resolver: pull `paths[i]` for `forms[i]`. The CLI run
+/// loop owns the (path, form) pairing during normalization and threads
+/// it through to the comparison engine.
+struct IndexedPathResolver<'a> {
+    paths: &'a [FilePath],
+}
+
+impl PathResolver for IndexedPathResolver<'_> {
+    fn path_for(&self, _form: &NormalizedForm, i: usize) -> FilePath {
+        // Debug-asserted to be in-bounds in `compare_with_paths`.
+        self.paths[i].clone()
+    }
 }
 
 /// Pass 1 — hash-bucket clustering. Groups forms by an XOR-fold of
@@ -160,6 +253,7 @@ pub fn compare(forms: &[NormalizedForm], threshold: f64) -> Vec<Match> {
 /// unverified ones leave their indices unclaimed for Pass 2.
 fn pass1_hash_bucket(
     forms: &[NormalizedForm],
+    resolver: &dyn PathResolver,
     matches: &mut Vec<Match>,
     claimed: &mut HashSet<usize>,
 ) {
@@ -202,8 +296,10 @@ fn pass1_hash_bucket(
                 .partition(|&i| forms[i].fingerprint_set == *canonical_set);
 
             if cluster.len() >= 2 {
-                let forms_refs: Vec<FormRef> =
-                    cluster.iter().map(|&i| form_ref_for(&forms[i])).collect();
+                let forms_refs: Vec<FormRef> = cluster
+                    .iter()
+                    .map(|&i| form_ref_for(&forms[i], i, resolver))
+                    .collect();
                 matches.push(Match::new(forms_refs, 1.0, Tier::AutoRefactor));
                 for i in cluster {
                     claimed.insert(i);
@@ -226,6 +322,7 @@ fn pass1_hash_bucket(
 /// those land in Pass 1).
 fn pass2_sliding_window(
     forms: &[NormalizedForm],
+    resolver: &dyn PathResolver,
     threshold: f64,
     claimed: &HashSet<usize>,
     matches: &mut Vec<Match>,
@@ -272,7 +369,10 @@ fn pass2_sliding_window(
                 score
             };
             let tier = tier_for(final_score, threshold);
-            let forms_refs = vec![form_ref_for(&forms[i]), form_ref_for(&forms[j])];
+            let forms_refs = vec![
+                form_ref_for(&forms[i], i, resolver),
+                form_ref_for(&forms[j], j, resolver),
+            ];
             matches.push(Match::new(forms_refs, final_score, tier));
         }
     }
@@ -347,20 +447,20 @@ fn bucket_key<S: BuildHasher>(set: &HashSet<u64, S>) -> u64 {
     set.iter().fold(0u64, |acc, &x| acc ^ x)
 }
 
-/// Project a [`NormalizedForm`] to the reporter-friendly
-/// [`FormRef`]. The file path is synthesized as `qualified_name`
-/// joined with `::` because the comparison engine has no access to
-/// the source `FilePath` (it isn't on `NormalizedForm` — see
-/// `adr-normalized-form-schema.md`). PR 8's run loop wires real
-/// paths at the higher layer; this stub is the deterministic
-/// fallback at v0.1.
-fn form_ref_for(form: &NormalizedForm) -> FormRef {
-    let synthesized = if form.qualified_name.is_empty() {
-        std::path::PathBuf::from("<unknown>")
-    } else {
-        std::path::PathBuf::from(form.qualified_name.join("::"))
-    };
-    FormRef::new(FilePath::from(synthesized), form.span, form.kind)
+/// Project a [`NormalizedForm`] (at index `i` in the engine's input
+/// slice) to the reporter-friendly [`FormRef`]. The file path comes
+/// from `resolver.path_for(form, i)`.
+///
+/// At v0.1 two resolvers exist: [`SyntheticPathResolver`] (the
+/// library-facing fallback that derives a placeholder from
+/// `qualified_name`) and [`IndexedPathResolver`] (the CLI run loop's
+/// strategy that maps `forms[i]` -> `paths[i]`). The trait object
+/// keeps the inner-loop callsites identical; static-dispatch via
+/// monomorphization would also work but the cost of a vtable call
+/// per form is negligible at the call-frequency of two emit sites
+/// per match.
+fn form_ref_for(form: &NormalizedForm, i: usize, resolver: &dyn PathResolver) -> FormRef {
+    FormRef::new(resolver.path_for(form, i), form.span, form.kind)
 }
 
 /// Jaccard similarity over two fingerprint sets.
@@ -933,5 +1033,99 @@ mod tests {
     #[should_panic(expected = "threshold must lie in")]
     fn threshold_nan_panics_in_debug() {
         let _ = compare(&[], f64::NAN);
+    }
+
+    #[test]
+    fn compare_with_paths_uses_caller_supplied_paths_on_form_refs() {
+        // Two identical forms in two different files. With
+        // `compare_with_paths` each emitted FormRef carries the
+        // caller's path; with `compare()` they'd carry the
+        // qualified-name fallback ("unknown" since the helpers below
+        // use empty qualified names).
+        let forms = vec![make_form(&[1, 2, 3], 3), make_form(&[1, 2, 3], 3)];
+        let paths = vec![
+            FilePath::from(std::path::PathBuf::from("src/alpha.rs")),
+            FilePath::from(std::path::PathBuf::from("src/beta.rs")),
+        ];
+        let matches = compare_with_paths(&forms, &paths, 0.85);
+        assert_eq!(matches.len(), 1, "exact-match cluster expected");
+        let m = &matches[0];
+        assert!((m.score - 1.0).abs() < f64::EPSILON);
+        let files: Vec<String> = m.forms.iter().map(|f| f.file.to_string()).collect();
+        assert!(
+            files.contains(&"src/alpha.rs".to_string()),
+            "expected src/alpha.rs in match.forms, got: {files:?}"
+        );
+        assert!(
+            files.contains(&"src/beta.rs".to_string()),
+            "expected src/beta.rs in match.forms, got: {files:?}"
+        );
+    }
+
+    #[test]
+    fn compare_with_paths_pass2_emits_correct_paths() {
+        // Pass 2 (sliding-window Jaccard) emits matches with FormRef
+        // paths that map back to the caller-supplied paths array.
+        let forms = vec![make_form(&[1, 2, 3, 4], 4), make_form(&[1, 2, 3, 4, 5], 5)];
+        let paths = vec![
+            FilePath::from(std::path::PathBuf::from("src/x.rs")),
+            FilePath::from(std::path::PathBuf::from("src/y.rs")),
+        ];
+        let matches = compare_with_paths(&forms, &paths, 0.7);
+        assert_eq!(matches.len(), 1);
+        let files: Vec<String> = matches[0]
+            .forms
+            .iter()
+            .map(|f| f.file.to_string())
+            .collect();
+        assert!(files.contains(&"src/x.rs".to_string()));
+        assert!(files.contains(&"src/y.rs".to_string()));
+    }
+
+    #[test]
+    fn compare_with_paths_handles_pass1_xor_collision_with_correct_paths() {
+        // Pass 1 emits one cluster per equal-set; XOR-colliding
+        // distinct clusters each get their own match. Paths must
+        // propagate per index.
+        let forms = vec![
+            make_form(&[1, 2], 2),
+            make_form(&[1, 2], 2),
+            make_form(&[4, 7], 2),
+            make_form(&[4, 7], 2),
+        ];
+        let paths = vec![
+            FilePath::from(std::path::PathBuf::from("a.rs")),
+            FilePath::from(std::path::PathBuf::from("b.rs")),
+            FilePath::from(std::path::PathBuf::from("c.rs")),
+            FilePath::from(std::path::PathBuf::from("d.rs")),
+        ];
+        let matches = compare_with_paths(&forms, &paths, 0.85);
+        assert_eq!(matches.len(), 2, "two distinct equal-set clusters expected");
+        let mut all_files: Vec<String> = matches
+            .iter()
+            .flat_map(|m| m.forms.iter().map(|f| f.file.to_string()))
+            .collect();
+        all_files.sort();
+        assert_eq!(
+            all_files,
+            vec!["a.rs", "b.rs", "c.rs", "d.rs"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>(),
+            "all four paths should surface across the two clusters"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "forms and paths must be the same length")]
+    fn compare_with_paths_panics_on_length_mismatch() {
+        let forms = vec![make_form(&[1, 2], 2)];
+        // Empty paths — the unconditional `assert_eq!` catches the
+        // length mismatch in both debug AND release builds. The prior
+        // `debug_assert_eq!` left release builds to panic with a
+        // cryptic `index out of bounds` from the resolver's
+        // `paths[i]`; the explicit `assert_eq!` surfaces the lengths.
+        let paths: Vec<FilePath> = Vec::new();
+        let _ = compare_with_paths(&forms, &paths, 0.85);
     }
 }
