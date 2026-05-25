@@ -55,9 +55,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # SHA-pinned action refs per the zizmor `unpinned-uses` audit
+      # (see `.github/workflows/zizmor.yml`). Pin hashes match the
+      # ones in `ci.yml` after PR #38 (zizmor + dependabot hardening
+      # for #16) — dependabot updates them in lockstep across both
+      # workflows.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # tracks @stable branch
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           # Distinct cache key from the main `dry-rs` key in
           # `ci.yml`: mutants installs cargo-mutants as a host tool
@@ -66,7 +73,7 @@ jobs:
           # eviction policy doesn't churn on this job's working set.
           shared-key: dry-rs-mutants
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2
         with:
           tool: cargo-mutants
       - name: Run cargo mutants on crates/dry-core/src/comparison/mod.rs
@@ -79,7 +86,7 @@ jobs:
         run: cargo mutants --package dry-core --file crates/dry-core/src/comparison/mod.rs --no-shuffle --in-place
       - name: Upload mutants.out on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mutants-out
           path: mutants.out/

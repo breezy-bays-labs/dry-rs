@@ -56,9 +56,8 @@ full release roadmap.
     main `dry-rs` rust-cache so eviction doesn't churn. `--in-place`
     + `--no-shuffle` for deterministic, allocation-free runs.
     `mutants.out/` uploaded as artifact on failure (7-day retention)
-    for triage. Tag-pinned actions to match the dry-rs `ci.yml`
-    style (the cargo-deny SHA-pin is the explicit exception there;
-    no equivalent supply-chain-gate concern here).
+    for triage. SHA-pinned actions matching the post-#16 ci.yml
+    convention so the `unpinned-uses` zizmor audit stays green.
   - **Scope deliberately narrow at v0.1.** Widening (to add
     `crates/dry4rs/src/normalizer.rs`, or the file walker, or the
     JSON envelope builder) is a follow-up decision — adding files
