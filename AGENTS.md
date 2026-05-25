@@ -33,8 +33,8 @@ dry4ts (depends on dry-core; adds swc_ecma_parser or oxc, napi-rs)  [v0.6+]
 | Crate | Purpose | Allowed deps |
 |-------|---------|--------------|
 | `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters) | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `clap` (derive), `thiserror`, `regex` |
-| `dry4rs` | Rust-source parser adapter + binary | `dry-core`, `syn`, `proc-macro2` (with `span-locations` feature), `quote` |
-| `dry4ts` | TypeScript-source parser adapter + binary | `dry-core`, `swc_ecma_parser` *or* `oxc_parser`, `napi-rs` |
+| `dry4rs` | Rust-source parser adapter + binary | `dry-core`, `syn`, `proc-macro2` (with `span-locations` feature), `quote`, `xxhash-rust` (with `xxh3` feature) |
+| `dry4ts` | TypeScript-source parser adapter + binary | `dry-core`, `swc_ecma_parser` *or* `oxc_parser`, `napi-rs`, `xxhash-rust` (with `xxh3` feature) |
 
 **Never import inward.** `dry-core` must stay free of AST libraries
 (`syn`, `swc_*`, `oxc_*`, `tree-sitter*`, `proc-macro2`, `quote`).
@@ -187,6 +187,21 @@ root `Cargo.toml`. Two non-obvious consequences:
   Without it, `Span::start()` / `Span::end()` silently return
   `LineColumn { line: 0, column: 0 }`. Enforced by the
   `span-locations-check` CI job + lefthook pre-push.
+- **`xxhash-rust` with the `xxh3` feature is the fingerprint hash**
+  for every adapter normalizer (`dry4rs`, future `dry4ts`). Do NOT
+  suggest swapping for `std::hash::DefaultHasher`, `siphasher`,
+  `ahash`, `fxhash`, or `blake3` — `xxh3` is the load-bearing choice
+  because (a) its `u64` output is cross-toolchain stable per upstream
+  contract (the stdlib reserves the right to change `DefaultHasher`'s
+  bit pattern in any new toolchain), and (b) cross-version stability
+  is required for the v0.3+ `--delta` baseline comparison feature
+  (persisted baselines outlive MSRV bumps). All adapters MUST share
+  the same hash algorithm because the comparison engine compares
+  `HashSet<u64>` set-equality on raw values. `dry-core` itself does
+  NOT depend on `xxhash-rust` — hashing happens in adapters; the
+  comparison engine consumes pre-computed `HashSet<u64>` and never
+  hashes. See `adr-rust-normalization-rules.md` § "Hashing" and
+  `adr-hexagonal-layout.md` per-crate dep table footnote [²].
 
 ### How to engage substantively
 

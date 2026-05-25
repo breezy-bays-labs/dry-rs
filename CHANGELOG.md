@@ -63,6 +63,56 @@ full release roadmap.
     `dry-core`'s allowed list per `adr-hexagonal-layout.md`); promoted
     `serde_json` from dev-only to runtime; added `tempfile` as a
     dev-dep for walker fixtures.
+- **PR 5 (#6)** — `dry4rs::parser::SynNormalizer` implementing
+  `NormalizerPort` for Rust source via `syn`:
+  - Walks the `syn` AST depth-first; emits one `NormalizedForm` per
+    top-level `ItemFn` / `ImplItemFn` / `TraitItemFn`-with-default
+    (closures + nested fns appear as opaque `Closure` / `NestedFn`
+    marker tokens at v0.1; separate-form emission for them lands at
+    v0.2+).
+  - Per-subform Merkle-style fingerprinting via
+    `xxhash_rust::xxh3::Xxh3` (cross-toolchain stable; see § "Changed"
+    below). Each visited subtree emits one `u64`; children's `u64`s
+    fold into their parent's hash, so structurally-equivalent subtrees
+    produce identical `u64`s at every level of granularity.
+  - Closed `NormalizedToken` placeholder vocabulary at v0.1: `Var`,
+    `Ident`, `TypeParam`, `Lifetime`/`LifetimeStatic`, `Op`, `Kw`,
+    `Modifier`, literals (`LitInt`/`LitFloat`/`LitStr`/`LitBool`/
+    `LitChar`/`LitByte`/`LitByteStr`), `MacroCall`, `Attr`, `PathSeg`,
+    `Closure`, `NestedFn`. Projection through `NormalizedToken`
+    decouples the fingerprint vocabulary from syn's enum layout.
+  - 17-construct handling per the O5 ADR
+    (`adr-rust-normalization-rules.md`): function-shape emission
+    (`fn` / `impl Trait for Type` / trait default body), match arms,
+    generics (collapsed type params, preserved bounds), lifetimes
+    (collapsed except `'static`), attributes (preserve `#[test]` /
+    `#[inline]` / `#[cold]` / `#[must_use]` / `#[no_mangle]` /
+    `#[repr(...)]`; strip `#[derive(...)]` / `#[doc(...)]` /
+    `#[allow(...)]` / `#[warn(...)]` / `#[cfg(...)]` /
+    `#[deprecated(...)]`), opaque macro calls, closures, async / const
+    / unsafe modifiers, where clauses, type aliases (no form), trait
+    objects, module paths.
+  - `FormKind::Test` detection: `#[test]` / `#[*::test]` attribute OR
+    enclosing `#[cfg(test)] mod` context. `FormKind::Doctest` reserved
+    at v0.1 (no extraction).
+  - O11 identifier emission rule: every encountered identifier emits
+    one entry into `NormalizedForm.identifier_set` in walk order;
+    attribute names are NOT recorded (they are language vocabulary,
+    not renameable identifiers). The v0.2+ rename-signal consumer
+    converts to multiset / set at the comparison boundary.
+  - Skip-on-parse-error: `syn::parse_file` errors become
+    `NormalizeError::Parse`; no panic, no unwrap.
+  - 55 new tests (47 integration + 8 property) at
+    `crates/dry4rs/tests/normalizer_integration.rs` and
+    `crates/dry4rs/tests/normalizer_proptest.rs`. Property tests pin
+    determinism, identifier_set walk-order stability, span-locations
+    feature activeness, never-panic on arbitrary source.
+  - Workspace deps added: `syn` (with `full` + `extra-traits`
+    features), `proc-macro2` (with the LOAD-BEARING `span-locations`
+    feature; CI's `proc-macro2 span-locations enforcement` job +
+    lefthook pre-push enforce structurally), `xxhash-rust` (with
+    `xxh3` feature; see § "Changed"). All adapter-scoped per the
+    hexagonal-layout ADR; `dry-core` remains AST-library-pure.
 - Initial workspace bootstrap: `crates/dry-core` skeleton (lib only,
   AST-library-pure) with hexagonal module layout (`domain/`, `ports/`,
   `comparison/`, `adapters/`, `cli/`); `crates/dry4rs` skeleton (lib +
@@ -110,3 +160,19 @@ full release roadmap.
   files in lockstep: `.github/workflows/ci.yml` (`ast-purity` job),
   `lefthook.yml` (`ast-purity` pre-push hook), and the
   `deny.toml` AST-library policy comment.
+- PR 5 fingerprint hash pulled forward to cross-toolchain stable
+  `xxhash_rust::xxh3::Xxh3` (was: `std::hash::DefaultHasher`). The
+  stdlib reserves the right to change `DefaultHasher`'s SipHash-1-3
+  bit pattern in any new toolchain release; cross-toolchain stability
+  is required for the v0.3+ `--delta` baseline comparison feature
+  (persisted baselines outlive MSRV bumps). Decision trajectory in
+  the amended O5 ADR (`ops/decisions/dry-rs/adr-rust-normalization-rules.md`
+  § "Hashing — `xxh3` via `xxhash-rust`") + hexagonal-layout ADR
+  per-crate dep table footnote [²]. `dry-core` is NOT amended —
+  hashing happens in adapters; the comparison engine consumes
+  pre-computed `HashSet<u64>` and never hashes. `deny.toml` adds
+  `BSL-1.0` to the allow list (xxhash-rust's license; OSI-approved,
+  FSF-recognized, MIT/X11-style permissive). `AGENTS.md` per-crate
+  dep table and bot-context section (`.coderabbit.yaml`,
+  `.gemini/styleguide.md`) updated in lockstep to pre-empt regression
+  suggestions.

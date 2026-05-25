@@ -28,6 +28,24 @@ path = "src/main.rs"
 [dependencies]
 # Language-agnostic core — domain types, port traits, comparison
 # engine, reporters, CLI surface. dry4rs adds only the Rust-specific
-# parser adapter (lands with PR 5 via syn/proc-macro2/quote — at
-# bootstrap PR 1 those deps are deliberately absent).
+# parser adapter (lands with PR 5 via syn + proc-macro2).
 dry-core = { path = "../dry-core", version = "0.1.0" }
+# Rust AST parser. See `[workspace.dependencies]` for the `full` +
+# `extra-traits` feature rationale.
+syn = { workspace = true }
+# Span tracking. The `span-locations` feature is enforced via the
+# `proc-macro2 span-locations enforcement` CI job (workspace dep
+# declaration carries the feature flag; consuming crates inherit).
+proc-macro2 = { workspace = true }
+# Cross-toolchain-stable fingerprint hash (xxh3). The hexagonal
+# layering ADR per-crate dep table footnote [²] makes xxhash-rust
+# load-bearing across every adapter — the comparison engine compares
+# `HashSet<u64>` set-equality on raw values, so all adapters MUST
+# share the same hash algorithm. `dry-core` itself does NOT depend on
+# this crate; hashing lives entirely in adapter normalizers.
+xxhash-rust = { workspace = true }
+
+[dev-dependencies]
+# Property tests for normalizer invariants (determinism, parseable
+# input never panics, span round-trip consistency).
+proptest = { workspace = true }
