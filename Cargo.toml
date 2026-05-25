@@ -37,6 +37,14 @@ ignore = "0.4"
 # Terminal table rendering for the text reporter (PR 7). Pure stdout; no ANSI
 # color is emitted at the reporter layer (color is a CLI-flag concern at PR 8).
 comfy-table = "7"
+# CLI surface (PR 8). `clap` with `derive` powers the `Args` struct and
+# the subcommand enum (`report` / `stats` / `check` / `ignore` / `ignored`
+# / `cleanup`); `clap_complete` powers the `--completions <SHELL>` flag.
+# Both are listed in the hexagonal-layout ADR's `dry-core` allowed-deps
+# table (clap explicitly; clap_complete is the canonical companion for
+# shell-completion generation and is treated as part of the clap family).
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 # Rust AST parser for dry4rs's SynNormalizer (lands with PR 5). The
 # `full` feature enables every syn item / expr / stmt visitor needed
 # to walk function bodies; `extra-traits` derives `Debug` / `PartialEq`
