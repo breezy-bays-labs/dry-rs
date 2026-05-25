@@ -734,14 +734,131 @@ mod tests {
         // (disjoint sets) so no match is emitted at all.
         let forms = vec![make_form(&[1, 2, 3], 3), make_form(&[0], 1)];
         let matches = compare(&forms, 0.85);
-        // Pass 2 not yet implemented (next commit), so for now
-        // only assert that Pass 1 doesn't produce a false match.
-        // We re-verify after Pass 2 lands.
+        // No false score-1.0 match should appear.
         for m in &matches {
             assert!(
                 (m.score - 1.0).abs() > f64::EPSILON,
                 "no score-1.0 match should be emitted across XOR-colliding non-equal sets, got: {m:?}"
             );
         }
+    }
+
+    #[test]
+    fn pass1_xor_collision_inside_bucket_with_one_real_cluster() {
+        // Three forms: two structurally equal (the canonical pair)
+        // and one XOR-colliding outlier. Pass 1 must emit one match
+        // for the pair and leave the outlier unclaimed. Pass 2 then
+        // compares the outlier against members of the verified
+        // cluster — Jaccard is 0.0 (disjoint), so no Pass 2 match.
+        let forms = vec![
+            make_form(&[1, 2, 3], 3), // bucket key 0
+            make_form(&[1, 2, 3], 3), // bucket key 0 — canonical pair
+            make_form(&[0], 1),       // bucket key 0 — XOR collision
+        ];
+        let matches = compare(&forms, 0.85);
+        assert_eq!(matches.len(), 1, "exactly one Pass 1 cluster expected");
+        assert_eq!(matches[0].forms.len(), 2);
+        assert!((matches[0].score - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn pass1_pure_collision_two_singletons_fall_through_to_pass2() {
+        // A 2-element bucket where neither side matches the other:
+        // two distinct sets that XOR to the same key. Pass 1 sees
+        // a bucket of size 2, verifies fingerprint_set against the
+        // first element, finds zero matches, and leaves both
+        // unclaimed (the `verified.len() < 2` early-exit branch).
+        //
+        // Pass 2 then runs over both as unclaimed forms. They are
+        // disjoint (Jaccard 0.0) so no match is emitted.
+        let forms = vec![
+            make_form(&[1, 2, 3], 3), // XOR = 0
+            make_form(&[5, 6, 3], 3), // XOR = 0 (5 ^ 6 ^ 3 = 0)
+        ];
+        // Verify both forms hash to the same bucket key.
+        assert_eq!(
+            bucket_key(&forms[0].fingerprint_set),
+            bucket_key(&forms[1].fingerprint_set),
+            "test precondition: XOR collision setup"
+        );
+        let matches = compare(&forms, 0.85);
+        assert!(matches.is_empty(), "disjoint sets should not match");
+    }
+
+    #[test]
+    fn pass1_and_pass2_coexist_in_same_input() {
+        // One Pass 1 exact-match cluster + one Pass 2 near-match
+        // pair in the same input. Both surface in the output.
+        let forms = vec![
+            // Exact match pair (Pass 1)
+            make_form_with_qualified_name(&[1, 2, 3], &["exact_a"], 3),
+            make_form_with_qualified_name(&[1, 2, 3], &["exact_b"], 3),
+            // Near match (Pass 2) — 4/5 Jaccard
+            make_form_with_qualified_name(&[10, 20, 30, 40], &["near_a"], 4),
+            make_form_with_qualified_name(&[10, 20, 30, 40, 50], &["near_b"], 5),
+        ];
+        let matches = compare(&forms, 0.7);
+        assert_eq!(matches.len(), 2);
+        // Sort: "exact_a" < "near_a" alphabetically.
+        assert!((matches[0].score - 1.0).abs() < f64::EPSILON);
+        assert_eq!(matches[0].tier, Tier::AutoRefactor);
+        assert_eq!(matches[0].forms.len(), 2);
+
+        assert!((matches[1].score - 0.8).abs() < 1e-9);
+        // 0.8 < 0.85 review_first floor -> Advisory.
+        assert_eq!(matches[1].tier, Tier::Advisory);
+        assert_eq!(matches[1].forms.len(), 2);
+    }
+
+    #[test]
+    fn threshold_of_1_0_emits_only_exact_matches() {
+        // With threshold = 1.0, Pass 2's filter `score >= threshold`
+        // requires score == 1.0 — Pass 1 already emits those, so
+        // Pass 2 emits nothing.
+        let forms = vec![
+            make_form(&[1, 2, 3], 3),
+            make_form(&[1, 2, 3], 3),
+            make_form(&[1, 2, 4], 3), // 2/4 = 0.5 against the pair — filtered
+        ];
+        let matches = compare(&forms, 1.0);
+        assert_eq!(
+            matches.len(),
+            1,
+            "only the exact-match cluster should survive"
+        );
+        assert!((matches[0].score - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn forms_with_disjoint_fingerprints_emit_no_matches() {
+        let forms = vec![
+            make_form(&[1, 2, 3], 3),
+            make_form(&[100, 200], 2),
+            make_form(&[1000], 1),
+        ];
+        let matches = compare(&forms, 0.5);
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "threshold must lie in")]
+    fn threshold_zero_panics_in_debug() {
+        // The debug_assert! catches out-of-range threshold in
+        // debug builds. Release builds (incl. `cargo build
+        // --release`) skip the check; the CLI surface (PR 8) is
+        // the production-build input-validation boundary.
+        let _ = compare(&[], 0.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "threshold must lie in")]
+    fn threshold_above_one_panics_in_debug() {
+        let _ = compare(&[], 1.5);
+    }
+
+    #[test]
+    #[should_panic(expected = "threshold must lie in")]
+    fn threshold_nan_panics_in_debug() {
+        let _ = compare(&[], f64::NAN);
     }
 }
