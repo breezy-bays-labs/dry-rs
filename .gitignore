@@ -23,3 +23,7 @@ lcov.info
 .vscode/
 .idea/
 *.swp
+
+# Python (scripts/tracked-lint.py)
+__pycache__/
+*.pyc

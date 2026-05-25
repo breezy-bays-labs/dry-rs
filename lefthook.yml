@@ -63,6 +63,19 @@ pre-push:
           exit 1
         fi
       timeout: 30s
+    tracked-lint:
+      # Mirror the `bdd-tracked-lint` CI job. Rejects any test/coverage
+      # suppression (`#[ignore]`, `it.skip(...)`, `--exclude` flag,
+      # `exclude`/`skip` config-array, `TODO: re-enable` comment,
+      # `if: false` workflow hard-disable) that lacks an adjacent
+      # `tracked: <repo>#<n>` or `adr: <path>` reference per
+      # `~/.claude/rules/exclusions.md`. Single source of truth in
+      # `scripts/tracked-lint.py`; this hook + CI both invoke it so a
+      # regex tweak only ever touches one file. Sub-second on the
+      # current workspace (43 files scanned in ~50ms); 30s timeout is
+      # generous headroom for workspace growth.
+      run: python3 scripts/tracked-lint.py
+      timeout: 30s
     clippy:
       run: cargo clippy --workspace --all-targets --locked -- -D warnings
       timeout: 300s

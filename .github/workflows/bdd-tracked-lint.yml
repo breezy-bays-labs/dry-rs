@@ -1,0 +1,71 @@
+name: bdd-tracked-lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: bdd-tracked-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+# Workflow-level least privilege. The lint reads source files and exits
+# with a code — no GitHub API writes required. Even though sibling
+# `ci.yml` predates this convention, paying the explicit-permissions
+# cost on a fresh workflow file costs nothing and sets the precedent
+# for the supply-chain hardening that follows (zizmor lands in a
+# parallel PR; least-privilege workflow permissions is one of its
+# audits). The lint script consumes zero ${{ github.* }} inputs — only
+# static repo source — so command-injection vectors aren't a concern
+# either; explicit `permissions:` is the right baseline for new files
+# regardless.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  bdd-tracked-lint:
+    # Mechanical enforcement of `~/.claude/rules/exclusions.md`: every
+    # test/coverage-suppression marker (`#[ignore]`, `it.skip(...)`,
+    # `--exclude` flags, config-file `exclude`/`skip` arrays, `TODO:
+    # re-enable` comments, hard-disable `if: false` workflow gates)
+    # must carry a `tracked: <repo>#<n>` or `adr: <path>` reference in
+    # an adjacent comment.
+    #
+    # Without this gate the rule was documented but unenforced —
+    # documentation rots; CI doesn't. The same pattern enforces the
+    # rule across the sibling-coherence track (crap4rs, scrap-rs).
+    #
+    # See `scripts/tracked-lint.py` for the regex shapes, scope rules,
+    # and known limitations. Mirrors the `lefthook.yml` pre-push step
+    # — single source of truth in the script. The script consumes only
+    # static repo source (no `${{ github.* }}` inputs), so injection
+    # vectors are structurally absent from this step.
+    #
+    # Name kept as `bdd-tracked-lint` for cross-tool sibling consistency
+    # (crap4rs's job name); the lint's actual scope is broader than BDD
+    # feature files. The job is isolated into its own workflow file
+    # (rather than appended to ci.yml) so parallel PRs adding new
+    # workflow files don't collide via shared ci.yml.
+    name: bdd-tracked-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Don't persist the `GITHUB_TOKEN` in the worktree's git
+          # config — this job runs no `git push`, no API calls, no
+          # operations that need it. `persist-credentials: false` is
+          # the zizmor `artipacked` audit's recommendation; the
+          # workspace-wide SHA-pin convergence is the zizmor PR's
+          # (#16) sweep — un-pinned `@v4` here matches sibling
+          # `ci.yml` jobs so #16 can land all pins in one pass.
+          persist-credentials: false
+      - name: Lint tracked-comment coverage of test/coverage suppressions
+        run: python3 scripts/tracked-lint.py
