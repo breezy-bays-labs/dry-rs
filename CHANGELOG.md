@@ -66,6 +66,67 @@ full release roadmap.
     detail; the comparison engine's mutants are dominated by
     algorithm correctness, which is exactly what mutation testing
     targets).
+- **PR 9 (#10) — self-referential test + symmetric dogfood + composite
+  action**. Closes the v0.1 walking skeleton. Three layers:
+  - **Self-referential test** at `crates/dry4rs/tests/self_check.rs`.
+    Spawns the dry4rs binary via `CARGO_BIN_EXE_dry4rs` against the
+    workspace's own `crates/` tree and snapshots a stable subset
+    (`total_forms` + `matches_count` + `by_tier`) of the JSON wire
+    envelope via insta. The snapshot is intentionally fragile —
+    source edits that change form counts WILL fail the test; that's
+    the gate, not a bug. Cargo-insta-review accept-on-the-PR is the
+    intended workflow when a change is deliberate.
+    - Belt-and-suspenders test verifies the v0.1 wire envelope's
+      top-level locked keys (`schema_version` / `tool` / `language` /
+      `tool_version` / `timestamp` / `threshold_mode` / `result`) on a
+      real end-to-end production invocation, in addition to the
+      dry-core synthesized-fixture wire-envelope snapshot.
+    - dry4rs gains an `insta` dev-dep (mirrors dry-core; uses the
+      workspace `json` feature).
+  - **`.dry-rs-ignore.toml`** schema document at repo root. v0.1
+    ships with the schema header + ZERO `[[allowed_match]]` entries
+    by design — wiring this file into the gate is a v0.2 deliverable
+    that requires per-match fingerprints to ride the wire envelope.
+    Documents the forward-looking format (fingerprints + reason +
+    optional `until` date) so contributors know the shape; the v0.1
+    gate remains the `dry-self` snapshot.
+  - **CI workflow** at `.github/workflows/self-test.yml`. Three jobs
+    (`dry-self` / `crap-self` / `scrap-self`) triggered on push to
+    main and pull_request; concurrency mirrors `ci.yml`.
+    - `dry-self` runs the self-check integration test.
+    - `crap-self` runs the public `breezy-bays-labs/crap-rs`
+      composite action against the workspace's production code
+      (SHA-pinned to `34b05488` ⇒ `crap4rs-v0.6.0`). Lands as
+      `analysis-gate: false` (measurement-only) — a local probe
+      surfaced 8 functions over the default cognitive threshold of 15;
+      flipping the gate to `true` on first contact would dishonestly
+      attribute pre-existing complexity debt to the PR adding the
+      gate. `tracked: dry-rs#42` sequences the refactor + gate-flip
+      so the gate state changes in the PR that actually causes the
+      change.
+    - `scrap-self` is a PR-9 stub — scrap-rs does not yet publish a
+      composite action under `.github/actions/`. The job surfaces the
+      gap in CI output + tracks the lift (`tracked: dry-rs#40`).
+  - **Composite action** at `.github/actions/scorecard/action.yml`.
+    Consumed by mokumo CI as
+    `breezy-bays-labs/dry-rs/.github/actions/scorecard@v0.1.0`.
+    Inputs: `paths` (default `.`), `threshold` (default `0.85`),
+    `format` (default `json`), `output-path` (default
+    `dry-rs-report.json`), `extensions` (default empty), and
+    `fail-on-findings` (default `true`). Outputs: `report-path`,
+    `findings-count`.
+    - Self-builds dry4rs from the action ref via `actions/checkout@v4`
+      pulling `github.action_repository` at `github.action_ref` into
+      `__dry-rs-source/`, then `cargo build --release -p dry4rs
+      --locked`. No binstall path until per-crate v1.0 (see
+      `CLAUDE.md` "v0.x -> v1.0 transition" + `adr-hexagonal-layout.md`).
+    - Renders a text summary onto `$GITHUB_STEP_SUMMARY` (KPIs +
+      collapsible text-report block) for in-PR visibility.
+    - `outputs.row-json` deliberately deferred to a follow-up
+      (dry-rs#39) — the `RowCommon.tool: "dry4rs"` row shape for
+      mokumo consumption is a cross-tool coordination decision
+      across crap4rs / scrap-rs / dry-rs and should not be designed
+      in isolation.
 
 - **PR 8 (#9) — CLI surface** in `dry_core::cli`. The v0.1 entry point
   for every adapter binary in the workspace; dry4rs's `main.rs`
