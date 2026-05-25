@@ -31,25 +31,42 @@ path = "src/lib.rs"
 # `domain/` only because wire shapes need to round-trip identically
 # across adapter binaries. Shared version via `[workspace.dependencies]`.
 serde = { workspace = true }
+# JSON reporter (PR 7) lives in `dry-core::adapters::reporters::json`
+# and constructs the locked v0.1 envelope. `serde_json` is now a
+# runtime dep, not dev-only.
+serde_json = { workspace = true }
 # Per-port error enums derive `thiserror::Error` so adapter callers
 # get `std::error::Error` with `#[source]` chaining without
 # hand-rolled boilerplate.
 thiserror = { workspace = true }
-# Reserved for the free-function file walker landing in PR 7 — the
-# walker rejects empty/whitespace-only patterns and surfaces compile
-# errors from `globset::Glob::new(...)` through its own error type.
-# Pulled now to keep the workspace dep declaration centralized; the
-# port surface (PR 4) does NOT consume globset (file enumeration is a
-# free function per the hexagonal-layout ADR's "language-agnostic core"
-# section, not a port — `NormalizerPort` is the single port trait).
+# Glob support — reserved for the file walker's future allowlist /
+# include-pattern surface (lands in PR 8 with the CLI flags). PR 7 ships
+# only the extension filter on `AnalysisConfig`, so `globset` is not yet
+# imported, but the dep stays declared so the surface area is centralized.
 globset = { workspace = true }
+# File walker (PR 7) — `ignore` provides gitignore-aware iteration in
+# the same shape `rg` / `fd` use; `walkdir` is the lower-level traversal
+# `ignore` builds on. The walker (`adapters::source::enumerate`) returns
+# a deterministically-sorted `Vec<FilePath>`; sort ordering is in
+# `walkdir`/`ignore`'s `sort_by_file_name` step (see the source-adapter
+# implementation).
+walkdir = { workspace = true }
+ignore = { workspace = true }
+# Text reporter (PR 7) renders findings grouped by tier in a terminal
+# table. The reporter emits no ANSI color codes at this layer — color
+# is a CLI-flag concern owned by the `--color always|auto|never` flag
+# landing in PR 8.
+comfy-table = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
 proptest = { workspace = true }
-serde_json = { workspace = true }
 # Compile-time `assert_obj_safe!` smoke checks for port traits — fails
 # to compile if a future edit introduces a non-object-safe method
 # (e.g. `Self: Sized`, generic methods, `&mut self` requirement on a
 # port trait).
 static_assertions = { workspace = true }
+# Temporary file/dir fixtures for the `source::enumerate` walker
+# tests (PR 7). Confined to dev-deps; the walker itself does not read
+# tmp paths.
+tempfile = "3"

@@ -20,6 +20,99 @@ full release roadmap.
 
 ### Added
 
+- **PR 7 (#8)** — language-agnostic adapters in `dry_core::adapters`:
+  - `source::enumerate(&AnalysisConfig)` — file walker via the `ignore`
+    crate (honors `.gitignore` / `.ignore` / `.git/info/exclude` like
+    `rg` / `fd`). Deterministically sorted; `include_ignored` switch
+    for fixtures; skip-on-read-error policy via
+    `SourceWarning::Unreadable` accumulated alongside the path list.
+  - `reporters::json::render(&Report, EnvelopeMeta)` — locked v0.1
+    nested wire envelope (`schema_version` / `tool` / `tool_version` /
+    `language` / `timestamp` / `threshold_mode` / `result` / `view?` /
+    `delta?` / `diagnostics?`). The envelope struct lives in
+    `adapters/reporters/json/envelope.rs` (NOT a domain type, per
+    `adr-nested-json-envelope.md`). Caller-supplied timestamp keeps
+    the wire-envelope snapshot byte-stable.
+  - `reporters::text::render(&Report)` — comfy-table output grouped
+    by tier (`auto_refactor` -> `review_first` -> `advisory`), ASCII
+    Markdown preset, NO ANSI color (color is a CLI-flag concern at
+    PR 8).
+  - `reporters::github_annotations::render(&Report)` — GitHub Actions
+    workflow-command lines per Match. Tier->severity:
+    `auto_refactor -> ::error::`, `review_first -> ::warning::`,
+    `advisory -> ::notice::`. Two-tier GHA escape (message-data vs
+    property-value) prevents POSIX-path delimiters in `file=` from
+    corrupting the runner's parse.
+  - `cli::AnalysisConfig` — minimal v0.1 config the walker consumes
+    (`roots`, `extensions`, `include_ignored`). PR 8 extends with
+    clap-derive surface for `--threshold` / `--format` / `--top` etc.
+  - Mechanical wire-shape lock at
+    `crates/dry-core/tests/wire_envelope_snapshot.rs`: the executable
+    schema document for the v0.1 envelope. Three-null reserved slots
+    on Match, top-level key ordering, BTreeMap summary ordering, and
+    `view`/`delta`/`diagnostics` skip-when-None all locked.
+  - Insta snapshots for the github-annotations reporter
+    (`crates/dry-core/tests/github_annotations_snapshot.rs`) lock all
+    three tier mappings and the property-value escape rules.
+  - Property tests at `crates/dry-core/tests/adapters_proptest.rs`
+    cover: `enumerate` determinism across runs; `json::render`
+    totality; reserved-score-slot null emission; text-reporter
+    ANSI-cleanness; one annotation per Match with locked severity
+    prefix + required property keys.
+  - Workspace deps added: `walkdir`, `ignore`, `comfy-table` (all on
+    `dry-core`'s allowed list per `adr-hexagonal-layout.md`); promoted
+    `serde_json` from dev-only to runtime; added `tempfile` as a
+    dev-dep for walker fixtures.
+- **PR 5 (#6)** — `dry4rs::parser::SynNormalizer` implementing
+  `NormalizerPort` for Rust source via `syn`:
+  - Walks the `syn` AST depth-first; emits one `NormalizedForm` per
+    top-level `ItemFn` / `ImplItemFn` / `TraitItemFn`-with-default
+    (closures + nested fns appear as opaque `Closure` / `NestedFn`
+    marker tokens at v0.1; separate-form emission for them lands at
+    v0.2+).
+  - Per-subform Merkle-style fingerprinting via
+    `xxhash_rust::xxh3::Xxh3` (cross-toolchain stable; see § "Changed"
+    below). Each visited subtree emits one `u64`; children's `u64`s
+    fold into their parent's hash, so structurally-equivalent subtrees
+    produce identical `u64`s at every level of granularity.
+  - Closed `NormalizedToken` placeholder vocabulary at v0.1: `Var`,
+    `Ident`, `TypeParam`, `Lifetime`/`LifetimeStatic`, `Op`, `Kw`,
+    `Modifier`, literals (`LitInt`/`LitFloat`/`LitStr`/`LitBool`/
+    `LitChar`/`LitByte`/`LitByteStr`), `MacroCall`, `Attr`, `PathSeg`,
+    `Closure`, `NestedFn`. Projection through `NormalizedToken`
+    decouples the fingerprint vocabulary from syn's enum layout.
+  - 17-construct handling per the O5 ADR
+    (`adr-rust-normalization-rules.md`): function-shape emission
+    (`fn` / `impl Trait for Type` / trait default body), match arms,
+    generics (collapsed type params, preserved bounds), lifetimes
+    (collapsed except `'static`), attributes (preserve `#[test]` /
+    `#[inline]` / `#[cold]` / `#[must_use]` / `#[no_mangle]` /
+    `#[repr(...)]`; strip `#[derive(...)]` / `#[doc(...)]` /
+    `#[allow(...)]` / `#[warn(...)]` / `#[cfg(...)]` /
+    `#[deprecated(...)]`), opaque macro calls, closures, async / const
+    / unsafe modifiers, where clauses, type aliases (no form), trait
+    objects, module paths.
+  - `FormKind::Test` detection: `#[test]` / `#[*::test]` attribute OR
+    enclosing `#[cfg(test)] mod` context. `FormKind::Doctest` reserved
+    at v0.1 (no extraction).
+  - O11 identifier emission rule: every encountered identifier emits
+    one entry into `NormalizedForm.identifier_set` in walk order;
+    attribute names are NOT recorded (they are language vocabulary,
+    not renameable identifiers). The v0.2+ rename-signal consumer
+    converts to multiset / set at the comparison boundary.
+  - Skip-on-parse-error: `syn::parse_file` errors become
+    `NormalizeError::Parse`; no panic, no unwrap.
+  - 55 new tests (47 integration + 8 property) at
+    `crates/dry4rs/tests/normalizer_integration.rs` and
+    `crates/dry4rs/tests/normalizer_proptest.rs`. Property tests pin
+    determinism, identifier_set walk-order stability, span-locations
+    feature activeness, never-panic on arbitrary source.
+  - Workspace deps added: `syn` (with `full` + `extra-traits`
+    features), `proc-macro2` (with the LOAD-BEARING `span-locations`
+    feature; CI's `proc-macro2 span-locations enforcement` job +
+    lefthook pre-push enforce structurally), `xxhash-rust` (with
+    `xxh3` feature; see § "Changed"). All adapter-scoped per the
+    hexagonal-layout ADR; `dry-core` remains AST-library-pure.
 - Initial workspace bootstrap: `crates/dry-core` skeleton (lib only,
   AST-library-pure) with hexagonal module layout (`domain/`, `ports/`,
   `comparison/`, `adapters/`, `cli/`); `crates/dry4rs` skeleton (lib +

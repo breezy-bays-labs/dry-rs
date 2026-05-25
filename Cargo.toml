@@ -28,6 +28,15 @@ proptest = "1"
 thiserror = "2"
 globset = "0.4"
 static_assertions = "1"
+# File walker (PR 7) — `ignore` honors .gitignore / .ignore / .git/info/exclude
+# (the same family rg/fd use); `walkdir` is the lower-level traversal it builds
+# on. Both are listed in the hexagonal-layout ADR's `dry-core` allowed-deps
+# table.
+walkdir = "2"
+ignore = "0.4"
+# Terminal table rendering for the text reporter (PR 7). Pure stdout; no ANSI
+# color is emitted at the reporter layer (color is a CLI-flag concern at PR 8).
+comfy-table = "7"
 # Rust AST parser for dry4rs's SynNormalizer (lands with PR 5). The
 # `full` feature enables every syn item / expr / stmt visitor needed
 # to walk function bodies; `extra-traits` derives `Debug` / `PartialEq`

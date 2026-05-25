@@ -1,0 +1,64 @@
+---
+source: crates/dry-core/tests/wire_envelope_snapshot.rs
+assertion_line: 91
+expression: json
+---
+{
+  "schema_version": 1,
+  "tool": "dry4rs",
+  "tool_version": "0.1.0",
+  "language": "rust",
+  "timestamp": "2026-05-24T22:00:00Z",
+  "threshold_mode": "default",
+  "result": {
+    "matches": [
+      {
+        "forms": [
+          {
+            "file": "src/a.rs",
+            "span": {
+              "start": {
+                "line": 10,
+                "column": 0
+              },
+              "end": {
+                "line": 15,
+                "column": 12
+              }
+            },
+            "kind": "production"
+          },
+          {
+            "file": "src/b.rs",
+            "span": {
+              "start": {
+                "line": 40,
+                "column": 0
+              },
+              "end": {
+                "line": 45,
+                "column": 12
+              }
+            },
+            "kind": "production"
+          }
+        ],
+        "score": 0.92,
+        "structural_score": null,
+        "rename_count": null,
+        "rename_density": null,
+        "tier": "review_first"
+      }
+    ],
+    "summary": {
+      "total_forms": 2,
+      "by_tier": {
+        "review_first": 1
+      },
+      "by_kind": {
+        "production": 1
+      }
+    },
+    "passed": false
+  }
+}

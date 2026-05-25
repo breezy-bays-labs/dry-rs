@@ -1,0 +1,8 @@
+---
+source: crates/dry-core/tests/github_annotations_snapshot.rs
+assertion_line: 56
+expression: out
+---
+::error file=src/auto_a.rs,line=10,col=1,endLine=12,endColumn=13::Duplicate of src/auto_b.rs:100 (score=0.97, tier=auto_refactor)
+::warning file=src/review_a.rs,line=20,col=1,endLine=25,endColumn=13::Duplicate of src/review_b.rs:200 (score=0.91, tier=review_first)
+::notice file=src/adv_a.rs,line=30,col=1,endLine=33,endColumn=13::Duplicate of src/adv_b.rs:300 (score=0.83, tier=advisory)
