@@ -20,6 +20,86 @@ full release roadmap.
 
 ### Added
 
+- **PR 8 (#9) — CLI surface** in `dry_core::cli`. The v0.1 entry point
+  for every adapter binary in the workspace; dry4rs's `main.rs`
+  becomes a 5-line entry calling `dry_core::cli::run::<SynNormalizer>()`.
+  - **`Args` (clap derive)** — top-level argument struct with global
+    flags: `--threshold` (parser-validates (0.0, 1.0]), `--format
+    text|json` (markdown/html/sarif deferred to later waves),
+    `--threshold-mode strict|default|lenient`, `--top N` (view-shaping
+    only), `--only-failing` (view-shaping only), `--no-fail` (suppress
+    non-zero exit; `result.passed` still authoritative),
+    `--include-ignored` (walker bypass for fixture corpora),
+    `--completions <SHELL>` (clap_complete-driven shell-completion
+    generation, short-circuits the analyzer pipeline). All flags are
+    `global = true` so they propagate to subcommands.
+  - **`Command` enum** — v0.1 subcommands: `report` (implicit default)
+    / `stats` / `check` carry per-command positional `paths`;
+    `ignore <fingerprint>` / `ignored` / `cleanup` are skeletal v0.1
+    stubs (full `.dry-rs-ignore.toml` UX lands at v0.2 per roadmap).
+    `#[non_exhaustive]` per the AGENTS.md enums-yes-structs-no rule.
+  - **`Format` / `ThresholdMode` enums** — `#[non_exhaustive]` value
+    enums; `Format` rejects `markdown` / `html` / `sarif` at parse
+    time so users get an actionable error instead of silent
+    fall-through.
+  - **`AnalysisConfig`** — minimal config consumed by the walker
+    (`roots` / `extensions` / `include_ignored`); extended with
+    builder methods in PR 7.
+  - **Generic `run<N: NormalizerPort + Default>() -> ExitCode`** — the
+    full analyzer pipeline: clap parse → `--completions` short-circuit
+    → allowlist-subcommand short-circuit → AnalysisConfig → walker
+    `enumerate` → per-file read+normalize → comparison engine →
+    Report (truthful gate) → optional ViewProjection (shapeable
+    display) → subcommand-dispatched output → exit-code derivation.
+  - **Truthful-gate-vs-shapeable-display** (per
+    `adr-nested-json-envelope.md`): `result.*` is unfiltered;
+    `view.*` is `None` when no shaping flag is set (skip_serializing_if
+    omits the field, matching the wire-envelope snapshot lock).
+    `--top N` / `--only-failing` populate `view.*` only; `view.passed`
+    mirrors `result.passed` for symmetry.
+  - **Exit codes**:
+    - `ExitCode::SUCCESS` when `report.passed == true` OR `--no-fail`.
+    - `ExitCode::FAILURE` when `report.passed == false` AND no `--no-fail`.
+    - `ExitCode::from(2)` on clap arg errors (clap's built-in exit) or
+      walker `NoRoots` (the CLI defaults paths to `.`, so this is
+      unreachable in practice; the variant exists for completeness).
+      Per-file source parse errors are diagnostics emitted on stderr,
+      NOT gate failures — the comparison engine continues with whatever
+      forms normalized successfully.
+  - **`NormalizerPort` extension** — three new methods with sensible
+    defaults: `tool_name()` (default `"dry"`; SynNormalizer returns
+    `"dry4rs"`), `tool_version()` (default `dry-core`'s
+    `CARGO_PKG_VERSION`; adapter overrides with its own crate's
+    constant), `language()` (default `"unknown"`; SynNormalizer
+    returns `"rust"`). These supply the wire envelope's `tool` /
+    `tool_version` / `language` fields without `dry-core` hard-coding
+    adapter identity.
+  - **Allowlist subcommand short-circuit** — `ignore <fingerprint>` /
+    `ignored` / `cleanup` bypass the analyzer pipeline at v0.1 and
+    return SUCCESS with a stderr deferral note pointing at the v0.2
+    `.dry-rs-ignore.toml` landing. The dispatch arm in
+    `dispatch_output` is a defensive no-op fallback.
+  - **ISO-8601 timestamp formatter** — `format_unix_seconds_iso8601`
+    formats `SystemTime::now()` via Howard Hinnant's days-from-epoch
+    algorithm (u64 variant — no pre-1970 cases possible) so no
+    `chrono` / `time` / `jiff` dep is required for envelope metadata.
+  - Workspace deps added: `clap` (with `derive` feature), `clap_complete`.
+    Both listed in `dry-core`'s allowed-deps row per the
+    hexagonal-layout ADR.
+  - Tests: 28 unit tests on `cli/args.rs` + `cli/run.rs` covering
+    clap parsing, threshold validation, view-projection building,
+    timestamp formatting, threshold-mode labels; 25 integration tests
+    at `crates/dry-core/tests/cli_args.rs` (clap try_parse_from round
+    trips) + `crates/dry4rs/tests/cli_pipeline.rs` (end-to-end binary
+    invocations proving the truthful-gate invariant against the real
+    wire output) + `crates/dry4rs/tests/binary_smoke.rs` (`--help` /
+    `--version` / `check` / invalid-threshold exit codes).
+  - Explicit v0.1 deferrals (documented in PR body):
+    `.dry-rs-ignore.toml` allowlist file (lands v0.2); `dry4rs.toml`
+    3-layer config (lands v0.2); `--exclude` flag (lands v0.2 with
+    allowlist); `markdown` / `html` / `sarif` reporters (lands v0.2 /
+    v0.3 / v0.4 per roadmap); `--explain` subcommand (lands at v0.3+).
+
 - **PR 6 (#7)** — comparison engine in `dry_core::comparison`. Single
   module per the O6 "no detector taxonomy at v0.1" rule. Two-tier
   detection:
