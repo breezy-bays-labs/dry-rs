@@ -76,51 +76,75 @@ impl Walker {
 
     fn visit_item(&mut self, item: &syn::Item, qpath: &[String], in_test_module: bool) {
         match item {
-            syn::Item::Fn(item_fn) => {
-                self.emit_item_fn(item_fn, qpath, in_test_module);
-            }
-            syn::Item::Mod(item_mod) => {
-                let next_in_test = in_test_module || mod_is_cfg_test(item_mod);
-                let mut child_qpath: Vec<String> = qpath.to_vec();
-                child_qpath.push(item_mod.ident.to_string());
-                if let Some((_, inner_items)) = &item_mod.content {
-                    self.visit_items(inner_items, &child_qpath, next_in_test);
-                }
-            }
-            syn::Item::Impl(item_impl) => {
-                // Compute a qpath suffix for impl members. For
-                // `impl Type { fn m() {} }` the method's qname is
-                // `["Type", "m"]` (we drop the impl block from the
-                // qpath, just use the type's last path segment).
-                let mut child_qpath: Vec<String> = qpath.to_vec();
-                if let Some(seg) = impl_self_ty_last_segment(&item_impl.self_ty) {
-                    child_qpath.push(seg);
-                }
-                for impl_item in &item_impl.items {
-                    if let syn::ImplItem::Fn(impl_fn) = impl_item {
-                        self.emit_impl_item_fn(impl_fn, &child_qpath, in_test_module);
-                    }
-                    // Other ImplItem variants (Const, Type, Macro,
-                    // Verbatim) don't emit forms at v0.1.
-                }
-            }
+            syn::Item::Fn(item_fn) => self.emit_item_fn(item_fn, qpath, in_test_module),
+            syn::Item::Mod(item_mod) => self.visit_mod_item(item_mod, qpath, in_test_module),
+            syn::Item::Impl(item_impl) => self.visit_impl_item(item_impl, qpath, in_test_module),
             syn::Item::Trait(item_trait) => {
-                let mut child_qpath: Vec<String> = qpath.to_vec();
-                child_qpath.push(item_trait.ident.to_string());
-                for trait_item in &item_trait.items {
-                    if let syn::TraitItem::Fn(trait_fn) = trait_item {
-                        if trait_fn.default.is_some() {
-                            self.emit_trait_item_fn(trait_fn, &child_qpath, in_test_module);
-                        }
-                        // Signature-only methods (no default body) do not
-                        // emit a form per the form-emission table.
-                    }
-                }
+                self.visit_trait_item(item_trait, qpath, in_test_module);
             }
             // Other top-level items (Struct, Enum, Const, Static,
             // Type, Use, ExternCrate, Macro, etc.) don't emit forms
             // at v0.1.
             _ => {}
+        }
+    }
+
+    /// Recurse into a `mod` item, extending the qualified-name path
+    /// and propagating the `#[cfg(test)]` test-module flag.
+    fn visit_mod_item(&mut self, item_mod: &syn::ItemMod, qpath: &[String], in_test_module: bool) {
+        let Some((_, inner_items)) = &item_mod.content else {
+            return;
+        };
+        let next_in_test = in_test_module || mod_is_cfg_test(item_mod);
+        let mut child_qpath: Vec<String> = qpath.to_vec();
+        child_qpath.push(item_mod.ident.to_string());
+        self.visit_items(inner_items, &child_qpath, next_in_test);
+    }
+
+    /// Visit every method inside an `impl` block.
+    ///
+    /// Computes a qpath suffix for impl members: for
+    /// `impl Type { fn m() {} }` the method's qname is
+    /// `["Type", "m"]` — drop the impl block from the qpath, just
+    /// use the type's last path segment.
+    fn visit_impl_item(
+        &mut self,
+        item_impl: &syn::ItemImpl,
+        qpath: &[String],
+        in_test_module: bool,
+    ) {
+        let mut child_qpath: Vec<String> = qpath.to_vec();
+        if let Some(seg) = impl_self_ty_last_segment(&item_impl.self_ty) {
+            child_qpath.push(seg);
+        }
+        for impl_item in &item_impl.items {
+            if let syn::ImplItem::Fn(impl_fn) = impl_item {
+                self.emit_impl_item_fn(impl_fn, &child_qpath, in_test_module);
+            }
+            // Other ImplItem variants (Const, Type, Macro, Verbatim)
+            // don't emit forms at v0.1.
+        }
+    }
+
+    /// Visit every method inside a `trait` block.
+    ///
+    /// Only methods with a default body emit a form per the form-
+    /// emission table; signature-only methods are skipped.
+    fn visit_trait_item(
+        &mut self,
+        item_trait: &syn::ItemTrait,
+        qpath: &[String],
+        in_test_module: bool,
+    ) {
+        let mut child_qpath: Vec<String> = qpath.to_vec();
+        child_qpath.push(item_trait.ident.to_string());
+        for trait_item in &item_trait.items {
+            let syn::TraitItem::Fn(trait_fn) = trait_item else {
+                continue;
+            };
+            if trait_fn.default.is_some() {
+                self.emit_trait_item_fn(trait_fn, &child_qpath, in_test_module);
+            }
         }
     }
 
@@ -553,90 +577,20 @@ impl FormEmitter {
     fn hash_pat(&mut self, pat: &syn::Pat) -> u64 {
         let mut hasher = Xxh3::new();
         match pat {
-            syn::Pat::Ident(pi) => {
-                "PatIdent".hash(&mut hasher);
-                self.record_identifier(pi.ident.to_string());
-                self.feed_token(&mut hasher, &NormalizedToken::Var);
-                if pi.mutability.is_some() {
-                    self.feed_token(&mut hasher, &NormalizedToken::Kw("mut"));
-                }
-            }
-            syn::Pat::Wild(_) => {
-                "PatWild".hash(&mut hasher);
-            }
-            syn::Pat::Tuple(t) => {
-                "PatTuple".hash(&mut hasher);
-                for elem in &t.elems {
-                    let e_fp = self.hash_pat(elem);
-                    e_fp.hash(&mut hasher);
-                }
-            }
-            syn::Pat::TupleStruct(ts) => {
-                "PatTupleStruct".hash(&mut hasher);
-                let path_fp = self.hash_path(&ts.path);
-                path_fp.hash(&mut hasher);
-                for elem in &ts.elems {
-                    let e_fp = self.hash_pat(elem);
-                    e_fp.hash(&mut hasher);
-                }
-            }
-            syn::Pat::Struct(ps) => {
-                "PatStruct".hash(&mut hasher);
-                let path_fp = self.hash_path(&ps.path);
-                path_fp.hash(&mut hasher);
-                for field in &ps.fields {
-                    let f_fp = self.hash_pat(&field.pat);
-                    f_fp.hash(&mut hasher);
-                }
-            }
-            syn::Pat::Path(pp) => {
-                "PatPath".hash(&mut hasher);
-                let path_fp = self.hash_path(&pp.path);
-                path_fp.hash(&mut hasher);
-            }
-            syn::Pat::Lit(pl) => {
-                "PatLit".hash(&mut hasher);
-                let lit_token = Self::lit_to_token(&pl.lit);
-                self.feed_token(&mut hasher, &lit_token);
-            }
-            syn::Pat::Reference(pr) => {
-                "PatRef".hash(&mut hasher);
-                if pr.mutability.is_some() {
-                    self.feed_token(&mut hasher, &NormalizedToken::Kw("mut"));
-                }
-                let inner_fp = self.hash_pat(&pr.pat);
-                inner_fp.hash(&mut hasher);
-            }
-            syn::Pat::Or(po) => {
-                "PatOr".hash(&mut hasher);
-                for case in &po.cases {
-                    let c_fp = self.hash_pat(case);
-                    c_fp.hash(&mut hasher);
-                }
-            }
-            syn::Pat::Range(_) => {
-                "PatRange".hash(&mut hasher);
-            }
-            syn::Pat::Rest(_) => {
-                "PatRest".hash(&mut hasher);
-            }
-            syn::Pat::Slice(s) => {
-                "PatSlice".hash(&mut hasher);
-                for elem in &s.elems {
-                    let e_fp = self.hash_pat(elem);
-                    e_fp.hash(&mut hasher);
-                }
-            }
-            syn::Pat::Type(pt) => {
-                "PatType".hash(&mut hasher);
-                let inner_fp = self.hash_pat(&pt.pat);
-                inner_fp.hash(&mut hasher);
-                let ty_fp = self.hash_type(&pt.ty);
-                ty_fp.hash(&mut hasher);
-            }
-            _ => {
-                "PatOther".hash(&mut hasher);
-            }
+            syn::Pat::Ident(pi) => self.hash_pat_ident(&mut hasher, pi),
+            syn::Pat::Wild(_) => "PatWild".hash(&mut hasher),
+            syn::Pat::Path(pp) => self.hash_pat_path(&mut hasher, &pp.path),
+            syn::Pat::Lit(pl) => self.hash_pat_lit(&mut hasher, &pl.lit),
+            syn::Pat::Tuple(t) => self.hash_pat_seq(&mut hasher, "PatTuple", &t.elems),
+            syn::Pat::Slice(s) => self.hash_pat_seq(&mut hasher, "PatSlice", &s.elems),
+            syn::Pat::Or(po) => self.hash_pat_seq(&mut hasher, "PatOr", &po.cases),
+            syn::Pat::TupleStruct(ts) => self.hash_pat_tuple_struct(&mut hasher, ts),
+            syn::Pat::Struct(ps) => self.hash_pat_struct(&mut hasher, ps),
+            syn::Pat::Reference(pr) => self.hash_pat_reference(&mut hasher, pr),
+            syn::Pat::Type(pt) => self.hash_pat_type(&mut hasher, pt),
+            syn::Pat::Range(_) => "PatRange".hash(&mut hasher),
+            syn::Pat::Rest(_) => "PatRest".hash(&mut hasher),
+            _ => "PatOther".hash(&mut hasher),
         }
         let fp = hasher.finish();
         self.fingerprint_set.insert(fp);
@@ -644,6 +598,81 @@ impl FormEmitter {
         // does NOT contribute. Leaf tokens fed via feed_token during
         // the match arms above already incremented node_count.
         fp
+    }
+
+    fn hash_pat_ident(&mut self, hasher: &mut Xxh3, pi: &syn::PatIdent) {
+        "PatIdent".hash(hasher);
+        self.record_identifier(pi.ident.to_string());
+        self.feed_token(hasher, &NormalizedToken::Var);
+        if pi.mutability.is_some() {
+            self.feed_token(hasher, &NormalizedToken::Kw("mut"));
+        }
+    }
+
+    fn hash_pat_path(&mut self, hasher: &mut Xxh3, path: &syn::Path) {
+        "PatPath".hash(hasher);
+        let path_fp = self.hash_path(path);
+        path_fp.hash(hasher);
+    }
+
+    fn hash_pat_lit(&mut self, hasher: &mut Xxh3, lit: &syn::Lit) {
+        "PatLit".hash(hasher);
+        let lit_token = Self::lit_to_token(lit);
+        self.feed_token(hasher, &lit_token);
+    }
+
+    /// Hash a sub-pattern sequence (Tuple / Slice / Or arms) with a
+    /// caller-supplied discriminator. Generic over the punctuation
+    /// token because syn uses `Comma` for Tuple/Slice and `Or` for
+    /// Or-patterns.
+    fn hash_pat_seq<P>(
+        &mut self,
+        hasher: &mut Xxh3,
+        discriminator: &'static str,
+        elems: &syn::punctuated::Punctuated<syn::Pat, P>,
+    ) {
+        discriminator.hash(hasher);
+        for elem in elems {
+            let e_fp = self.hash_pat(elem);
+            e_fp.hash(hasher);
+        }
+    }
+
+    fn hash_pat_tuple_struct(&mut self, hasher: &mut Xxh3, ts: &syn::PatTupleStruct) {
+        "PatTupleStruct".hash(hasher);
+        let path_fp = self.hash_path(&ts.path);
+        path_fp.hash(hasher);
+        for elem in &ts.elems {
+            let e_fp = self.hash_pat(elem);
+            e_fp.hash(hasher);
+        }
+    }
+
+    fn hash_pat_struct(&mut self, hasher: &mut Xxh3, ps: &syn::PatStruct) {
+        "PatStruct".hash(hasher);
+        let path_fp = self.hash_path(&ps.path);
+        path_fp.hash(hasher);
+        for field in &ps.fields {
+            let f_fp = self.hash_pat(&field.pat);
+            f_fp.hash(hasher);
+        }
+    }
+
+    fn hash_pat_reference(&mut self, hasher: &mut Xxh3, pr: &syn::PatReference) {
+        "PatRef".hash(hasher);
+        if pr.mutability.is_some() {
+            self.feed_token(hasher, &NormalizedToken::Kw("mut"));
+        }
+        let inner_fp = self.hash_pat(&pr.pat);
+        inner_fp.hash(hasher);
+    }
+
+    fn hash_pat_type(&mut self, hasher: &mut Xxh3, pt: &syn::PatType) {
+        "PatType".hash(hasher);
+        let inner_fp = self.hash_pat(&pt.pat);
+        inner_fp.hash(hasher);
+        let ty_fp = self.hash_type(&pt.ty);
+        ty_fp.hash(hasher);
     }
 
     fn hash_block(&mut self, block: &syn::Block) -> u64 {
@@ -707,288 +736,16 @@ impl FormEmitter {
         fp
     }
 
-    #[allow(clippy::too_many_lines)] // expression match arms cover the full syn::Expr taxonomy
     fn hash_expr(&mut self, expr: &syn::Expr) -> u64 {
         let mut hasher = Xxh3::new();
-        match expr {
-            syn::Expr::Path(ep) => {
-                // Single-segment, snake-case identifier paths in
-                // expression position are treated as local-variable
-                // references (alpha-equivalent collapse). This is the
-                // v0.1 heuristic for "this is a local" without full
-                // scope tracking; multi-segment paths (e.g., `foo::bar`)
-                // and PascalCase single-segment paths (e.g., `Some`,
-                // `MyType`) are treated as concrete value paths.
-                if let Some(name) = single_seg_local(&ep.path) {
-                    "ExprLocal".hash(&mut hasher);
-                    self.record_identifier(name);
-                    self.feed_token(&mut hasher, &NormalizedToken::Var);
-                } else {
-                    "ExprPath".hash(&mut hasher);
-                    let path_fp = self.hash_path(&ep.path);
-                    path_fp.hash(&mut hasher);
-                }
-            }
-            syn::Expr::Lit(el) => {
-                "ExprLit".hash(&mut hasher);
-                let lit_token = Self::lit_to_token(&el.lit);
-                self.feed_token(&mut hasher, &lit_token);
-            }
-            syn::Expr::Binary(eb) => {
-                "ExprBinary".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Op(binop_symbol(&eb.op)));
-                let l_fp = self.hash_expr(&eb.left);
-                l_fp.hash(&mut hasher);
-                let r_fp = self.hash_expr(&eb.right);
-                r_fp.hash(&mut hasher);
-            }
-            syn::Expr::Unary(eu) => {
-                "ExprUnary".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Op(unop_symbol(&eu.op)));
-                let inner_fp = self.hash_expr(&eu.expr);
-                inner_fp.hash(&mut hasher);
-            }
-            syn::Expr::Assign(ea) => {
-                "ExprAssign".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Op("="));
-                let l_fp = self.hash_expr(&ea.left);
-                l_fp.hash(&mut hasher);
-                let r_fp = self.hash_expr(&ea.right);
-                r_fp.hash(&mut hasher);
-            }
-            syn::Expr::Call(ec) => {
-                "ExprCall".hash(&mut hasher);
-                let f_fp = self.hash_expr(&ec.func);
-                f_fp.hash(&mut hasher);
-                for arg in &ec.args {
-                    let a_fp = self.hash_expr(arg);
-                    a_fp.hash(&mut hasher);
-                }
-            }
-            syn::Expr::MethodCall(em) => {
-                "ExprMethodCall".hash(&mut hasher);
-                let recv_fp = self.hash_expr(&em.receiver);
-                recv_fp.hash(&mut hasher);
-                let method = em.method.to_string();
-                self.record_identifier(method.clone());
-                self.feed_token(&mut hasher, &NormalizedToken::Ident(method));
-                for arg in &em.args {
-                    let a_fp = self.hash_expr(arg);
-                    a_fp.hash(&mut hasher);
-                }
-            }
-            syn::Expr::Field(ef) => {
-                "ExprField".hash(&mut hasher);
-                let recv_fp = self.hash_expr(&ef.base);
-                recv_fp.hash(&mut hasher);
-                match &ef.member {
-                    syn::Member::Named(ident) => {
-                        let name = ident.to_string();
-                        self.record_identifier(name.clone());
-                        self.feed_token(&mut hasher, &NormalizedToken::Ident(name));
-                    }
-                    syn::Member::Unnamed(idx) => {
-                        self.feed_token(
-                            &mut hasher,
-                            &NormalizedToken::LitInt(i128::from(idx.index)),
-                        );
-                    }
-                }
-            }
-            syn::Expr::Index(ei) => {
-                "ExprIndex".hash(&mut hasher);
-                let recv_fp = self.hash_expr(&ei.expr);
-                recv_fp.hash(&mut hasher);
-                let idx_fp = self.hash_expr(&ei.index);
-                idx_fp.hash(&mut hasher);
-            }
-            syn::Expr::Block(eb) => {
-                "ExprBlock".hash(&mut hasher);
-                let b_fp = self.hash_block(&eb.block);
-                b_fp.hash(&mut hasher);
-            }
-            syn::Expr::If(ei) => {
-                "ExprIf".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Kw("if"));
-                let c_fp = self.hash_expr(&ei.cond);
-                c_fp.hash(&mut hasher);
-                let t_fp = self.hash_block(&ei.then_branch);
-                t_fp.hash(&mut hasher);
-                if let Some((_, else_branch)) = &ei.else_branch {
-                    let e_fp = self.hash_expr(else_branch);
-                    e_fp.hash(&mut hasher);
-                }
-            }
-            syn::Expr::Match(em) => {
-                "ExprMatch".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Kw("match"));
-                let scrutinee_fp = self.hash_expr(&em.expr);
-                scrutinee_fp.hash(&mut hasher);
-                for arm in &em.arms {
-                    let arm_fp = self.hash_arm(arm);
-                    arm_fp.hash(&mut hasher);
-                }
-            }
-            syn::Expr::While(ew) => {
-                "ExprWhile".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Kw("while"));
-                let c_fp = self.hash_expr(&ew.cond);
-                c_fp.hash(&mut hasher);
-                let b_fp = self.hash_block(&ew.body);
-                b_fp.hash(&mut hasher);
-            }
-            syn::Expr::ForLoop(efl) => {
-                "ExprFor".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Kw("for"));
-                let pat_fp = self.hash_pat(&efl.pat);
-                pat_fp.hash(&mut hasher);
-                let it_fp = self.hash_expr(&efl.expr);
-                it_fp.hash(&mut hasher);
-                let body_fp = self.hash_block(&efl.body);
-                body_fp.hash(&mut hasher);
-            }
-            syn::Expr::Loop(el) => {
-                "ExprLoop".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Kw("loop"));
-                let b_fp = self.hash_block(&el.body);
-                b_fp.hash(&mut hasher);
-            }
-            syn::Expr::Return(er) => {
-                "ExprReturn".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Kw("return"));
-                if let Some(inner) = &er.expr {
-                    let i_fp = self.hash_expr(inner);
-                    i_fp.hash(&mut hasher);
-                }
-            }
-            syn::Expr::Break(eb) => {
-                "ExprBreak".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Kw("break"));
-                if let Some(inner) = &eb.expr {
-                    let i_fp = self.hash_expr(inner);
-                    i_fp.hash(&mut hasher);
-                }
-            }
-            syn::Expr::Continue(_) => {
-                "ExprContinue".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Kw("continue"));
-            }
-            syn::Expr::Reference(er) => {
-                "ExprRef".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Op("&"));
-                if er.mutability.is_some() {
-                    self.feed_token(&mut hasher, &NormalizedToken::Kw("mut"));
-                }
-                let inner_fp = self.hash_expr(&er.expr);
-                inner_fp.hash(&mut hasher);
-            }
-            syn::Expr::Paren(ep) => {
-                "ExprParen".hash(&mut hasher);
-                let inner_fp = self.hash_expr(&ep.expr);
-                inner_fp.hash(&mut hasher);
-            }
-            syn::Expr::Tuple(et) => {
-                "ExprTuple".hash(&mut hasher);
-                for elem in &et.elems {
-                    let e_fp = self.hash_expr(elem);
-                    e_fp.hash(&mut hasher);
-                }
-            }
-            syn::Expr::Array(ea) => {
-                "ExprArray".hash(&mut hasher);
-                for elem in &ea.elems {
-                    let e_fp = self.hash_expr(elem);
-                    e_fp.hash(&mut hasher);
-                }
-            }
-            syn::Expr::Cast(ec) => {
-                "ExprCast".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Kw("as"));
-                let inner_fp = self.hash_expr(&ec.expr);
-                inner_fp.hash(&mut hasher);
-                let ty_fp = self.hash_type(&ec.ty);
-                ty_fp.hash(&mut hasher);
-            }
-            syn::Expr::Range(er) => {
-                "ExprRange".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Op(".."));
-                if let Some(start) = &er.start {
-                    let s_fp = self.hash_expr(start);
-                    s_fp.hash(&mut hasher);
-                }
-                if let Some(end) = &er.end {
-                    let e_fp = self.hash_expr(end);
-                    e_fp.hash(&mut hasher);
-                }
-            }
-            syn::Expr::Try(et) => {
-                "ExprTry".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Op("?"));
-                let inner_fp = self.hash_expr(&et.expr);
-                inner_fp.hash(&mut hasher);
-            }
-            syn::Expr::Await(ea) => {
-                "ExprAwait".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Kw("await"));
-                let inner_fp = self.hash_expr(&ea.base);
-                inner_fp.hash(&mut hasher);
-            }
-            syn::Expr::Async(ea) => {
-                "ExprAsync".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Modifier("async"));
-                let b_fp = self.hash_block(&ea.block);
-                b_fp.hash(&mut hasher);
-            }
-            syn::Expr::Unsafe(eu) => {
-                "ExprUnsafe".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Modifier("unsafe"));
-                let b_fp = self.hash_block(&eu.block);
-                b_fp.hash(&mut hasher);
-            }
-            syn::Expr::Macro(em) => {
-                "ExprMacro".hash(&mut hasher);
-                let m_fp = self.hash_macro(&em.mac);
-                m_fp.hash(&mut hasher);
-            }
-            syn::Expr::Closure(_) => {
-                "ExprClosure".hash(&mut hasher);
-                // Form-boundary: the closure body is attributed to its
-                // own form, not this one. Emit only the opaque marker.
-                // The walker's caller is responsible for capturing the
-                // closure as a separate form via a follow-up pass.
-                self.feed_token(&mut hasher, &NormalizedToken::Closure);
-            }
-            syn::Expr::Struct(es) => {
-                "ExprStruct".hash(&mut hasher);
-                let path_fp = self.hash_path(&es.path);
-                path_fp.hash(&mut hasher);
-                for field in &es.fields {
-                    let f_fp = self.hash_expr(&field.expr);
-                    f_fp.hash(&mut hasher);
-                }
-            }
-            syn::Expr::Repeat(er) => {
-                "ExprRepeat".hash(&mut hasher);
-                let inner_fp = self.hash_expr(&er.expr);
-                inner_fp.hash(&mut hasher);
-                let len_fp = self.hash_expr(&er.len);
-                len_fp.hash(&mut hasher);
-            }
-            syn::Expr::Let(el) => {
-                "ExprLet".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Kw("let"));
-                let pat_fp = self.hash_pat(&el.pat);
-                pat_fp.hash(&mut hasher);
-                let e_fp = self.hash_expr(&el.expr);
-                e_fp.hash(&mut hasher);
-            }
-            _ => {
-                // Less-common expression shapes (Group, Verbatim,
-                // Const block, TryBlock, Yield, …) — emit a generic
-                // discriminator; downstream PRs refine if profiling
-                // shows duplication hotspots.
-                "ExprOther".hash(&mut hasher);
-            }
+        // Dispatch by category to keep the outer match small. Each
+        // category helper handles a fraction of `syn::Expr`'s ~33
+        // variants. Less-common shapes (Group, Verbatim, Const block,
+        // TryBlock, Yield, …) fall through to the `_ => ExprOther`
+        // arm; downstream PRs refine if profiling shows duplication
+        // hotspots there.
+        if !self.hash_expr_dispatch(&mut hasher, expr) {
+            "ExprOther".hash(&mut hasher);
         }
         let fp = hasher.finish();
         self.fingerprint_set.insert(fp);
@@ -998,6 +755,424 @@ impl FormEmitter {
         // subform itself does not add to node_count here (would
         // double-count).
         fp
+    }
+
+    /// Dispatch a `syn::Expr` to its category-grouped hash helper.
+    /// Returns `true` when a category handler claimed the variant;
+    /// `false` falls back to the [`Self::hash_expr`] caller's
+    /// `ExprOther` discriminator.
+    fn hash_expr_dispatch(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
+        if self.hash_expr_value(hasher, expr) {
+            return true;
+        }
+        if self.hash_expr_operator(hasher, expr) {
+            return true;
+        }
+        if self.hash_expr_call_like(hasher, expr) {
+            return true;
+        }
+        if self.hash_expr_control(hasher, expr) {
+            return true;
+        }
+        if self.hash_expr_collection(hasher, expr) {
+            return true;
+        }
+        if self.hash_expr_wrap(hasher, expr) {
+            return true;
+        }
+        self.hash_expr_block_like(hasher, expr)
+    }
+
+    /// Value-level expressions: path-or-local, literal, struct
+    /// literal, repeat.
+    fn hash_expr_value(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
+        match expr {
+            syn::Expr::Path(ep) => self.hash_expr_path(hasher, ep),
+            syn::Expr::Lit(el) => self.hash_expr_lit(hasher, &el.lit),
+            syn::Expr::Struct(es) => self.hash_expr_struct(hasher, es),
+            syn::Expr::Repeat(er) => self.hash_expr_repeat(hasher, er),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Operator expressions: binary, unary, assign, cast, range, try.
+    fn hash_expr_operator(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
+        match expr {
+            syn::Expr::Binary(eb) => self.hash_expr_binary(hasher, eb),
+            syn::Expr::Unary(eu) => self.hash_expr_unary(hasher, eu),
+            syn::Expr::Assign(ea) => self.hash_expr_assign(hasher, ea),
+            syn::Expr::Cast(ec) => self.hash_expr_cast(hasher, ec),
+            syn::Expr::Range(er) => self.hash_expr_range(hasher, er),
+            syn::Expr::Try(et) => self.hash_expr_try(hasher, et),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Call-like expressions: free call, method call, field, index.
+    fn hash_expr_call_like(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
+        match expr {
+            syn::Expr::Call(ec) => self.hash_expr_call(hasher, ec),
+            syn::Expr::MethodCall(em) => self.hash_expr_method_call(hasher, em),
+            syn::Expr::Field(ef) => self.hash_expr_field(hasher, ef),
+            syn::Expr::Index(ei) => self.hash_expr_index(hasher, ei),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Control-flow expressions: if, match, while, for, loop, return,
+    /// break, continue, let.
+    fn hash_expr_control(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
+        match expr {
+            syn::Expr::If(ei) => self.hash_expr_if(hasher, ei),
+            syn::Expr::Match(em) => self.hash_expr_match(hasher, em),
+            syn::Expr::While(ew) => self.hash_expr_while(hasher, ew),
+            syn::Expr::ForLoop(efl) => self.hash_expr_for(hasher, efl),
+            syn::Expr::Loop(el) => self.hash_expr_loop(hasher, el),
+            syn::Expr::Return(er) => self.hash_expr_return(hasher, er),
+            syn::Expr::Break(eb) => self.hash_expr_break(hasher, eb),
+            syn::Expr::Continue(_) => self.hash_expr_continue(hasher),
+            syn::Expr::Let(el) => self.hash_expr_let(hasher, el),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Collection-shaped expressions: tuple, array.
+    fn hash_expr_collection(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
+        match expr {
+            syn::Expr::Tuple(et) => self.hash_expr_seq(hasher, "ExprTuple", &et.elems),
+            syn::Expr::Array(ea) => self.hash_expr_seq(hasher, "ExprArray", &ea.elems),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Unary-wrapping expressions: reference, paren, await, macro,
+    /// closure (form-boundary).
+    fn hash_expr_wrap(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
+        match expr {
+            syn::Expr::Reference(er) => self.hash_expr_reference(hasher, er),
+            syn::Expr::Paren(ep) => self.hash_expr_paren(hasher, ep),
+            syn::Expr::Await(ea) => self.hash_expr_await(hasher, ea),
+            syn::Expr::Macro(em) => self.hash_expr_macro(hasher, em),
+            syn::Expr::Closure(_) => self.hash_expr_closure(hasher),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Block-bearing expressions: block, async, unsafe.
+    fn hash_expr_block_like(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
+        match expr {
+            syn::Expr::Block(eb) => self.hash_expr_block_expr(hasher, &eb.block),
+            syn::Expr::Async(ea) => self.hash_expr_async(hasher, ea),
+            syn::Expr::Unsafe(eu) => self.hash_expr_unsafe(hasher, eu),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Path expression: single-segment, snake-case identifier paths
+    /// in expression position are treated as local-variable
+    /// references (alpha-equivalent collapse). This is the v0.1
+    /// heuristic for "this is a local" without full scope tracking;
+    /// multi-segment paths (e.g., `foo::bar`) and `PascalCase`
+    /// single-segment paths (e.g., `Some`, `MyType`) are treated as
+    /// concrete value paths.
+    fn hash_expr_path(&mut self, hasher: &mut Xxh3, ep: &syn::ExprPath) {
+        if let Some(name) = single_seg_local(&ep.path) {
+            "ExprLocal".hash(hasher);
+            self.record_identifier(name);
+            self.feed_token(hasher, &NormalizedToken::Var);
+        } else {
+            "ExprPath".hash(hasher);
+            let path_fp = self.hash_path(&ep.path);
+            path_fp.hash(hasher);
+        }
+    }
+
+    fn hash_expr_lit(&mut self, hasher: &mut Xxh3, lit: &syn::Lit) {
+        "ExprLit".hash(hasher);
+        let lit_token = Self::lit_to_token(lit);
+        self.feed_token(hasher, &lit_token);
+    }
+
+    fn hash_expr_binary(&mut self, hasher: &mut Xxh3, eb: &syn::ExprBinary) {
+        "ExprBinary".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Op(binop_symbol(&eb.op)));
+        let l_fp = self.hash_expr(&eb.left);
+        l_fp.hash(hasher);
+        let r_fp = self.hash_expr(&eb.right);
+        r_fp.hash(hasher);
+    }
+
+    fn hash_expr_unary(&mut self, hasher: &mut Xxh3, eu: &syn::ExprUnary) {
+        "ExprUnary".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Op(unop_symbol(&eu.op)));
+        let inner_fp = self.hash_expr(&eu.expr);
+        inner_fp.hash(hasher);
+    }
+
+    fn hash_expr_assign(&mut self, hasher: &mut Xxh3, ea: &syn::ExprAssign) {
+        "ExprAssign".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Op("="));
+        let l_fp = self.hash_expr(&ea.left);
+        l_fp.hash(hasher);
+        let r_fp = self.hash_expr(&ea.right);
+        r_fp.hash(hasher);
+    }
+
+    fn hash_expr_call(&mut self, hasher: &mut Xxh3, ec: &syn::ExprCall) {
+        "ExprCall".hash(hasher);
+        let f_fp = self.hash_expr(&ec.func);
+        f_fp.hash(hasher);
+        for arg in &ec.args {
+            let a_fp = self.hash_expr(arg);
+            a_fp.hash(hasher);
+        }
+    }
+
+    fn hash_expr_method_call(&mut self, hasher: &mut Xxh3, em: &syn::ExprMethodCall) {
+        "ExprMethodCall".hash(hasher);
+        let recv_fp = self.hash_expr(&em.receiver);
+        recv_fp.hash(hasher);
+        let method = em.method.to_string();
+        self.record_identifier(method.clone());
+        self.feed_token(hasher, &NormalizedToken::Ident(method));
+        for arg in &em.args {
+            let a_fp = self.hash_expr(arg);
+            a_fp.hash(hasher);
+        }
+    }
+
+    fn hash_expr_field(&mut self, hasher: &mut Xxh3, ef: &syn::ExprField) {
+        "ExprField".hash(hasher);
+        let recv_fp = self.hash_expr(&ef.base);
+        recv_fp.hash(hasher);
+        match &ef.member {
+            syn::Member::Named(ident) => {
+                let name = ident.to_string();
+                self.record_identifier(name.clone());
+                self.feed_token(hasher, &NormalizedToken::Ident(name));
+            }
+            syn::Member::Unnamed(idx) => {
+                self.feed_token(hasher, &NormalizedToken::LitInt(i128::from(idx.index)));
+            }
+        }
+    }
+
+    fn hash_expr_index(&mut self, hasher: &mut Xxh3, ei: &syn::ExprIndex) {
+        "ExprIndex".hash(hasher);
+        let recv_fp = self.hash_expr(&ei.expr);
+        recv_fp.hash(hasher);
+        let idx_fp = self.hash_expr(&ei.index);
+        idx_fp.hash(hasher);
+    }
+
+    fn hash_expr_block_expr(&mut self, hasher: &mut Xxh3, block: &syn::Block) {
+        "ExprBlock".hash(hasher);
+        let b_fp = self.hash_block(block);
+        b_fp.hash(hasher);
+    }
+
+    fn hash_expr_if(&mut self, hasher: &mut Xxh3, ei: &syn::ExprIf) {
+        "ExprIf".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Kw("if"));
+        let c_fp = self.hash_expr(&ei.cond);
+        c_fp.hash(hasher);
+        let t_fp = self.hash_block(&ei.then_branch);
+        t_fp.hash(hasher);
+        if let Some((_, else_branch)) = &ei.else_branch {
+            let e_fp = self.hash_expr(else_branch);
+            e_fp.hash(hasher);
+        }
+    }
+
+    fn hash_expr_match(&mut self, hasher: &mut Xxh3, em: &syn::ExprMatch) {
+        "ExprMatch".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Kw("match"));
+        let scrutinee_fp = self.hash_expr(&em.expr);
+        scrutinee_fp.hash(hasher);
+        for arm in &em.arms {
+            let arm_fp = self.hash_arm(arm);
+            arm_fp.hash(hasher);
+        }
+    }
+
+    fn hash_expr_while(&mut self, hasher: &mut Xxh3, ew: &syn::ExprWhile) {
+        "ExprWhile".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Kw("while"));
+        let c_fp = self.hash_expr(&ew.cond);
+        c_fp.hash(hasher);
+        let b_fp = self.hash_block(&ew.body);
+        b_fp.hash(hasher);
+    }
+
+    fn hash_expr_for(&mut self, hasher: &mut Xxh3, efl: &syn::ExprForLoop) {
+        "ExprFor".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Kw("for"));
+        let pat_fp = self.hash_pat(&efl.pat);
+        pat_fp.hash(hasher);
+        let it_fp = self.hash_expr(&efl.expr);
+        it_fp.hash(hasher);
+        let body_fp = self.hash_block(&efl.body);
+        body_fp.hash(hasher);
+    }
+
+    fn hash_expr_loop(&mut self, hasher: &mut Xxh3, el: &syn::ExprLoop) {
+        "ExprLoop".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Kw("loop"));
+        let b_fp = self.hash_block(&el.body);
+        b_fp.hash(hasher);
+    }
+
+    fn hash_expr_return(&mut self, hasher: &mut Xxh3, er: &syn::ExprReturn) {
+        "ExprReturn".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Kw("return"));
+        if let Some(inner) = &er.expr {
+            let i_fp = self.hash_expr(inner);
+            i_fp.hash(hasher);
+        }
+    }
+
+    fn hash_expr_break(&mut self, hasher: &mut Xxh3, eb: &syn::ExprBreak) {
+        "ExprBreak".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Kw("break"));
+        if let Some(inner) = &eb.expr {
+            let i_fp = self.hash_expr(inner);
+            i_fp.hash(hasher);
+        }
+    }
+
+    fn hash_expr_continue(&mut self, hasher: &mut Xxh3) {
+        "ExprContinue".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Kw("continue"));
+    }
+
+    fn hash_expr_reference(&mut self, hasher: &mut Xxh3, er: &syn::ExprReference) {
+        "ExprRef".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Op("&"));
+        if er.mutability.is_some() {
+            self.feed_token(hasher, &NormalizedToken::Kw("mut"));
+        }
+        let inner_fp = self.hash_expr(&er.expr);
+        inner_fp.hash(hasher);
+    }
+
+    fn hash_expr_paren(&mut self, hasher: &mut Xxh3, ep: &syn::ExprParen) {
+        "ExprParen".hash(hasher);
+        let inner_fp = self.hash_expr(&ep.expr);
+        inner_fp.hash(hasher);
+    }
+
+    /// Hash a sub-expression sequence (Tuple / Array elements) with
+    /// a caller-supplied discriminator.
+    fn hash_expr_seq(
+        &mut self,
+        hasher: &mut Xxh3,
+        discriminator: &'static str,
+        elems: &syn::punctuated::Punctuated<syn::Expr, syn::token::Comma>,
+    ) {
+        discriminator.hash(hasher);
+        for elem in elems {
+            let e_fp = self.hash_expr(elem);
+            e_fp.hash(hasher);
+        }
+    }
+
+    fn hash_expr_cast(&mut self, hasher: &mut Xxh3, ec: &syn::ExprCast) {
+        "ExprCast".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Kw("as"));
+        let inner_fp = self.hash_expr(&ec.expr);
+        inner_fp.hash(hasher);
+        let ty_fp = self.hash_type(&ec.ty);
+        ty_fp.hash(hasher);
+    }
+
+    fn hash_expr_range(&mut self, hasher: &mut Xxh3, er: &syn::ExprRange) {
+        "ExprRange".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Op(".."));
+        if let Some(start) = &er.start {
+            let s_fp = self.hash_expr(start);
+            s_fp.hash(hasher);
+        }
+        if let Some(end) = &er.end {
+            let e_fp = self.hash_expr(end);
+            e_fp.hash(hasher);
+        }
+    }
+
+    fn hash_expr_try(&mut self, hasher: &mut Xxh3, et: &syn::ExprTry) {
+        "ExprTry".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Op("?"));
+        let inner_fp = self.hash_expr(&et.expr);
+        inner_fp.hash(hasher);
+    }
+
+    fn hash_expr_await(&mut self, hasher: &mut Xxh3, ea: &syn::ExprAwait) {
+        "ExprAwait".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Kw("await"));
+        let inner_fp = self.hash_expr(&ea.base);
+        inner_fp.hash(hasher);
+    }
+
+    fn hash_expr_async(&mut self, hasher: &mut Xxh3, ea: &syn::ExprAsync) {
+        "ExprAsync".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Modifier("async"));
+        let b_fp = self.hash_block(&ea.block);
+        b_fp.hash(hasher);
+    }
+
+    fn hash_expr_unsafe(&mut self, hasher: &mut Xxh3, eu: &syn::ExprUnsafe) {
+        "ExprUnsafe".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Modifier("unsafe"));
+        let b_fp = self.hash_block(&eu.block);
+        b_fp.hash(hasher);
+    }
+
+    fn hash_expr_macro(&mut self, hasher: &mut Xxh3, em: &syn::ExprMacro) {
+        "ExprMacro".hash(hasher);
+        let m_fp = self.hash_macro(&em.mac);
+        m_fp.hash(hasher);
+    }
+
+    /// Form-boundary: the closure body is attributed to its own
+    /// form, not this one. Emit only the opaque marker. The walker's
+    /// caller is responsible for capturing the closure as a separate
+    /// form via a follow-up pass.
+    fn hash_expr_closure(&mut self, hasher: &mut Xxh3) {
+        "ExprClosure".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Closure);
+    }
+
+    fn hash_expr_struct(&mut self, hasher: &mut Xxh3, es: &syn::ExprStruct) {
+        "ExprStruct".hash(hasher);
+        let path_fp = self.hash_path(&es.path);
+        path_fp.hash(hasher);
+        for field in &es.fields {
+            let f_fp = self.hash_expr(&field.expr);
+            f_fp.hash(hasher);
+        }
+    }
+
+    fn hash_expr_repeat(&mut self, hasher: &mut Xxh3, er: &syn::ExprRepeat) {
+        "ExprRepeat".hash(hasher);
+        let inner_fp = self.hash_expr(&er.expr);
+        inner_fp.hash(hasher);
+        let len_fp = self.hash_expr(&er.len);
+        len_fp.hash(hasher);
+    }
+
+    fn hash_expr_let(&mut self, hasher: &mut Xxh3, el: &syn::ExprLet) {
+        "ExprLet".hash(hasher);
+        self.feed_token(hasher, &NormalizedToken::Kw("let"));
+        let pat_fp = self.hash_pat(&el.pat);
+        pat_fp.hash(hasher);
+        let e_fp = self.hash_expr(&el.expr);
+        e_fp.hash(hasher);
     }
 
     fn hash_arm(&mut self, arm: &syn::Arm) -> u64 {

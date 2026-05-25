@@ -566,9 +566,43 @@ fn format_unix_seconds_iso8601(secs: u64) -> String {
 mod tests {
     use super::*;
     use crate::domain::{
-        FilePath, FormKind, FormRef, LineColumn, Match, Report, Span, Summary, Tier,
+        FilePath, FormKind, FormRef, LineColumn, Match, NormalizedForm, Report, Span, Summary, Tier,
     };
+    use crate::ports::{NormalizeError, NormalizerPort, PlaceholderPolicy};
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
+
+    /// Stub adapter for in-process tests of CLI-layer helpers
+    /// (`emit_stats`, dispatch routing). The unit tests in this module
+    /// don't exercise normalization — they validate the dispatch
+    /// surface — so `normalize` is a sentinel `unreachable!()` and
+    /// the identity hooks return fixed strings.
+    struct StubNormalizer;
+
+    impl NormalizerPort for StubNormalizer {
+        fn extensions(&self) -> &'static [&'static str] {
+            &[".rs"]
+        }
+        fn normalize(
+            &self,
+            _source: &str,
+            _path: &FilePath,
+        ) -> Result<Vec<NormalizedForm>, NormalizeError> {
+            unreachable!("StubNormalizer.normalize is not exercised by emit_stats tests");
+        }
+        fn placeholder_policy(&self) -> PlaceholderPolicy {
+            PlaceholderPolicy::default()
+        }
+        fn tool_name(&self) -> &'static str {
+            "stub"
+        }
+        fn tool_version(&self) -> &'static str {
+            "0.0.0"
+        }
+        fn language(&self) -> &'static str {
+            "stub"
+        }
+    }
 
     fn make_form_ref(path: &str, line: u32) -> FormRef {
         FormRef::new(
@@ -580,6 +614,115 @@ mod tests {
 
     fn make_match(score: f64, tier: Tier) -> Match {
         Match::new(vec![make_form_ref("src/a.rs", 10)], score, tier)
+    }
+
+    fn make_match_with_kind(kind: FormKind, tier: Tier) -> Match {
+        let span = Span::try_new(LineColumn::new(1, 0), LineColumn::new(3, 5)).unwrap();
+        Match::new(
+            vec![FormRef::new(
+                FilePath::from(PathBuf::from("src/a.rs")),
+                span,
+                kind,
+            )],
+            0.85,
+            tier,
+        )
+    }
+
+    fn stats_config(format: Format) -> AnalysisConfig {
+        AnalysisConfig::new([PathBuf::from(".")]).with_format(format)
+    }
+
+    fn three_tier_summary() -> Summary {
+        let mut by_tier: BTreeMap<Tier, u32> = BTreeMap::new();
+        by_tier.insert(Tier::AutoRefactor, 1);
+        by_tier.insert(Tier::ReviewFirst, 2);
+        by_tier.insert(Tier::Advisory, 3);
+        let mut by_kind: BTreeMap<FormKind, u32> = BTreeMap::new();
+        by_kind.insert(FormKind::Production, 4);
+        by_kind.insert(FormKind::Test, 5);
+        by_kind.insert(FormKind::Doctest, 6);
+        Summary {
+            total_forms: 18,
+            by_tier,
+            by_kind,
+        }
+    }
+
+    /// In-process exercise of every tier-label arm in `emit_stats`'s
+    /// text path. Covers `AutoRefactor` / `ReviewFirst` / `Advisory`
+    /// inside the inner `match *tier` branch.
+    #[test]
+    fn emit_stats_text_path_renders_every_tier_label() {
+        let summary = three_tier_summary();
+        let matches = vec![
+            make_match(0.99, Tier::AutoRefactor),
+            make_match(0.92, Tier::ReviewFirst),
+            make_match(0.70, Tier::Advisory),
+        ];
+        let report = Report::new(matches, summary, false);
+        emit_stats(&stats_config(Format::Text), &StubNormalizer, &report, None);
+        // No stdout capture here — the smoke-coverage value is the
+        // function executing every match arm without panicking.
+        // The cli_pipeline binary test asserts the rendered labels.
+    }
+
+    /// Every form-kind arm in the text path: `Production` / `Test` /
+    /// `Doctest`.
+    #[test]
+    fn emit_stats_text_path_renders_every_form_kind_label() {
+        let summary = three_tier_summary();
+        let matches = vec![
+            make_match_with_kind(FormKind::Production, Tier::Advisory),
+            make_match_with_kind(FormKind::Test, Tier::Advisory),
+            make_match_with_kind(FormKind::Doctest, Tier::Advisory),
+        ];
+        let report = Report::new(matches, summary, false);
+        emit_stats(&stats_config(Format::Text), &StubNormalizer, &report, None);
+    }
+
+    /// The JSON arm in `emit_stats` delegates to `print_json_envelope`
+    /// — exercising it in-process closes the previously-uncovered
+    /// dispatch branch.
+    #[test]
+    fn emit_stats_json_path_renders_envelope_without_panic() {
+        let report = Report::new(
+            vec![make_match(0.92, Tier::ReviewFirst)],
+            Summary::new(),
+            false,
+        );
+        emit_stats(&stats_config(Format::Json), &StubNormalizer, &report, None);
+    }
+
+    /// JSON path with a populated `ViewProjection` — exercises the
+    /// `view.is_some()` branch inside `print_json_envelope`.
+    #[test]
+    fn emit_stats_json_path_with_view_renders_without_panic() {
+        let report = Report::new(
+            vec![make_match(0.92, Tier::ReviewFirst)],
+            Summary::new(),
+            false,
+        );
+        let view = ViewProjection {
+            matches: vec![make_match(0.92, Tier::ReviewFirst)],
+            summary: Summary::new(),
+            passed: false,
+        };
+        emit_stats(
+            &stats_config(Format::Json),
+            &StubNormalizer,
+            &report,
+            Some(view),
+        );
+    }
+
+    /// Empty report on the text path — `passed: true`, no tier or
+    /// kind entries to iterate. Covers the empty `BTreeMap` exits of
+    /// the inner `for` loops.
+    #[test]
+    fn emit_stats_text_path_handles_empty_passing_report() {
+        let report = Report::new(vec![], Summary::new(), true);
+        emit_stats(&stats_config(Format::Text), &StubNormalizer, &report, None);
     }
 
     #[test]

@@ -337,6 +337,68 @@ fn stats_subcommand_emits_summary_only_in_text_mode() {
 }
 
 #[test]
+fn stats_subcommand_text_emits_by_tier_and_by_kind_labels() {
+    // The text dispatch path renders the `by_tier` and `by_kind`
+    // summary maps with stable string labels. Anchoring at least one
+    // representative key covers the inner `match *tier` and
+    // `match *kind` arms.
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_duplication_fixture(tmp.path());
+    let path_arg = tmp.path().to_string_lossy().into_owned();
+    let (_, stdout, _) = run_dry4rs(&["stats", &path_arg]);
+    // The duplication fixture surfaces an auto_refactor cluster, so
+    // `by_tier.auto_refactor:` must appear in text output.
+    assert!(
+        stdout.contains("by_tier.auto_refactor:"),
+        "stats text output should include by_tier.auto_refactor label: {stdout:?}"
+    );
+    // Both fixture files are production (no `#[test]` / cfg-test
+    // qualification), so `by_kind.production:` must surface.
+    assert!(
+        stdout.contains("by_kind.production:"),
+        "stats text output should include by_kind.production label: {stdout:?}"
+    );
+}
+
+#[test]
+fn stats_subcommand_emits_full_wire_envelope_in_json_mode() {
+    // `stats --format json` reuses the full envelope path — consumers
+    // parsing `result.summary` get the same shape they'd get from
+    // `report --format json`. This covers the JSON arm of the
+    // `emit_stats` dispatch (previously uncovered branch).
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_duplication_fixture(tmp.path());
+    let path_arg = tmp.path().to_string_lossy().into_owned();
+    let (_, stdout, _) = run_dry4rs(&["stats", "--format", "json", &path_arg]);
+    let envelope: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|err| panic!("stats JSON must parse: {err}, stdout: {stdout}"));
+    // Top-level locked keys (mirrors the wire-envelope snapshot lock).
+    assert_eq!(envelope["schema_version"], 1, "schema_version must be 1");
+    assert_eq!(envelope["tool"], "dry4rs", "tool identity must be dry4rs");
+    assert!(
+        envelope["result"]["summary"]["total_forms"].is_number(),
+        "result.summary.total_forms must be present: {stdout}"
+    );
+}
+
+#[test]
+fn stats_subcommand_json_carries_summary_by_tier() {
+    // The duplication fixture surfaces an `auto_refactor` cluster, so
+    // the JSON envelope's `result.summary.by_tier` must include an
+    // `auto_refactor` entry with a positive count.
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_duplication_fixture(tmp.path());
+    let path_arg = tmp.path().to_string_lossy().into_owned();
+    let (_, stdout, _) = run_dry4rs(&["stats", "--format", "json", &path_arg]);
+    let envelope: Value = serde_json::from_str(&stdout).expect("stats JSON must parse");
+    let by_tier = &envelope["result"]["summary"]["by_tier"];
+    assert!(
+        by_tier["auto_refactor"].as_u64().unwrap_or(0) >= 1,
+        "by_tier.auto_refactor must reflect the fixture cluster: {stdout}"
+    );
+}
+
+#[test]
 fn ignore_subcommand_is_skeletal_at_v0_1() {
     // `ignore <fingerprint>` is a v0.1 stub — emits a stderr note
     // explaining the deferral and exits 0.

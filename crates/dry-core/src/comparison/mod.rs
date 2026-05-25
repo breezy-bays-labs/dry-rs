@@ -257,59 +257,85 @@ fn pass1_hash_bucket(
     matches: &mut Vec<Match>,
     claimed: &mut HashSet<usize>,
 ) {
-    // BTreeMap (not HashMap) keeps Pass 1's emit order
-    // deterministic before the final sort. Cheap insurance against
-    // debugging surprises if a future refactor relies on emit order.
+    let buckets = group_forms_by_bucket_key(forms);
+    for (_key, indices) in buckets {
+        if indices.len() < 2 {
+            continue;
+        }
+        emit_clusters_for_bucket(forms, resolver, indices, matches, claimed);
+    }
+}
+
+/// Group every non-empty form's index by its `fingerprint_set`
+/// XOR-fold bucket key. Empty fingerprint sets are skipped — they
+/// have no structure to match (see "Empty `fingerprint_set` policy"
+/// in the module doc) and Pass 2's Jaccard returns 0.0 against any
+/// empty side, filtering them out naturally.
+///
+/// `BTreeMap` (not `HashMap`) keeps Pass 1's emit order deterministic
+/// before the final sort. Cheap insurance against debugging
+/// surprises if a future refactor relies on emit order.
+fn group_forms_by_bucket_key(forms: &[NormalizedForm]) -> BTreeMap<u64, Vec<usize>> {
     let mut buckets: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
     for (i, form) in forms.iter().enumerate() {
-        // Empty fingerprint sets do not cluster — they have no
-        // structure to match (see "Empty fingerprint_set policy"
-        // in the module doc). Leave them unclaimed; Pass 2's
-        // Jaccard returns 0.0 against any empty side and filters
-        // them out naturally.
         if form.fingerprint_set.is_empty() {
             continue;
         }
         let key = bucket_key(&form.fingerprint_set);
         buckets.entry(key).or_default().push(i);
     }
+    buckets
+}
 
-    for (_key, mut indices) in buckets {
-        if indices.len() < 2 {
-            continue;
+/// Drain every equal-set cluster from a single XOR-bucket.
+///
+/// A single bucket can hold multiple distinct equal-set clusters
+/// that XOR-fold to the same key (rare but legal: e.g. `{1, 2}` and
+/// `{4, 7}` both fold to `3`). Iterate until every cluster within
+/// the bucket is emitted so Pass 2 never has to handle a
+/// `score == 1.0` pair. Singletons (canonical with no equal partner
+/// in the bucket) drop out naturally and stay unclaimed for Pass 2's
+/// pairwise scan.
+fn emit_clusters_for_bucket(
+    forms: &[NormalizedForm],
+    resolver: &dyn PathResolver,
+    mut indices: Vec<usize>,
+    matches: &mut Vec<Match>,
+    claimed: &mut HashSet<usize>,
+) {
+    while indices.len() >= 2 {
+        let canonical_set = &forms[indices[0]].fingerprint_set;
+        let (cluster, leftover): (Vec<usize>, Vec<usize>) = indices
+            .iter()
+            .copied()
+            .partition(|&i| forms[i].fingerprint_set == *canonical_set);
+
+        if cluster.len() >= 2 {
+            emit_pass1_cluster(forms, resolver, &cluster, matches, claimed);
         }
+        // Canonical (and any singleton from this partition step)
+        // landed in `cluster` — drop it from the working set either
+        // way; `leftover` is the rest of the bucket.
+        indices = leftover;
+    }
+}
 
-        // A single bucket can hold multiple distinct equal-set
-        // clusters that XOR-fold to the same key (rare but legal:
-        // e.g. `{1, 2}` and `{4, 7}` both fold to `3`). Iterate
-        // until every cluster within the bucket is emitted so Pass
-        // 2 never has to handle a score==1.0 pair. Singletons
-        // (canonical with no equal partner in the bucket) drop out
-        // of `cluster` naturally and stay unclaimed for Pass 2's
-        // pairwise scan.
-        while indices.len() >= 2 {
-            let canonical_idx = indices[0];
-            let canonical_set = &forms[canonical_idx].fingerprint_set;
-            let (cluster, leftover): (Vec<usize>, Vec<usize>) = indices
-                .iter()
-                .copied()
-                .partition(|&i| forms[i].fingerprint_set == *canonical_set);
-
-            if cluster.len() >= 2 {
-                let forms_refs: Vec<FormRef> = cluster
-                    .iter()
-                    .map(|&i| form_ref_for(&forms[i], i, resolver))
-                    .collect();
-                matches.push(Match::new(forms_refs, 1.0, Tier::AutoRefactor));
-                for i in cluster {
-                    claimed.insert(i);
-                }
-            }
-            // Canonical (and any singleton from this partition step)
-            // landed in `cluster` — drop it from the working set
-            // either way; `leftover` is the rest of the bucket.
-            indices = leftover;
-        }
+/// Emit a single Pass 1 n-ary [`Match`] for an equal-set cluster and
+/// mark every member index as `claimed`.
+fn emit_pass1_cluster(
+    forms: &[NormalizedForm],
+    resolver: &dyn PathResolver,
+    cluster: &[usize],
+    matches: &mut Vec<Match>,
+    claimed: &mut HashSet<usize>,
+) {
+    let forms_refs: Vec<FormRef> = cluster
+        .iter()
+        .map(|&i| form_ref_for(&forms[i], i, resolver))
+        .collect();
+    matches.push(Match::new(forms_refs, 1.0, Tier::AutoRefactor));
+    for &i in cluster {
+        claimed.insert(i);
     }
 }
 
@@ -327,11 +353,7 @@ fn pass2_sliding_window(
     claimed: &HashSet<usize>,
     matches: &mut Vec<Match>,
 ) {
-    // Project to unclaimed indices and sort ascending by
-    // (node_count, original_index). The secondary sort key keeps
-    // the iteration order deterministic when node_counts tie.
-    let mut sorted: Vec<usize> = (0..forms.len()).filter(|i| !claimed.contains(i)).collect();
-    sorted.sort_by_key(|&i| (forms[i].node_count, i));
+    let sorted = sort_unclaimed_by_node_count(forms, claimed);
 
     for outer_pos in 0..sorted.len() {
         let i = sorted[outer_pos];
@@ -339,42 +361,72 @@ fn pass2_sliding_window(
         // below 2^53). The CLI-side gate (PR 8) clamps inputs.
         let bound = f64::from(forms[i].node_count) / threshold;
         for &j in &sorted[outer_pos + 1..] {
-            let nj = f64::from(forms[j].node_count);
             // Break math: strict inequality. No later k > j
             // (sorted ascending by node_count) can clear the
             // threshold.
-            if nj > bound {
+            if f64::from(forms[j].node_count) > bound {
                 break;
             }
-            let score = jaccard(&forms[i].fingerprint_set, &forms[j].fingerprint_set);
-            if score < threshold {
-                continue;
-            }
-            // Pass 1 emits ALL equal-set clusters within a bucket
-            // (including XOR-colliding distinct clusters), so any
-            // form with an equal-set partner has been claimed and
-            // Pass 2 should never see `score == 1.0`. The de-rating
-            // to AUTO_REFACTOR_FLOOR is a defensive fallback if a
-            // future refactor regresses Pass 1's exhaustive emit
-            // — a downgrade to AutoRefactor's floor is safer than
-            // a double-emit or a panic in release.
-            let final_score = if (score - 1.0).abs() < f64::EPSILON {
-                debug_assert!(
-                    false,
-                    "Pass 2 emitted a score-1.0 pair the bucket clustering missed: \
-                     forms[{i}] and forms[{j}]"
-                );
-                AUTO_REFACTOR_FLOOR // de-rate to the floor, but keep tier consistent
-            } else {
-                score
-            };
-            let tier = tier_for(final_score, threshold);
-            let forms_refs = vec![
-                form_ref_for(&forms[i], i, resolver),
-                form_ref_for(&forms[j], j, resolver),
-            ];
-            matches.push(Match::new(forms_refs, final_score, tier));
+            try_emit_pass2_match(forms, resolver, threshold, i, j, matches);
         }
+    }
+}
+
+/// Project to unclaimed indices and sort ascending by
+/// `(node_count, original_index)`. The secondary sort key keeps the
+/// iteration order deterministic when node counts tie.
+fn sort_unclaimed_by_node_count(forms: &[NormalizedForm], claimed: &HashSet<usize>) -> Vec<usize> {
+    let mut sorted: Vec<usize> = (0..forms.len()).filter(|i| !claimed.contains(i)).collect();
+    sorted.sort_by_key(|&i| (forms[i].node_count, i));
+    sorted
+}
+
+/// Try to emit a Pass 2 match for the candidate pair `(i, j)`.
+///
+/// Computes Jaccard, applies the threshold gate, resolves the
+/// effective score (de-rating any unexpected score-1.0 hit per the
+/// Pass 1 exhaustive-emit invariant), and pushes the Match.
+fn try_emit_pass2_match(
+    forms: &[NormalizedForm],
+    resolver: &dyn PathResolver,
+    threshold: f64,
+    i: usize,
+    j: usize,
+    matches: &mut Vec<Match>,
+) {
+    let score = jaccard(&forms[i].fingerprint_set, &forms[j].fingerprint_set);
+    if score < threshold {
+        return;
+    }
+    let final_score = resolve_pass2_score(score, i, j);
+    let tier = tier_for(final_score, threshold);
+    let forms_refs = vec![
+        form_ref_for(&forms[i], i, resolver),
+        form_ref_for(&forms[j], j, resolver),
+    ];
+    matches.push(Match::new(forms_refs, final_score, tier));
+}
+
+/// Resolve the effective Pass 2 score, de-rating an unexpected
+/// score-1.0 hit to [`AUTO_REFACTOR_FLOOR`].
+///
+/// Pass 1 emits ALL equal-set clusters within a bucket (including
+/// XOR-colliding distinct clusters), so any form with an equal-set
+/// partner has been claimed and Pass 2 should never see
+/// `score == 1.0`. The de-rating is a defensive fallback if a future
+/// refactor regresses Pass 1's exhaustive emit — a downgrade to
+/// `AutoRefactor`'s floor is safer than a double-emit or a panic in
+/// release.
+fn resolve_pass2_score(score: f64, i: usize, j: usize) -> f64 {
+    if (score - 1.0).abs() < f64::EPSILON {
+        debug_assert!(
+            false,
+            "Pass 2 emitted a score-1.0 pair the bucket clustering missed: \
+             forms[{i}] and forms[{j}]"
+        );
+        AUTO_REFACTOR_FLOOR // de-rate to the floor, but keep tier consistent
+    } else {
+        score
     }
 }
 

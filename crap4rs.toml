@@ -1,0 +1,26 @@
+# crap4rs.toml — dry-rs production-code CC ladder configuration.
+#
+# Consumed by the `crap-self` job in
+# `.github/workflows/self-test.yml` via the `crap-rs` composite
+# action's `config:` input. The action passes this file to crap4rs
+# alongside the workflow's `src: crates` input; the analyzer reads
+# `exclude` from here while honoring `src` from the action.
+#
+# Threshold preset is the action's `analysis-gate` default
+# (`default` = cognitive cutoff 15) — set on the action, not here,
+# so the workflow stays the single source of truth for the gate.
+
+# Exclude test-tree paths from the production-code gate. Test
+# helpers (e.g. proptest strategies) carry higher intrinsic
+# complexity than production code by design — their failure mode is
+# "test won't compile" not "production logic is hard to follow", so
+# they are out of scope for the production CC ladder.
+#
+# See dry-rs#42 (PR refactoring the CC>15 hotspots + flipping
+# `analysis-gate` to `true`) for the Q1 resolution that scopes this
+# gate to production code only. scrap-rs is the test-code
+# structural-smell sibling (tracked: dry-rs#40 — wire scrap-self
+# once scrap-rs ships its composite action).
+exclude = [
+    "**/tests/**",
+]

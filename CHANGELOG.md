@@ -546,6 +546,69 @@ full release roadmap.
   dep table and bot-context section (`.coderabbit.yaml`,
   `.gemini/styleguide.md`) updated in lockstep to pre-empt regression
   suggestions.
+- **#42 — `crap-self` flipped to a real production-code CC ladder
+  gate.** Refactored the 7 production-code functions above the
+  default cognitive threshold of 15 surfaced by the PR 9 measurement-
+  only baseline; covered the 8th hotspot (`emit_stats` — already
+  CC < 15 but CRAP 17.90 from 65.5% coverage) with five new
+  in-process unit tests against a stub `NormalizerPort`, dropping
+  CRAP to 12.00 at 100% line coverage. Post-refactor crap4rs probe:
+  `429 functions | 0 above threshold (15) | worst: 12.0 | PASS`.
+  Behaviour is byte-identical pre- vs post-refactor (wire-envelope
+  insta snapshot, comparison-engine unit + property tests, walker
+  integration tests, CLI pipeline integration tests all green); the
+  self-check summary snapshot updates from `total_forms: 526` to
+  `total_forms: 604` (additive new helper functions + extra test
+  helpers; `matches_count` rises 43 → 46 from incidental structural
+  overlap between the new walker per-variant helpers, with
+  `by_tier.auto_refactor` 5 → 6 and `by_tier.review_first` 38 → 40).
+  Refactor approach per function:
+  - **`pass2_sliding_window`** (CRAP 15.19 → 8.00): extracted
+    `sort_unclaimed_by_node_count`, `try_emit_pass2_match`, and
+    `resolve_pass2_score` so the engine reads as a small driver
+    over three named operations.
+  - **`pass1_hash_bucket`** (CRAP 18.00): extracted
+    `group_forms_by_bucket_key`, `emit_clusters_for_bucket`, and
+    `emit_pass1_cluster` to lift the bucket-iteration loop out of
+    the dispatch.
+  - **`enumerate`** (CRAP 28.96): extracted `build_walker`,
+    `collect_matching_file`, `extension_is_allowed`, and
+    `unreadable_warning` to separate walker construction from the
+    per-entry classification.
+  - **`Walker::visit_item`** (CRAP 21.01): per-variant extraction
+    (`visit_mod_item`, `visit_impl_item`, `visit_trait_item`) per
+    the canonical Rust AST-visitor pattern.
+  - **`FormEmitter::hash_pat`** (CRAP 16.43): per-variant extraction
+    (`hash_pat_ident`, `hash_pat_path`, `hash_pat_lit`,
+    `hash_pat_seq`, `hash_pat_tuple_struct`, `hash_pat_struct`,
+    `hash_pat_reference`, `hash_pat_type`) with the
+    `Tuple`/`Slice`/`Or` arms collapsed onto a generic
+    `hash_pat_seq` helper over the punctuation token type.
+  - **`FormEmitter::hash_expr`** (CRAP 30.02, the highest hotspot):
+    category-grouped dispatch via `hash_expr_dispatch` →
+    `hash_expr_value` / `hash_expr_operator` / `hash_expr_call_like`
+    / `hash_expr_control` / `hash_expr_collection` / `hash_expr_wrap`
+    / `hash_expr_block_like`, with each of the ~28 covered `syn::Expr`
+    variants getting its own small helper. The Tuple/Array arms
+    share a generic `hash_expr_seq` helper over the comma-punctuated
+    sub-expression sequences.
+  Q1 (resolution): the `arb_report` proptest helper in
+  `crates/dry-core/tests/adapters_proptest.rs` (CRAP 42.00 from 0%
+  coverage as test code) is now excluded via a new repo-root
+  `crap4rs.toml` that the composite action passes to crap4rs as
+  `--config`. Production-code gates are scoped to production code;
+  the test-code structural-smell ladder is scrap-rs's domain
+  (`scrap-self` wire-up tracked: dry-rs#40).
+  Q2 (resolution): `Walker::visit_item` extraction dropped CRAP
+  from 21.01 to ≤ 7.00 (`Walker::visit_trait_item`'s 7.00 is the
+  worst surviving leg, well under threshold). The
+  ADR-allowlist escape hatch was not needed.
+  - **`.github/workflows/self-test.yml`**:
+    `analysis-gate: false` → `analysis-gate: true`, paired with
+    `config: crap4rs.toml`. Step rename: "(production-code dogfood,
+    measurement-only)" → "(production-code CC ladder)".
+  - **`crap4rs.toml`** (new, repo root): `exclude = ["**/tests/**"]`
+    with rationale + Q1 cross-reference documented inline.
 
 ### Security
 
