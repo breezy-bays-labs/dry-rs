@@ -99,16 +99,22 @@ runs:
     # automatically gets the matching source. `path:` keeps the caller's
     # workspace untouched at `$GITHUB_WORKSPACE`.
     - name: Checkout dry-rs source at action ref
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       with:
         repository: ${{ github.action_repository }}
         ref: ${{ github.action_ref }}
         path: __dry-rs-source
+        persist-credentials: false
 
     # Pull the Rust toolchain. `stable` matches what `ci.yml` uses for
     # every Rust job; pinning to MSRV here would force callers to
     # absorb our 1.85 MSRV update cadence in lockstep with their own.
-    - uses: dtolnay/rust-toolchain@stable
+    # SHA-pinned to dtolnay/rust-toolchain@29eef336 (the action's
+    # @stable branch tip at the time this composite action shipped);
+    # zizmor's `unpinned-uses` audit treats the @stable branch ref as
+    # floating, so the SHA pin is the gate-passing form even though
+    # the underlying behavior is "track stable rustc."
+    - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # tracks @stable branch
 
     # Cache the dry-rs build artifacts under a per-action-ref key so
     # repeated invocations don't re-download the dependency tree. The
@@ -116,7 +122,7 @@ runs:
     # a pinned `@v0.2.0` get independent caches; otherwise the first
     # caller would prime a cache the second caller hits with the wrong
     # `Cargo.lock`.
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:
         workspaces: __dry-rs-source -> __dry-rs-source/target
         key: dry-rs-scorecard-${{ github.action_ref }}
