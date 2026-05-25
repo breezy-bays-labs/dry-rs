@@ -55,19 +55,38 @@ pub fn enumerate(config: &AnalysisConfig) -> Result<SourceOutcome, SourceError> 
         return Err(SourceError::NoRoots);
     }
 
-    let mut files: Vec<PathBuf> = Vec::new();
-    let mut warnings: Vec<SourceWarning> = Vec::new();
     let allowed_exts: Vec<&OsStr> = config
         .extensions
         .iter()
         .map(|e| OsStr::new(e.as_str()))
         .collect();
+    let builder = build_walker(config);
 
-    // The `ignore` crate's `WalkBuilder` accepts multiple roots via
-    // `.add(path)`. We seed with the first root then extend with the
-    // rest so a multi-root config builds a single walker (the
-    // alternative — one walker per root, concatenated — would
-    // double-yield files that appear under overlapping roots).
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut warnings: Vec<SourceWarning> = Vec::new();
+    for entry in builder.build() {
+        match entry {
+            Ok(e) => collect_matching_file(&e, &allowed_exts, &mut files),
+            Err(err) => warnings.push(unreadable_warning(&err)),
+        }
+    }
+
+    // The walker's `sort_by_file_name` only sorts entries within each
+    // directory; cross-root determinism requires a final pass.
+    files.sort();
+    let files = files.into_iter().map(FilePath::from).collect();
+    Ok(SourceOutcome { files, warnings })
+}
+
+/// Build the `ignore`-crate walker, seeding it with `config.roots`
+/// and applying `include_ignored` overrides.
+///
+/// The `ignore` crate's `WalkBuilder` accepts multiple roots via
+/// `.add(path)`. We seed with the first root then extend with the
+/// rest so a multi-root config builds a single walker (the
+/// alternative — one walker per root, concatenated — would
+/// double-yield files that appear under overlapping roots).
+fn build_walker(config: &AnalysisConfig) -> WalkBuilder {
     let first_root = &config.roots[0];
     let mut builder = WalkBuilder::new(first_root.as_path());
     for additional in &config.roots[1..] {
@@ -87,39 +106,49 @@ pub fn enumerate(config: &AnalysisConfig) -> Result<SourceOutcome, SourceError> 
             .hidden(false);
     }
     builder.sort_by_file_name(std::cmp::Ord::cmp);
+    builder
+}
 
-    for entry in builder.build() {
-        match entry {
-            Ok(e) => {
-                let Some(ft) = e.file_type() else { continue };
-                if !ft.is_file() {
-                    continue;
-                }
-                let path = e.path();
-                if !allowed_exts.is_empty() {
-                    let Some(ext) = path.extension() else {
-                        continue;
-                    };
-                    if !allowed_exts.contains(&ext) {
-                        continue;
-                    }
-                }
-                files.push(path.to_path_buf());
-            }
-            Err(err) => {
-                warnings.push(SourceWarning::Unreadable {
-                    path: extract_error_path(&err).unwrap_or_default(),
-                    message: err.to_string(),
-                });
-            }
-        }
+/// If `entry` is a file whose extension passes `allowed_exts`, push
+/// its path into `files`. Empty `allowed_exts` accepts every
+/// extension; non-empty rejects files without an extension.
+fn collect_matching_file(
+    entry: &ignore::DirEntry,
+    allowed_exts: &[&OsStr],
+    files: &mut Vec<PathBuf>,
+) {
+    let Some(ft) = entry.file_type() else { return };
+    if !ft.is_file() {
+        return;
     }
+    let path = entry.path();
+    if !extension_is_allowed(path, allowed_exts) {
+        return;
+    }
+    files.push(path.to_path_buf());
+}
 
-    // The walker's `sort_by_file_name` only sorts entries within each
-    // directory; cross-root determinism requires a final pass.
-    files.sort();
-    let files = files.into_iter().map(FilePath::from).collect();
-    Ok(SourceOutcome { files, warnings })
+/// Whether `path`'s extension passes the allow-list.
+///
+/// Empty `allowed_exts` accepts every extension. Non-empty rejects
+/// paths without an extension and paths whose extension is not in
+/// the list.
+fn extension_is_allowed(path: &std::path::Path, allowed_exts: &[&OsStr]) -> bool {
+    if allowed_exts.is_empty() {
+        return true;
+    }
+    let Some(ext) = path.extension() else {
+        return false;
+    };
+    allowed_exts.contains(&ext)
+}
+
+/// Build a [`SourceWarning::Unreadable`] from an `ignore` walker error.
+fn unreadable_warning(err: &ignore::Error) -> SourceWarning {
+    SourceWarning::Unreadable {
+        path: extract_error_path(err).unwrap_or_default(),
+        message: err.to_string(),
+    }
 }
 
 /// Walk down [`ignore::Error`]'s recursive variants
