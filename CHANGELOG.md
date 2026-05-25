@@ -20,6 +20,54 @@ full release roadmap.
 
 ### Added
 
+- **#20 — Mutation testing CI (Track C sibling-coherence).** New
+  `.github/workflows/mutants.yml` runs `cargo mutants` on every PR
+  against `crates/dry-core/src/comparison/mod.rs` — the load-bearing
+  Jaccard + hash-bucket clustering math. Scoped at v0.1 to one file:
+  the comparison engine is where mutating real logic earns its keep
+  per AGENTS.md "Comparison algorithm contract"; the rest of the
+  workspace is dominated by serde-shape constructors that mutation
+  testing covers trivially or that wire-envelope snapshots already
+  guard. Mirrors crap4rs's `.cargo/mutants.toml` shape (sibling-
+  coherence track, per the same vision the PR 2 CHANGELOG documents).
+  - **`.cargo/mutants.toml`** — `exclude_re` patterns for surviving
+    mutants, each carrying a `tracked: dry-rs#36` or
+    `tracked: dry-rs#37` reference per
+    `~/.claude/rules/exclusions.md`:
+    - #36 covers 2 mutants in `pass2_sliding_window` that signal
+      real test gaps (break-math boundary at L346,
+      threshold-equality at L350) — plug + delete the exclude in
+      the same PR.
+    - #37 covers 7 mutants that are equivalent by design — the
+      `pass1_hash_bucket` partition predicate that infinite-loops
+      on the `!=` flip (L296), the unreachable `score == 1.0`
+      defensive guard inside `pass2_sliding_window`'s
+      `debug_assert!(false, ...)` branch (L361, 4 mutants), the
+      `jaccard` `||` → `&&` short-circuit whose fallthrough
+      produces `0.0` for every single-empty input (L483 — proved
+      via trace table in #37), and the `jaccard` "iterate over
+      smaller set" optimization invariant (L488). Issue #37 picks
+      between an ADR + `exclude_re` shape and an in-source
+      `#[cfg_attr(test, mutants::skip)]` shape.
+  - **Workflow shape.** Per-PR + `workflow_dispatch`; skip-on-docs
+    (`**/*.md`, `docs/**`); 30 min timeout (local run ~2 min; budget
+    is the cargo-mutants-recommended backstop for proptest-shrinker
+    tail latency); separate cache key (`dry-rs-mutants`) from the
+    main `dry-rs` rust-cache so eviction doesn't churn. `--in-place`
+    + `--no-shuffle` for deterministic, allocation-free runs.
+    `mutants.out/` uploaded as artifact on failure (7-day retention)
+    for triage. Tag-pinned actions to match the dry-rs `ci.yml`
+    style (the cargo-deny SHA-pin is the explicit exception there;
+    no equivalent supply-chain-gate concern here).
+  - **Scope deliberately narrow at v0.1.** Widening (to add
+    `crates/dry4rs/src/normalizer.rs`, or the file walker, or the
+    JSON envelope builder) is a follow-up decision — adding files
+    multiplies CI time linearly and the burn-vs-signal trade-off is
+    file-specific (the normalizer's mutants are dominated by parser
+    detail; the comparison engine's mutants are dominated by
+    algorithm correctness, which is exactly what mutation testing
+    targets).
+
 - **PR 8 (#9) — CLI surface** in `dry_core::cli`. The v0.1 entry point
   for every adapter binary in the workspace; dry4rs's `main.rs`
   becomes a 5-line entry calling `dry_core::cli::run::<SynNormalizer>()`.
