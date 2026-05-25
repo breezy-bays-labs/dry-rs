@@ -92,6 +92,17 @@ fn run_with_args<N: NormalizerPort + Default>(args: &Args) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    // Allowlist-management subcommands short-circuit — they DO NOT
+    // run the analyzer pipeline at v0.1 (skeletal per the discovery
+    // decision; full UX lands at v0.2 with `.dry-rs-ignore.toml`).
+    // The dispatch surfaces the deferral note on stderr and exits 0.
+    if let Some(cmd @ (Command::Ignore { .. } | Command::Ignored | Command::Cleanup)) =
+        args.command.as_ref()
+    {
+        emit_allowlist_stub_note(cmd);
+        return ExitCode::SUCCESS;
+    }
+
     // Build the analysis config from CLI args + adapter extensions.
     let extensions: Vec<String> = normalizer
         .extensions()
@@ -156,6 +167,31 @@ fn run_with_args<N: NormalizerPort + Default>(args: &Args) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    }
+}
+
+/// Emit the v0.1 deferral note for an allowlist-management subcommand.
+/// Mirrors the dispatch-arm messages; called from the short-circuit
+/// branch in [`run_with_args`] so the analyzer pipeline is bypassed.
+fn emit_allowlist_stub_note(command: &Command) {
+    match command {
+        Command::Ignore { fingerprint } => eprintln!(
+            "note: `ignore` subcommand is a v0.1 stub — \
+             allowlist UX (.dry-rs-ignore.toml) lands at v0.2. \
+             Recorded request to ignore fingerprint: {fingerprint}"
+        ),
+        Command::Ignored => eprintln!(
+            "note: `ignored` subcommand is a v0.1 stub — \
+             allowlist UX (.dry-rs-ignore.toml) lands at v0.2."
+        ),
+        Command::Cleanup => eprintln!(
+            "note: `cleanup` subcommand is a v0.1 stub — \
+             allowlist UX (.dry-rs-ignore.toml) lands at v0.2."
+        ),
+        // Other variants are not allowlist-management; the caller
+        // gated this match in `run_with_args` so we never reach here
+        // in production. The fall-through is a defensive no-op.
+        Command::Report { .. } | Command::Stats { .. } | Command::Check { .. } => {}
     }
 }
 
@@ -309,30 +345,13 @@ fn dispatch_output<N: NormalizerPort>(
     match command {
         Command::Report { .. } => emit_full_report(args, normalizer, report, view),
         Command::Stats { .. } => emit_stats(args, normalizer, report, view),
-        Command::Check { .. } => {
-            // Exit-code-only mode — no stdout. The gate verdict drives
-            // the exit code in `run_with_args` after `dispatch_output`
-            // returns.
-        }
-        Command::Ignore { fingerprint } => {
-            eprintln!(
-                "note: `ignore` subcommand is a v0.1 stub — \
-                 allowlist UX (.dry-rs-ignore.toml) lands at v0.2. \
-                 Recorded request to ignore fingerprint: {fingerprint}"
-            );
-        }
-        Command::Ignored => {
-            eprintln!(
-                "note: `ignored` subcommand is a v0.1 stub — \
-                 allowlist UX (.dry-rs-ignore.toml) lands at v0.2."
-            );
-        }
-        Command::Cleanup => {
-            eprintln!(
-                "note: `cleanup` subcommand is a v0.1 stub — \
-                 allowlist UX (.dry-rs-ignore.toml) lands at v0.2."
-            );
-        }
+        // `Check` is exit-code-only — no stdout. The gate verdict drives
+        // the exit code in `run_with_args` after `dispatch_output`
+        // returns. `Ignore` / `Ignored` / `Cleanup` short-circuit
+        // BEFORE the analyzer pipeline runs (see [`run_with_args`]);
+        // their inclusion here is a defensive fallback for the
+        // exhaustive match.
+        Command::Check { .. } | Command::Ignore { .. } | Command::Ignored | Command::Cleanup => {}
     }
 }
 

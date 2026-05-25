@@ -270,6 +270,7 @@ dependencies = [
  "dry-core",
  "proc-macro2",
  "proptest",
+ "serde_json",
  "syn",
  "tempfile",
  "xxhash-rust",
