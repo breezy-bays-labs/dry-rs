@@ -69,6 +69,17 @@
 //! they are not emitted as an `auto_refactor` cluster — empty
 //! forms have no structure to match.
 //!
+//! ## Deterministic output ordering
+//!
+//! Returned matches are sorted by
+//! `(forms[0].file, forms[0].span.start, -score)`. `Match`
+//! derives only `PartialEq` (because of `f64`), so the sort key
+//! is computed against `f64::total_cmp` for the score component.
+//! This is the canonical ordering every reporter inherits;
+//! changing it is a wire-output change (callers may pin against
+//! it in snapshot tests) and requires the same discipline as a
+//! `schema_version` discussion (see [[adr-nested-json-envelope]]).
+//!
 //! ## Threshold validation
 //!
 //! Callers MUST pass a threshold in the half-open interval
@@ -127,6 +138,7 @@ pub fn compare(forms: &[NormalizedForm], threshold: f64) -> Vec<Match> {
     // break-math shortcut.
     pass2_sliding_window(forms, threshold, &claimed, &mut matches);
 
+    sort_matches_for_output(&mut matches);
     matches
 }
 
@@ -285,6 +297,35 @@ fn tier_for(score: f64, threshold: f64) -> Tier {
     } else {
         Tier::Advisory
     }
+}
+
+/// Sort matches deterministically by
+/// `(forms[0].file, forms[0].span.start, -score)`.
+///
+/// `Match` derives only `PartialEq` (because of `f64`), so the
+/// score key uses `f64::total_cmp` for a total order even on the
+/// pathological inputs (`NaN`, `±0.0`); engine-emitted scores are
+/// always finite and in `[threshold, 1.0]`, but the total order is
+/// the right discipline.
+///
+/// Matches with empty `forms` lists (which the engine never emits)
+/// sort to the start.
+fn sort_matches_for_output(matches: &mut [Match]) {
+    matches.sort_by(|a, b| {
+        let key_a = (
+            a.forms.first().map(|f| f.file.clone()),
+            a.forms.first().map(|f| f.span.start),
+        );
+        let key_b = (
+            b.forms.first().map(|f| f.file.clone()),
+            b.forms.first().map(|f| f.span.start),
+        );
+        key_a
+            .cmp(&key_b)
+            // Descending score within the same file+span tie:
+            // higher-confidence matches first.
+            .then_with(|| b.score.total_cmp(&a.score))
+    });
 }
 
 /// Compute the bucket key for a fingerprint set. **XOR-fold** of
@@ -621,6 +662,64 @@ mod tests {
         assert_eq!(matches.len(), 1);
         // 2/6 = 0.333...
         assert_eq!(matches[0].tier, Tier::Advisory);
+    }
+
+    fn make_form_with_qualified_name(
+        fps: &[u64],
+        qname: &[&str],
+        node_count: u32,
+    ) -> NormalizedForm {
+        use crate::domain::{FormKind, LineColumn, Span};
+        NormalizedForm::with_context(
+            FormKind::Production,
+            fps.iter().copied().collect(),
+            Vec::new(),
+            qname.iter().map(|s| (*s).to_string()).collect(),
+            Span::try_new(LineColumn::new(1, 0), LineColumn::new(1, 0)).unwrap(),
+            node_count,
+            1,
+        )
+    }
+
+    #[test]
+    fn output_sort_by_file_then_span_then_descending_score() {
+        // Three exact-match clusters with distinct qualified_names
+        // — the engine synthesizes file paths from qualified_name
+        // joined with `::`, so we can predict the sort order.
+        let forms = vec![
+            // Cluster Z (qualified: "zeta")
+            make_form_with_qualified_name(&[1, 2, 3], &["zeta"], 3),
+            make_form_with_qualified_name(&[1, 2, 3], &["zeta"], 3),
+            // Cluster A (qualified: "alpha")
+            make_form_with_qualified_name(&[4, 5, 6], &["alpha"], 3),
+            make_form_with_qualified_name(&[4, 5, 6], &["alpha"], 3),
+            // Cluster M (qualified: "mid")
+            make_form_with_qualified_name(&[7, 8, 9], &["mid"], 3),
+            make_form_with_qualified_name(&[7, 8, 9], &["mid"], 3),
+        ];
+        let matches = compare(&forms, 0.85);
+        assert_eq!(matches.len(), 3);
+
+        // Sort key is forms[0].file: "alpha" < "mid" < "zeta".
+        let file_at = |idx: usize| matches[idx].forms[0].file.to_string();
+        assert_eq!(file_at(0), "alpha");
+        assert_eq!(file_at(1), "mid");
+        assert_eq!(file_at(2), "zeta");
+    }
+
+    #[test]
+    fn output_is_byte_equal_across_invocations() {
+        // Determinism check — running compare() twice on the same
+        // input produces identical Vec<Match>.
+        let forms = vec![
+            make_form_with_qualified_name(&[1, 2, 3, 4], &["foo"], 4),
+            make_form_with_qualified_name(&[1, 2, 3, 5], &["bar"], 4),
+            make_form_with_qualified_name(&[1, 2, 3, 4], &["foo"], 4),
+            make_form_with_qualified_name(&[10, 20], &["baz"], 2),
+        ];
+        let r1 = compare(&forms, 0.5);
+        let r2 = compare(&forms, 0.5);
+        assert_eq!(r1, r2);
     }
 
     #[test]
