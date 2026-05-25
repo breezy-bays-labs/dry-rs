@@ -34,8 +34,8 @@ use super::args::{Args, Command, Format, ThresholdMode};
 use crate::adapters::reporters::json::{Envelope, EnvelopeMeta, ViewProjection};
 use crate::adapters::reporters::text;
 use crate::adapters::source::{SourceError, SourceOutcome, SourceWarning, enumerate};
-use crate::comparison::compare;
-use crate::domain::{Match, Report, Summary};
+use crate::comparison::compare_with_paths;
+use crate::domain::{FilePath, Match, Report, Summary};
 use crate::ports::NormalizerPort;
 
 /// Exit-code constant for catastrophic argument / setup failure.
@@ -132,12 +132,15 @@ fn run_with_args<N: NormalizerPort + Default>(args: &Args) -> ExitCode {
     // Normalize every enumerated file. Per-file parse errors go to
     // stderr; the adapter's skip-on-parse-error policy keeps the
     // pipeline running on a corrupt input.
-    let forms = normalize_files(&normalizer, &outcome);
+    let (forms, form_paths) = normalize_files(&normalizer, &outcome);
 
     // Compare. The comparison engine is `debug_assert!`-only on
     // threshold range; clap's value parser is the production-build
-    // input-validation boundary.
-    let matches = compare(&forms, args.threshold);
+    // input-validation boundary. We use the path-aware entry point so
+    // each emitted `FormRef.file` carries the real source path (not
+    // the qualified-name fallback that the library-facing `compare()`
+    // synthesizes).
+    let matches = compare_with_paths(&forms, &form_paths, args.threshold);
 
     // Build the truthful-gate Report (unfiltered). `result.passed`
     // comes from this; `--top` / `--only-failing` cannot reshape it.
@@ -218,15 +221,24 @@ fn emit_warnings(outcome: &SourceOutcome) {
 /// Read + normalize every file in `outcome`. Per-file errors emit a
 /// stderr line and are skipped; the comparison engine sees only
 /// successfully-normalized forms.
+///
+/// Returns parallel arrays `(forms, paths)` indexed identically:
+/// `paths[i]` is the source [`FilePath`] of `forms[i]`. The CLI run
+/// loop threads both into [`compare_with_paths`] so the emitted
+/// matches carry real paths on each [`crate::domain::FormRef`].
 fn normalize_files<N: NormalizerPort>(
     normalizer: &N,
     outcome: &SourceOutcome,
-) -> Vec<crate::domain::NormalizedForm> {
+) -> (Vec<crate::domain::NormalizedForm>, Vec<FilePath>) {
     let mut forms = Vec::new();
+    let mut paths = Vec::new();
     for path in &outcome.files {
         match fs::read_to_string(path.as_path()) {
             Ok(source) => match normalizer.normalize(&source, path) {
-                Ok(file_forms) => forms.extend(file_forms),
+                Ok(file_forms) => {
+                    paths.extend(std::iter::repeat_n(path.clone(), file_forms.len()));
+                    forms.extend(file_forms);
+                }
                 Err(err) => {
                     eprintln!("warning: {path} failed to normalize: {err}");
                 }
@@ -236,7 +248,12 @@ fn normalize_files<N: NormalizerPort>(
             }
         }
     }
-    forms
+    debug_assert_eq!(
+        forms.len(),
+        paths.len(),
+        "normalize_files() must produce parallel forms+paths arrays"
+    );
+    (forms, paths)
 }
 
 /// Build the [`Summary`] aggregator over the unfiltered forms + matches.
@@ -297,7 +314,12 @@ fn build_view(
     // Synthesize a view-summary from the filtered list. The view's
     // `passed` mirrors the truthful gate per the wire ADR — the view
     // never overrides the gate verdict.
-    let view_summary = build_view_summary(&filtered);
+    //
+    // `total_forms` is a per-RUN total (the count of normalized forms
+    // surveyed pre-filtering), NOT a per-match aggregate — view filters
+    // happen AFTER the survey, so `view.summary.total_forms` mirrors
+    // `result.summary.total_forms` rather than re-counting.
+    let view_summary = build_view_summary(&filtered, report.summary.total_forms);
     Some(ViewProjection {
         matches: filtered,
         summary: view_summary,
@@ -306,9 +328,11 @@ fn build_view(
 }
 
 /// Build a Summary over a filtered set of matches. Mirrors
-/// [`build_summary`] but with no `total_forms` (the view doesn't carry
-/// a parallel pre-filter total — that's a truthful-gate concept).
-fn build_view_summary(filtered: &[Match]) -> Summary {
+/// [`build_summary`] but with `total_forms` supplied from the
+/// truthful-gate counter (the view's `total_forms` mirrors the run's
+/// pre-filter survey total — view shaping doesn't change the count of
+/// forms surveyed).
+fn build_view_summary(filtered: &[Match], total_forms: u32) -> Summary {
     use std::collections::BTreeMap;
     let mut by_tier: BTreeMap<crate::domain::Tier, u32> = BTreeMap::new();
     let mut by_kind: BTreeMap<crate::domain::FormKind, u32> = BTreeMap::new();
@@ -319,7 +343,7 @@ fn build_view_summary(filtered: &[Match]) -> Summary {
         }
     }
     Summary {
-        total_forms: 0,
+        total_forms,
         by_tier,
         by_kind,
     }

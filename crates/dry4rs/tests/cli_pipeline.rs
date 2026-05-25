@@ -148,6 +148,70 @@ fn json_envelope_view_passed_mirrors_result_passed() {
 }
 
 #[test]
+fn match_form_ref_carries_real_source_path_not_synthesized_stub() {
+    // Regression test for the run-loop path-wiring fix. The comparison
+    // engine's library-facing `compare()` synthesizes `FormRef.file`
+    // from `qualified_name` (a placeholder); the run loop calls
+    // `compare_with_paths` so each emitted FormRef carries the real
+    // source path. Verifying via the binary so regressions surface
+    // even if internal helpers refactor.
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_duplication_fixture(tmp.path());
+    let path_arg = tmp.path().to_string_lossy().into_owned();
+    let (_, stdout, _) = run_dry4rs(&["report", "--format", "json", &path_arg]);
+    let envelope: Value = serde_json::from_str(&stdout).expect("envelope must parse");
+    let forms = envelope["result"]["matches"][0]["forms"]
+        .as_array()
+        .expect("result.matches[0].forms array");
+    assert_eq!(forms.len(), 2, "fixture emits two duplicate forms");
+    for form in forms {
+        let file = form["file"]
+            .as_str()
+            .expect("form.file must be a string")
+            .to_string();
+        assert!(
+            file.contains(".rs"),
+            "form.file must be a real source path (containing .rs), got: {file:?}"
+        );
+        // The synthesized fallback would produce a path like "greet"
+        // (no extension); the real path contains the file basename.
+        assert!(
+            file.ends_with("alpha.rs") || file.ends_with("beta.rs"),
+            "form.file must be one of the fixture file paths, got: {file:?}"
+        );
+    }
+}
+
+#[test]
+fn view_summary_total_forms_mirrors_result_summary_total_forms() {
+    // Per the wire-envelope ADR: `total_forms` is a per-run survey
+    // total, NOT a per-match aggregate. View shaping happens AFTER the
+    // survey, so `view.summary.total_forms` must mirror
+    // `result.summary.total_forms` — it counts the pre-filter survey,
+    // not the post-filter match list.
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_duplication_fixture(tmp.path());
+    let path_arg = tmp.path().to_string_lossy().into_owned();
+    let (_, stdout, _) = run_dry4rs(&["report", "--format", "json", "--top", "1", &path_arg]);
+    let envelope: Value = serde_json::from_str(&stdout).expect("envelope must parse");
+    let result_total = envelope["result"]["summary"]["total_forms"]
+        .as_u64()
+        .expect("result.summary.total_forms");
+    let view_total = envelope["view"]["summary"]["total_forms"]
+        .as_u64()
+        .expect("view.summary.total_forms");
+    assert_eq!(
+        result_total, view_total,
+        "view.summary.total_forms must mirror result.summary.total_forms; \
+         result={result_total}, view={view_total}"
+    );
+    assert!(
+        result_total > 0,
+        "fixture should contribute at least one form to the survey"
+    );
+}
+
+#[test]
 fn json_envelope_has_locked_top_level_fields() {
     // Spot-check the v0.1 wire envelope shape over a real run. The
     // mechanical lock lives in `wire_envelope_snapshot.rs`; this test
