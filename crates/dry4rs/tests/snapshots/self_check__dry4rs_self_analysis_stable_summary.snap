@@ -1,0 +1,13 @@
+---
+source: crates/dry4rs/tests/self_check.rs
+assertion_line: 143
+expression: projection
+---
+{
+  "by_tier": {
+    "auto_refactor": 5,
+    "review_first": 38
+  },
+  "matches_count": 43,
+  "total_forms": 526
+}

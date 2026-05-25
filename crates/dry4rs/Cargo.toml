@@ -56,3 +56,12 @@ serde_json = { workspace = true }
 # Tempdir fixtures for the CLI binary-smoke tests (PR 8). Confined to
 # dev-deps; the analyzer never reads tmp paths in production.
 tempfile = "3"
+# Snapshot testing for the self-referential test (PR 9). The
+# `dry4rs_self_analysis_summary_matches_snapshot` test in
+# `tests/self_check.rs` runs the dry4rs binary against the workspace's
+# own `crates/` tree and snapshots a stable subset of the JSON wire
+# envelope (`total_forms` + `matches_count` + `by_tier`) so a
+# regression in the comparison engine or normalizer fails CI
+# predictably. Confined to dev-deps; the analyzer itself never depends
+# on insta. The `json` feature enables `assert_json_snapshot!`.
+insta = { workspace = true }

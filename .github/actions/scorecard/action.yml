@@ -1,0 +1,261 @@
+name: 'dry-rs Scorecard'
+description: |
+  Runs dry4rs on caller-supplied paths and emits the v0.1 JSON wire
+  envelope plus a human-readable text summary. Self-builds dry4rs
+  from the action ref via `cargo build --release -p dry4rs --locked`
+  — no binstall path until per-crate v1.0 (see CLAUDE.md "v0.x -> v1.0
+  transition" + `ops/decisions/dry-rs/adr-hexagonal-layout.md`).
+
+  Consumers pin to a git tag (e.g. `@v0.1.0`); the action checks the
+  dry-rs source out at that ref and compiles the binary fresh on each
+  invocation. The caller's source tree stays untouched at
+  `$GITHUB_WORKSPACE`.
+
+  Security note: all `${{ ... }}` expansions in this file reference
+  trusted GitHub Actions context (`github.action_repository`,
+  `github.action_ref`, `inputs.*`). Inputs flow through `env:` blocks
+  before reaching `run:` so quoted-expansion injection is structurally
+  impossible.
+
+author: 'Breezy Bays Labs'
+branding:
+  icon: 'copy'
+  color: 'blue'
+
+inputs:
+  paths:
+    description: |
+      Space-separated list of paths to analyze, relative to the
+      caller's checkout root. Defaults to the entire checkout (`.`).
+      Multiple roots are passed verbatim to the dry4rs CLI as
+      positional arguments after the `report` subcommand.
+    required: false
+    default: '.'
+  threshold:
+    description: |
+      Jaccard similarity threshold in the half-open interval `(0.0, 1.0]`.
+      Defaults to the dry4rs CLI's compiled-in default (0.85 — aligned
+      with the comparison engine's `REVIEW_FIRST_FLOOR`). Tighten to
+      0.95 for `auto_refactor`-tier-only output, or loosen to surface
+      `advisory`-tier matches.
+    required: false
+    default: '0.85'
+  format:
+    description: |
+      Output format for the binary invocation that writes the artifact
+      file. `json` (default) emits the v0.1 wire envelope to
+      `output-path` so downstream tooling can parse it; `text` writes
+      the human-readable terminal table. The step summary always
+      receives the text-format render regardless of this input.
+    required: false
+    default: 'json'
+  output-path:
+    description: |
+      Path (relative to the caller's checkout root) where the JSON
+      envelope is written when `format: json`. Defaults to
+      `dry-rs-report.json`. Surfaced on `outputs.report-path`.
+    required: false
+    default: 'dry-rs-report.json'
+  extensions:
+    description: |
+      Space-separated list of file extensions to include (without the
+      leading dot — `rs`, `ts`). Empty (the default) leaves the dry4rs
+      adapter's compiled-in default in charge — for `dry4rs` that is
+      the syn normalizer's `rs` allowlist.
+    required: false
+    default: ''
+  fail-on-findings:
+    description: |
+      When `true` (the default), the action exits non-zero if dry4rs's
+      `result.passed == false` (i.e. any matches surface at or above
+      the threshold). Set to `false` to emit the scorecard as a
+      measurement-only artifact without gating the workflow on the
+      verdict (mirrors crap-rs scorecard's `analysis-gate` shape).
+    required: false
+    default: 'true'
+
+outputs:
+  report-path:
+    description: |
+      Absolute path to the JSON envelope on the runner. Pass to
+      downstream tooling that needs to parse `result.summary` /
+      `result.matches` directly.
+    value: ${{ steps.run.outputs.report_path }}
+  findings-count:
+    description: |
+      Count of matches in the unfiltered `result.matches` array. Sourced
+      from the JSON envelope via `jq '.result.matches | length'`;
+      truthful-gate value (not affected by `--top` / `--only-failing`).
+    value: ${{ steps.run.outputs.findings_count }}
+
+runs:
+  using: 'composite'
+  steps:
+    # Pull the dry-rs source at the action ref into a side directory.
+    # `github.action_repository` + `github.action_ref` are GitHub
+    # context variables that resolve to "the repo this action lives in
+    # at the SHA the caller pinned" — so a caller pinning
+    # `breezy-bays-labs/dry-rs/.github/actions/scorecard@v0.1.0`
+    # automatically gets the matching source. `path:` keeps the caller's
+    # workspace untouched at `$GITHUB_WORKSPACE`.
+    - name: Checkout dry-rs source at action ref
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        repository: ${{ github.action_repository }}
+        ref: ${{ github.action_ref }}
+        path: __dry-rs-source
+        persist-credentials: false
+
+    # Pull the Rust toolchain. `stable` matches what `ci.yml` uses for
+    # every Rust job; pinning to MSRV here would force callers to
+    # absorb our 1.85 MSRV update cadence in lockstep with their own.
+    # SHA-pinned to dtolnay/rust-toolchain@29eef336 (the action's
+    # @stable branch tip at the time this composite action shipped);
+    # zizmor's `unpinned-uses` audit treats the @stable branch ref as
+    # floating, so the SHA pin is the gate-passing form even though
+    # the underlying behavior is "track stable rustc."
+    - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # tracks @stable branch
+
+    # Cache the dry-rs build artifacts under a per-action-ref key so
+    # repeated invocations don't re-download the dependency tree. The
+    # cache key includes `github.action_ref` so a pinned `@v0.1.0` and
+    # a pinned `@v0.2.0` get independent caches; otherwise the first
+    # caller would prime a cache the second caller hits with the wrong
+    # `Cargo.lock`.
+    - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      with:
+        workspaces: __dry-rs-source -> __dry-rs-source/target
+        key: dry-rs-scorecard-${{ github.action_ref }}
+
+    # Build the dry4rs binary from the action ref. `--locked` ensures
+    # the in-tree `Cargo.lock` is honored — a CI run can never silently
+    # resolve to a newer dep version than what the dry-rs PR validated.
+    - name: Build dry4rs from action ref
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd __dry-rs-source
+        cargo build --release -p dry4rs --locked
+        ls -l target/release/dry4rs
+
+    # Run the binary against caller-supplied paths. Inputs flow through
+    # `env:` rather than direct `${{ }}` interpolation so a path
+    # containing shell metacharacters (`$`, backticks, `&&`) cannot
+    # inject into the run block. The binary itself takes the
+    # comma-free `paths` token list as positional args.
+    - name: Run dry4rs scorecard
+      id: run
+      shell: bash
+      env:
+        DRY_BIN: ${{ github.workspace }}/__dry-rs-source/target/release/dry4rs
+        DRY_PATHS: ${{ inputs.paths }}
+        DRY_THRESHOLD: ${{ inputs.threshold }}
+        DRY_FORMAT: ${{ inputs.format }}
+        DRY_OUTPUT_PATH: ${{ inputs.output-path }}
+        DRY_EXTENSIONS: ${{ inputs.extensions }}
+        DRY_FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings }}
+        # Route action_ref through env too so EVERY interpolation in
+        # this `run:` block follows the same env-then-quote discipline.
+        # (`action_ref` is trusted context — a git ref the caller
+        # pinned — so direct interpolation would be safe; we route it
+        # for consistency with the inputs above so the security comment
+        # at the top of this file holds uniformly.)
+        DRY_ACTION_REF: ${{ github.action_ref }}
+      run: |
+        set -euo pipefail
+
+        # Resolve the binary path to an absolute path on disk so the
+        # subsequent `cd` to the caller's workspace doesn't break the
+        # invocation.
+        if [ ! -x "$DRY_BIN" ]; then
+          echo "::error::dry4rs binary missing at $DRY_BIN — build step regressed"
+          exit 2
+        fi
+
+        # Build the positional path args from the whitespace-separated
+        # `paths` input. Using `set --` keeps quoting tight; printf
+        # %q-style escaping is unnecessary because GitHub Actions
+        # delivers the value through the env var rather than splicing
+        # it into the shell line.
+        # shellcheck disable=SC2086
+        set -- $DRY_PATHS
+
+        # Extension flag is only emitted when the caller set one;
+        # passing an empty string would trigger clap's value-validation
+        # error.
+        ext_args=()
+        if [ -n "$DRY_EXTENSIONS" ]; then
+          # shellcheck disable=SC2086
+          for ext in $DRY_EXTENSIONS; do
+            ext_args+=(--extensions "$ext")
+          done
+        fi
+
+        # Stay in the caller's workspace so emitted FormRef.file paths
+        # are relative to the caller's checkout (not to
+        # `__dry-rs-source/`).
+        cd "$GITHUB_WORKSPACE"
+
+        # Render the JSON envelope artifact. Always emit JSON to the
+        # artifact path regardless of the human-facing format choice;
+        # downstream consumers (mokumo aggregator) need JSON.
+        "$DRY_BIN" report \
+          --format json \
+          --threshold "$DRY_THRESHOLD" \
+          --no-fail \
+          "${ext_args[@]}" \
+          "$@" \
+          > "$DRY_OUTPUT_PATH"
+
+        # Surface findings count from the JSON envelope. `jq` is
+        # pre-installed on GitHub-hosted runners (ubuntu-latest /
+        # macos-latest / windows-latest); ci.yml's `span-locations-check`
+        # already relies on this assumption.
+        findings_count=$(jq '.result.matches | length' "$DRY_OUTPUT_PATH")
+        passed=$(jq -r '.result.passed' "$DRY_OUTPUT_PATH")
+
+        # Resolve output-path to an absolute path so downstream steps
+        # can reference it without re-computing relative-to-workspace
+        # arithmetic.
+        report_path=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "$DRY_OUTPUT_PATH")
+        {
+          echo "report_path=$report_path"
+          echo "findings_count=$findings_count"
+        } >> "$GITHUB_OUTPUT"
+
+        # Render the human-facing text summary onto the workflow step
+        # summary so reviewers see findings inline in the GitHub UI.
+        # We re-run the binary with --format text rather than
+        # converting the JSON, because the text reporter owns the
+        # grouping-by-tier formatting and re-implementing it in jq
+        # would duplicate that logic.
+        {
+          echo "## dry-rs scorecard"
+          echo ""
+          echo "- Tool: \`dry4rs\` @ \`$DRY_ACTION_REF\`"
+          echo "- Paths: \`$DRY_PATHS\`"
+          echo "- Threshold: \`$DRY_THRESHOLD\`"
+          echo "- Findings: \`$findings_count\`"
+          echo "- Passed: \`$passed\`"
+          echo ""
+          echo "<details><summary>Text report</summary>"
+          echo ""
+          echo '```'
+          "$DRY_BIN" report \
+            --format text \
+            --threshold "$DRY_THRESHOLD" \
+            --no-fail \
+            "${ext_args[@]}" \
+            "$@" || true
+          echo '```'
+          echo "</details>"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        # Honor the fail-on-findings gate. The binary itself was run
+        # with --no-fail so it exited 0; the gate decision lives here
+        # in the action so we can keep a single source of truth across
+        # the binary's exit code and the action's gate input.
+        if [ "$DRY_FAIL_ON_FINDINGS" = "true" ] && [ "$passed" != "true" ]; then
+          echo "::error::dry-rs scorecard surfaced $findings_count match(es) at or above the threshold ($DRY_THRESHOLD)"
+          exit 1
+        fi
