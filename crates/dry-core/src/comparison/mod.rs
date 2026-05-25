@@ -107,15 +107,26 @@ pub const REVIEW_FIRST_FLOOR: f64 = 0.85;
 /// Compare a slice of normalized forms and return all matches whose
 /// Jaccard similarity meets or exceeds `threshold`.
 ///
-/// The full implementation lands across subsequent commits in this PR
-/// (hash-bucket clustering, sliding-window Jaccard, threshold tier
-/// assignment, deterministic output sort). This signature is the
-/// public contract.
+/// The implementation runs two passes:
+///
+/// 1. **Hash-bucket clustering** — forms whose `fingerprint_set` is
+///    structurally identical surface as an n-ary match with score
+///    `1.0` (tier [`Tier::AutoRefactor`]). XOR-bucket collisions are
+///    rejected via a structural-equality verification step before
+///    emission.
+/// 2. **Sliding-window Jaccard** — remaining pairs whose Jaccard
+///    similarity clears `threshold` surface as binary matches with
+///    the computed score and a tier from the floor table.
+///
+/// The returned `Vec<Match>` is sorted deterministically by
+/// `(forms[0].file, forms[0].span.start, -score)`.
 ///
 /// # Panics (debug only)
 ///
 /// Panics in debug builds when `threshold` is not in the half-open
-/// interval `(0.0, 1.0]`.
+/// interval `(0.0, 1.0]`. Release builds skip the assertion and
+/// behave unspecified for out-of-range input; the CLI surface
+/// (`dry_core::cli`, PR 8) is the input-validation boundary.
 #[must_use]
 pub fn compare(forms: &[NormalizedForm], threshold: f64) -> Vec<Match> {
     debug_assert!(

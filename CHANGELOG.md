@@ -20,6 +20,43 @@ full release roadmap.
 
 ### Added
 
+- **PR 6 (#7)** — comparison engine in `dry_core::comparison`. Single
+  module per the O6 "no detector taxonomy at v0.1" rule. Two-tier
+  detection:
+  - **Pass 1 — hash-bucket clustering**: forms whose `fingerprint_set`
+    is byte-identical (verified by structural equality, not bucket-key
+    equality alone) surface as an n-ary `Match` with `score == 1.0`
+    and tier `AutoRefactor`. XOR-fold bucket keys keep the pass
+    allocation-free; the verification step filters the rare XOR
+    collision.
+  - **Pass 2 — sliding-window Jaccard**: unclaimed forms sorted
+    ascending by `node_count`; inner loop breaks at
+    `forms[j].node_count > forms[i].node_count / threshold` (Jaccard
+    upper bound). `node_count` is a heuristic proxy for set size per
+    the O8 ADR — when set size and node_count align the break is
+    exact; when they diverge the break is conservative.
+  - **Threshold tier assignment**: named constants
+    `AUTO_REFACTOR_FLOOR = 0.95` and `REVIEW_FIRST_FLOOR = 0.85`
+    route Pass 2 emits to the correct tier. Pass 1 emits land at
+    `AutoRefactor` directly.
+  - **Empty `fingerprint_set` policy**: `jaccard` returns 0.0 when
+    either set is empty; Pass 1 skips empty-set forms entirely
+    (they all XOR to 0 but have no structure to share).
+  - **Deterministic output sort**: `Vec<Match>` is sorted by
+    `(forms[0].file, forms[0].span.start, -score)` with
+    `f64::total_cmp` for a total order on score.
+  - **Threshold validation**: `debug_assert!` rejects values outside
+    `(0.0, 1.0]`. CLI surface (PR 8) is the production
+    input-validation boundary.
+  - Property tests at `crates/dry-core/tests/comparison_proptest.rs`
+    pin Jaccard reflexivity / symmetry / boundedness / totality,
+    the break-math invariant against `|fingerprint_set|`, the
+    threshold gate, the tier floor table, and the canonical sort
+    order. Unit tests in `crates/dry-core/src/comparison/mod.rs`
+    cover hand-crafted Pass-1-and-Pass-2 scenarios including
+    XOR-collision handling, mixed exact+near input, threshold=1.0
+    behaviour, and the debug-only threshold panics.
+
 - **PR 7 (#8)** — language-agnostic adapters in `dry_core::adapters`:
   - `source::enumerate(&AnalysisConfig)` — file walker via the `ignore`
     crate (honors `.gitignore` / `.ignore` / `.git/info/exclude` like
