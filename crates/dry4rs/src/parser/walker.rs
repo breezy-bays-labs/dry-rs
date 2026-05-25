@@ -759,8 +759,8 @@ impl FormEmitter {
 
     /// Dispatch a `syn::Expr` to its category-grouped hash helper.
     /// Returns `true` when a category handler claimed the variant;
-    /// `false` falls back to the [`hash_expr`] caller's `ExprOther`
-    /// discriminator.
+    /// `false` falls back to the [`Self::hash_expr`] caller's
+    /// `ExprOther` discriminator.
     fn hash_expr_dispatch(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
         if self.hash_expr_value(hasher, expr) {
             return true;
