@@ -32,8 +32,8 @@ dry4ts (depends on dry-core; adds swc_ecma_parser or oxc, napi-rs)  [v0.6+]
 
 | Crate | Purpose | Allowed deps |
 |-------|---------|--------------|
-| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters) | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `clap` (derive), `clap_complete`, `thiserror`, `regex` |
-| `dry4rs` | Rust-source parser adapter + binary | `dry-core`, `syn`, `proc-macro2` (with `span-locations` feature), `quote`, `xxhash-rust` (with `xxh3` feature) |
+| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters) | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `clap` (derive), `clap_complete`, `thiserror` |
+| `dry4rs` | Rust-source parser adapter + binary | `dry-core`, `syn`, `proc-macro2` (with `span-locations` feature), `xxhash-rust` (with `xxh3` feature) |
 | `dry4ts` | TypeScript-source parser adapter + binary | `dry-core`, `swc_ecma_parser` *or* `oxc_parser`, `napi-rs`, `xxhash-rust` (with `xxh3` feature) |
 
 **Never import inward.** `dry-core` must stay free of AST libraries
@@ -113,8 +113,8 @@ In particular:
   on grounds of "domain purity" are based on a misread of this
   project's rules. The "domain purity" rule scopes only to AST
   libraries (see below); `thiserror`, `serde`, `serde_json`, `clap`,
-  `walkdir`, `ignore`, `globset`, `comfy-table`, and `regex` are
-  explicitly permitted in `dry-core`.
+  `walkdir`, `ignore`, `globset`, and `comfy-table` are explicitly
+  permitted in `dry-core`.
 
 ### AST-purity scope
 
@@ -230,12 +230,25 @@ Fair-game suggestions (these the project welcomes):
 ### When this section is wrong
 
 This section is curated, not auto-generated. Rules listed here may
-drift from the source ADRs. If a CI job named `bot-context-drift`
-exists (future) it will catch drift mechanically; until then, an
-inconsistency between this section and the ADRs is a bug — the ADRs
-win, and this section needs updating. See
+drift from the source ADRs. The `bot-context-drift` CI job + pre-push
+hook catch AGENTS.md ↔ Cargo.toml dep-table drift mechanically; other
+ADR consistency (wire envelope shapes, layering rules, normalization
+heuristics) still relies on review. An inconsistency between this
+section and the ADRs is a bug — the ADRs win, and this section needs
+updating. See
 [dry-rs#24](https://github.com/breezy-bays-labs/dry-rs/issues/24) for
 the implementation epic.
+
+**Mechanical drift detection** lives in `scripts/bot-context-drift.py`
++ `.github/workflows/bot-context-drift.yml`. As of dry-rs#26, the lint
+verifies AGENTS.md's per-crate dep table matches the actual
+`Cargo.toml` files; cross-repo ADR drift detection is future work (the
+source ADRs live in a private ops vault, and the public CI does not
+yet have cross-repo read access). The bidirectional check catches both
+missing-in-table (Cargo.toml dep absent from the table) and
+extra-in-table (table lists an aspirational dep never landed). Run
+locally with `python3 scripts/bot-context-drift.py`; the same script
+fires as a pre-push hook (`lefthook.yml`) and as a CI job.
 
 ## Cross-references
 
