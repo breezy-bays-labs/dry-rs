@@ -122,27 +122,27 @@ jobs:
       # SHA below resolves to the `crap4rs-v0.6.0` tag on
       # breezy-bays-labs/crap-rs.
       #
-      # `analysis-gate: false` (measurement-only) at PR 9 landing. A
-      # local probe (lcov.info from `cargo llvm-cov nextest`) showed 8
-      # functions above the default cognitive threshold of 15 (worst
-      # 42.0 — `arb_report` proptest helper in adapters_proptest.rs;
-      # `walker.rs::FormEmitter::hash_expr`; `source/mod.rs::enumerate`;
-      # five more in the moderate band). Even at the loosest preset
-      # (`threshold-preset: lenient` = 25) three violators remain, so a
-      # gate-on flip on first contact would dishonestly attribute the
-      # failure to this PR.
+      # `analysis-gate: true` — production-code CC ladder is a real
+      # gate. The threshold defaults to the cognitive cutoff (15).
+      # `config: crap4rs.toml` scopes the gate to production code by
+      # excluding `**/tests/**` so test-helper functions (e.g.
+      # proptest strategies) — which intrinsically carry higher CC
+      # by design — do not enter the gate. scrap-rs is the test-code
+      # structural-smell sibling (tracked: dry-rs#40 — wire
+      # scrap-self once scrap-rs ships its composite action).
       #
-      # tracked: dry-rs#42 — refactor the existing CC>15 hotspots and
-      # flip `analysis-gate` to `true`. The follow-up sequences the
-      # refactor + gate-flip so the gate state changes in a PR that
-      # actually causes the change, not in this skeleton-closer.
-      - name: Run crap4rs scorecard (production-code dogfood, measurement-only)
+      # The Q1 resolution behind the scoping is documented in the
+      # repo-root `crap4rs.toml` and in dry-rs#42 (the PR that
+      # refactored the CC>15 hotspots and flipped this gate from
+      # measurement-only to production-code real).
+      - name: Run crap4rs scorecard (production-code CC ladder)
         uses: breezy-bays-labs/crap-rs/.github/actions/scorecard@34b05488be45dbdeb5a10199a2a2ef1863517758 # crap4rs-v0.6.0
         with:
           language: rust
           coverage: lcov.info
           src: crates
-          analysis-gate: false
+          config: crap4rs.toml
+          analysis-gate: true
 
   scrap-self:
     name: scrap-self (test-code structural smells, PENDING)
