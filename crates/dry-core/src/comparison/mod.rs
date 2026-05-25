@@ -191,26 +191,26 @@ fn pass1_hash_bucket(
         // until every cluster within the bucket is emitted so Pass
         // 2 never has to handle a score==1.0 pair. Singletons
         // (canonical with no equal partner in the bucket) drop out
-        // of `matched` naturally and stay unclaimed for Pass 2's
+        // of `cluster` naturally and stay unclaimed for Pass 2's
         // pairwise scan.
         while indices.len() >= 2 {
             let canonical_idx = indices[0];
             let canonical_set = &forms[canonical_idx].fingerprint_set;
-            let (matched, leftover): (Vec<usize>, Vec<usize>) = indices
+            let (cluster, leftover): (Vec<usize>, Vec<usize>) = indices
                 .iter()
                 .copied()
                 .partition(|&i| forms[i].fingerprint_set == *canonical_set);
 
-            if matched.len() >= 2 {
+            if cluster.len() >= 2 {
                 let forms_refs: Vec<FormRef> =
-                    matched.iter().map(|&i| form_ref_for(&forms[i])).collect();
+                    cluster.iter().map(|&i| form_ref_for(&forms[i])).collect();
                 matches.push(Match::new(forms_refs, 1.0, Tier::AutoRefactor));
-                for i in matched {
+                for i in cluster {
                     claimed.insert(i);
                 }
             }
             // Canonical (and any singleton from this partition step)
-            // landed in `matched` — drop it from the working set
+            // landed in `cluster` — drop it from the working set
             // either way; `leftover` is the rest of the bucket.
             indices = leftover;
         }
