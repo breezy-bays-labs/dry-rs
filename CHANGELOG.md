@@ -369,3 +369,41 @@ full release roadmap.
   dep table and bot-context section (`.coderabbit.yaml`,
   `.gemini/styleguide.md`) updated in lockstep to pre-empt regression
   suggestions.
+
+### Security
+
+- **Issue #16 — zizmor + dependabot supply-chain hardening.** Brings
+  dry-rs to the org-wide supply-chain bar established by crap4rs#264
+  and scrap-rs#38.
+  - **`.github/workflows/ci.yml` hardened**: workflow-level
+    `permissions: contents: read` (least-privilege default; closes
+    workflow-wide `excessive-permissions` audit leg);
+    `persist-credentials: false` on every `actions/checkout` step (CI
+    never pushes from this workflow); all third-party actions
+    SHA-pinned with tag comments preserved for refresh discoverability
+    (`actions/checkout@34e1148...`, `actions/upload-artifact@ea165f8...`,
+    `dtolnay/rust-toolchain` stable + 1.85 branch SHAs,
+    `Swatinem/rust-cache@e18b497...`, `taiki-e/install-action@d9be7d8...`).
+    `EmbarkStudios/cargo-deny-action` was already SHA-pinned.
+  - **`.github/workflows/zizmor.yml` new** — dedicated supply-chain
+    audit workflow running `pipx run 'zizmor>=1.5,<2' .github/` on
+    every workflow / composite action / dependabot file change
+    (separate workflow rather than a job in ci.yml per parallel-agent
+    dispatch convention). Includes a top-of-file future-rule comment
+    documenting the release.yml cache-poisoning constraint that
+    activates at per-crate v1.0 prep (tag-triggered jobs MUST NOT
+    restore or save build caches).
+  - **`.github/dependabot.yml` new** — weekly Monday polls on both
+    `cargo` and `github-actions` ecosystems. Grouped PRs (minor +
+    patch into one weekly PR per ecosystem) keep reviewer load
+    proportional to delta volume; majors land as separate PRs for
+    human review. Semver-aware cooldown on cargo (default: 7d,
+    major: 14d, minor: 7d, patch: 7d). `npm` ecosystem deliberately
+    deferred to v0.6+ when dry4ts joins the workspace with a
+    `napi-rs` Node binding.
+  - **Local verification**: `pipx run 'zizmor>=1.5,<2' .github/`
+    reports zero findings across `ci.yml`, `zizmor.yml`,
+    `dependabot.yml`. The zizmor gate caught one `dependabot-cooldown`
+    finding on first attempt (missing `default-days` alongside
+    semver-aware keys) — exactly the kind of regression the gate is
+    designed to surface.
