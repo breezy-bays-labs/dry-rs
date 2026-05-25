@@ -104,6 +104,10 @@ fn run_with_args<N: NormalizerPort + Default>(args: &Args) -> ExitCode {
     }
 
     // Build the analysis config from CLI args + adapter extensions.
+    // `AnalysisConfig` carries the full v0.1 surface (paths /
+    // threshold / format / output / extensions / include_ignored /
+    // threshold_mode); the run loop routes each field to its consumer
+    // (walker, comparison engine, reporter, wire-envelope metadata).
     let extensions: Vec<String> = normalizer
         .extensions()
         .iter()
@@ -111,7 +115,10 @@ fn run_with_args<N: NormalizerPort + Default>(args: &Args) -> ExitCode {
         .collect();
     let config = AnalysisConfig::new(args.analysis_paths())
         .with_extensions(extensions)
-        .with_include_ignored(args.include_ignored);
+        .with_include_ignored(args.include_ignored)
+        .with_threshold(args.threshold)
+        .with_format(args.format)
+        .with_threshold_mode(args.threshold_mode);
 
     // Enumerate the source tree. The walker rejects empty roots with
     // `NoRoots`; clap defaults `paths` to `.` so this is unreachable
@@ -140,7 +147,7 @@ fn run_with_args<N: NormalizerPort + Default>(args: &Args) -> ExitCode {
     // each emitted `FormRef.file` carries the real source path (not
     // the qualified-name fallback that the library-facing `compare()`
     // synthesizes).
-    let matches = compare_with_paths(&forms, &form_paths, args.threshold);
+    let matches = compare_with_paths(&forms, &form_paths, config.threshold);
 
     // Build the truthful-gate Report (unfiltered). `result.passed`
     // comes from this; `--top` / `--only-failing` cannot reshape it.
@@ -152,7 +159,7 @@ fn run_with_args<N: NormalizerPort + Default>(args: &Args) -> ExitCode {
     // flag is active. When no flag is set, the JSON envelope's `view`
     // field stays `None` (omitted via skip_serializing_if), matching
     // the wire-envelope snapshot lock.
-    let view = build_view(&report, args.top, args.only_failing, args.threshold);
+    let view = build_view(&report, args.top, args.only_failing, config.threshold);
 
     // Dispatch by subcommand. The default-when-None is
     // `Command::Report` (with paths defaulted to "." via
@@ -162,7 +169,7 @@ fn run_with_args<N: NormalizerPort + Default>(args: &Args) -> ExitCode {
         .command
         .clone()
         .unwrap_or_else(|| Command::Report { paths: Vec::new() });
-    dispatch_output(&command, args, &normalizer, &report, view);
+    dispatch_output(&command, &config, &normalizer, &report, view);
 
     // Exit-code derivation: --no-fail suppresses FAILURE; otherwise
     // `result.passed` is authoritative.
@@ -361,14 +368,14 @@ fn build_view_summary(filtered: &[Match], total_forms: u32) -> Summary {
 ///   modes — they return SUCCESS).
 fn dispatch_output<N: NormalizerPort>(
     command: &Command,
-    args: &Args,
+    config: &AnalysisConfig,
     normalizer: &N,
     report: &Report,
     view: Option<ViewProjection>,
 ) {
     match command {
-        Command::Report { .. } => emit_full_report(args, normalizer, report, view),
-        Command::Stats { .. } => emit_stats(args, normalizer, report, view),
+        Command::Report { .. } => emit_full_report(config, normalizer, report, view),
+        Command::Stats { .. } => emit_stats(config, normalizer, report, view),
         // `Check` is exit-code-only — no stdout. The gate verdict drives
         // the exit code in `run_with_args` after `dispatch_output`
         // returns. `Ignore` / `Ignored` / `Cleanup` short-circuit
@@ -381,12 +388,12 @@ fn dispatch_output<N: NormalizerPort>(
 
 /// Emit the full report — every match in the requested format.
 fn emit_full_report<N: NormalizerPort>(
-    args: &Args,
+    config: &AnalysisConfig,
     normalizer: &N,
     report: &Report,
     view: Option<ViewProjection>,
 ) {
-    match args.format {
+    match config.format {
         Format::Text => {
             // Text reporter reads from view when set (the user asked
             // for the shaped projection); otherwise from result.
@@ -397,7 +404,7 @@ fn emit_full_report<N: NormalizerPort>(
             // JSON envelope carries BOTH result and view; the truthful
             // gate stays parseable from `result.*` regardless of flag
             // settings.
-            print_json_envelope(args, normalizer, report, view);
+            print_json_envelope(config, normalizer, report, view);
         }
     }
 }
@@ -405,12 +412,12 @@ fn emit_full_report<N: NormalizerPort>(
 /// Emit the summary statistics. v0.1 emits a short text/json shape;
 /// downstream tools (mokumo scorecard) consume the JSON shape.
 fn emit_stats<N: NormalizerPort>(
-    args: &Args,
+    config: &AnalysisConfig,
     normalizer: &N,
     report: &Report,
     view: Option<ViewProjection>,
 ) {
-    match args.format {
+    match config.format {
         Format::Text => {
             // Render the summary block as plain ASCII. The text
             // reporter doesn't have a stats-only mode; we emit the
@@ -439,7 +446,7 @@ fn emit_stats<N: NormalizerPort>(
             // Reuse the full envelope path — consumers parsing
             // `result.summary` get the same shape they'd get from
             // `report --format json`.
-            print_json_envelope(args, normalizer, report, view);
+            print_json_envelope(config, normalizer, report, view);
         }
     }
 }
@@ -459,7 +466,7 @@ fn view_as_report(view: Option<ViewProjection>, report: &Report) -> Report {
 /// Serialize + print the full wire envelope, including the optional
 /// view projection.
 fn print_json_envelope<N: NormalizerPort>(
-    args: &Args,
+    config: &AnalysisConfig,
     normalizer: &N,
     report: &Report,
     view: Option<ViewProjection>,
@@ -469,7 +476,7 @@ fn print_json_envelope<N: NormalizerPort>(
         normalizer.tool_version().to_string(),
         normalizer.language().to_string(),
         current_timestamp(),
-        threshold_mode_label(args.threshold_mode).to_string(),
+        threshold_mode_label(config.threshold_mode).to_string(),
     );
     // Construct the envelope directly so the view projection can be
     // attached. The json::render helper takes a Report-only path; we
