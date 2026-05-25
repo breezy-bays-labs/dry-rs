@@ -20,6 +20,28 @@ full release roadmap.
 
 ### Added
 
+- New CI job `bot-context-drift` (closes #26): mechanical enforcement
+  of AGENTS.md ↔ Cargo.toml dep-table consistency. The AGENTS.md "For
+  automated code reviewers" section (landed via #24) grounds AI bots
+  (CodeRabbit, gemini-code-assist) in the project's per-crate
+  allowed-deps rules; the per-crate dep table under `## Architecture`
+  is the authoritative source. This lint catches drift bidirectionally:
+  - **missing-in-table** — a crate's Cargo.toml has a dep AGENTS.md
+    doesn't list (table is stale / dep added unilaterally).
+  - **extra-in-table** — AGENTS.md lists a dep Cargo.toml doesn't
+    have (aspirational entry / dep removed without table update).
+
+  Single source of truth in `scripts/bot-context-drift.py`; new
+  isolated workflow file `.github/workflows/bot-context-drift.yml` and
+  a `bot-context-drift` pre-push hook in `lefthook.yml` both invoke
+  it. **Scope**: internal consistency only (option (c) of #26's
+  Discovery section) — cross-repo verification against the source
+  ADRs in the private `ops` vault is deferred (needs a deploy key +
+  cross-repo CI access, out of scope at v0.1). Current-state audit
+  flagged two pre-existing AGENTS.md drifts, both fixed in this PR
+  (extra-in-table: `regex` for `dry-core` + `quote` for `dry4rs` —
+  both aspirational entries never landed in `Cargo.toml`).
+
 - **#20 — Mutation testing CI (Track C sibling-coherence).** New
   `.github/workflows/mutants.yml` runs `cargo mutants` on every PR
   against `crates/dry-core/src/comparison/mod.rs` — the load-bearing
@@ -279,6 +301,22 @@ full release roadmap.
   a focused fix). Branch-pinned actions need per-branch SHA
   verification — dependabot's grouped bumps can't distinguish
   trailing-comment intent from the underlying ref.
+- **#26 current-state audit** — two AGENTS.md per-crate dep-table
+  drifts caught by the bot-context-drift lint on first run, fixed in
+  the same PR:
+  - **`dry-core` allowed-deps row** — removed `regex` (aspirational
+    entry; never added to `crates/dry-core/Cargo.toml [dependencies]`).
+    The trailing prose enumeration in the "thiserror IS allowed in
+    dry-core" rule (under "For automated code reviewers") drops
+    `regex` in lockstep.
+  - **`dry4rs` allowed-deps row** — removed `quote` (aspirational
+    entry from the pre-PR-5 bootstrap; never added to
+    `crates/dry4rs/Cargo.toml [dependencies]`). The AST-purity ban
+    list still rejects `quote` in `dry-core` (where it belongs as a
+    procedural-macro AST helper); the row removal documents that
+    `dry4rs` itself doesn't yet consume it. Either dep can be added
+    cleanly later — re-adding to the table will trip the
+    bot-context-drift gate until Cargo.toml matches.
 
 - **PR 6 (#7) Gemini review follow-up** — two findings on PR #33:
   - **Multi-cluster Pass 1 buckets** — a single Pass 1 bucket can
