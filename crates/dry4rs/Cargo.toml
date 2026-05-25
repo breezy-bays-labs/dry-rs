@@ -49,3 +49,6 @@ xxhash-rust = { workspace = true }
 # Property tests for normalizer invariants (determinism, parseable
 # input never panics, span round-trip consistency).
 proptest = { workspace = true }
+# Tempdir fixtures for the CLI binary-smoke tests (PR 8). Confined to
+# dev-deps; the analyzer never reads tmp paths in production.
+tempfile = "3"

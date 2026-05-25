@@ -271,6 +271,7 @@ dependencies = [
  "proc-macro2",
  "proptest",
  "syn",
+ "tempfile",
  "xxhash-rust",
 ]
 

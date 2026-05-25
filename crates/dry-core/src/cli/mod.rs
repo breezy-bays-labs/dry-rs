@@ -1,24 +1,42 @@
 //! CLI surface for the dry structural duplication detector.
 //!
-//! Houses the clap derive struct, [`AnalysisConfig`], `ExitCode`, and
-//! the generic `run<N: NormalizerPort>` loop. Adapter binaries
-//! (`dry4rs`, future `dry4ts`) provide a 5-line `main()` that
-//! constructs their language-specific normalizer and calls
-//! `dry_core::cli::run::<MyNormalizer>()`.
+//! Houses the clap derive [`Args`] struct, [`AnalysisConfig`], the
+//! generic [`run()`] loop, and helpers ([`Format`], [`ThresholdMode`],
+//! [`Command`]). Adapter binaries (`dry4rs`, future `dry4ts`) provide
+//! a 5-line `main()` that constructs their language-specific
+//! normalizer and calls `dry_core::cli::run::<MyNormalizer>()`.
 //!
-//! v0.1 subcommands: `report` (default), `stats`, `check`, `ignore`,
-//! `ignored`, `cleanup`. Universal flags follow the cross-tool
-//! harmonization rules in
+//! v0.1 subcommands: `report` (implicit default), `stats`, `check`,
+//! `ignore <fingerprint>`, `ignored`, `cleanup`. Universal flags follow
+//! the cross-tool harmonization rules in
 //! `ops/workspace/dry-rs/20260508-dry-rs-roadmap/cli-harmonization.md`
 //! (deferred past v1.0 of all three sensors for full convergence;
 //! dry-rs ships in a way that keeps harmonization tractable).
 //!
-//! The full clap surface lands in PR 8 (CLI surface). PR 7 ships the
-//! placeholder `run()` plus the minimal [`AnalysisConfig`] needed to
-//! parameterize the file walker (`adapters::source::enumerate`).
+//! ## Truthful-gate vs shapeable-display
+//!
+//! Per `ops/decisions/dry-rs/adr-nested-json-envelope.md`, `--top` /
+//! `--only-failing` reshape `view.*`; they NEVER mutate `result.*`.
+//! `result.passed` is the gate verdict driven by the unfiltered
+//! [`crate::domain::Report`]. `--no-fail` suppresses the non-zero
+//! exit code but does NOT touch `result.passed`.
+//!
+//! ## Exit codes
+//!
+//! - `ExitCode::SUCCESS` — `report.passed == true` OR `--no-fail` set.
+//! - `ExitCode::FAILURE` — `report.passed == false` AND `--no-fail` not set.
+//! - `ExitCode::from(2)` — argument parse error (clap handles this) or
+//!   catastrophic walker error (no roots, fatal I/O before any file
+//!   normalizes). Per-file parse errors are diagnostics, not gate
+//!   failures.
+
+mod args;
+mod run;
+
+pub use args::{Args, Command, Format, ThresholdMode};
+pub use run::run;
 
 use std::path::PathBuf;
-use std::process::ExitCode;
 
 use crate::domain::FilePath;
 
@@ -90,26 +108,9 @@ impl AnalysisConfig {
     }
 }
 
-/// CLI entry point — bootstrap placeholder. Returns `ExitCode::SUCCESS`
-/// and prints a single line. The real clap-derive surface (analyzer
-/// pipeline + `ExitCode` shaping) lands with the CLI sub-issue (PR 8).
-#[must_use]
-pub fn run() -> ExitCode {
-    println!("dry4rs (skeleton) — see https://github.com/breezy-bays-labs/dry-rs");
-    ExitCode::SUCCESS
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{AnalysisConfig, run};
-
-    #[test]
-    fn run_returns_without_panic() {
-        // Exercises the placeholder body so the coverage gate stays
-        // honest at the bootstrap PR. The real `run()` body lands in
-        // PR 8 with proper integration coverage.
-        let _ = run();
-    }
+    use super::AnalysisConfig;
 
     #[test]
     fn analysis_config_new_stores_roots_with_defaults() {
