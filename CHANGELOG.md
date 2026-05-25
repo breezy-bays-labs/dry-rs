@@ -391,6 +391,23 @@ full release roadmap.
   `.gemini/config.yaml` sets noise thresholds. Drift CI deferred to
   #26 (`priority:later`). Pattern tracked at org level in
   `ops/decisions/org/adr-bot-context-availability.md`.
+- New CI job `bdd-tracked-lint` (closes #22): mechanical enforcement
+  of `~/.claude/rules/exclusions.md` — every test/coverage suppression
+  (`#[ignore]`, `#[cfg(skip_*)]`, `it.skip(...)`, `--exclude` flag,
+  `exclude`/`skip` config-array assignment, `TODO: re-enable` /
+  `FIXME: skip` comment marker, `if: false` workflow hard-disable)
+  must carry a `tracked: <repo>#<n>` or `adr: <path>` reference in an
+  adjacent comment (window: 3 lines above, 1 line below). Single
+  source of truth in `scripts/tracked-lint.py`; new isolated workflow
+  file `.github/workflows/bdd-tracked-lint.yml` and a `tracked-lint`
+  pre-push hook in `lefthook.yml` both invoke it. Workflow name
+  preserved as `bdd-tracked-lint` for cross-tool sibling consistency
+  with crap4rs's job (where the scope is narrower — BDD feature files
+  only). Current-state audit: zero violations across 43 scanned files.
+  Known scope gaps documented in the script's module docstring: soft-
+  disable `if:` expressions (precise classifier requires GHA
+  expression-language evaluation) and commented-out test bodies
+  without TODO/FIXME markers (no mechanical signal in the rule).
 
 ### Changed
 
