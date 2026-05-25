@@ -180,45 +180,39 @@ fn pass1_hash_bucket(
         buckets.entry(key).or_default().push(i);
     }
 
-    for (_key, indices) in buckets {
+    for (_key, mut indices) in buckets {
         if indices.len() < 2 {
             continue;
         }
 
-        // Verify the bucket is a true cluster (XOR collisions are
-        // possible — Pass 1's verification step is what makes the
-        // XOR bucket key safe). Group by the first index's
-        // fingerprint_set; if at least 2 forms match, emit them as
-        // an exact cluster. Forms that don't match the first set
-        // are LEFT UNCLAIMED so Pass 2 can compare them pairwise
-        // against each other (the rare colliding pair) and against
-        // the verified-cluster members (also a rare 2nd-order
-        // collision).
-        //
-        // The conservative drop-on-mismatch behavior is correct
-        // because verified Pass 1 emits cover ALL exact matches
-        // for the canonical group; non-canonical members will be
-        // re-discovered by Pass 2's pairwise scan.
-        let first = &forms[indices[0]].fingerprint_set;
-        let verified: Vec<usize> = indices
-            .iter()
-            .copied()
-            .filter(|&i| forms[i].fingerprint_set == *first)
-            .collect();
+        // A single bucket can hold multiple distinct equal-set
+        // clusters that XOR-fold to the same key (rare but legal:
+        // e.g. `{1, 2}` and `{4, 7}` both fold to `3`). Iterate
+        // until every cluster within the bucket is emitted so Pass
+        // 2 never has to handle a score==1.0 pair. Singletons
+        // (canonical with no equal partner in the bucket) drop out
+        // of `matched` naturally and stay unclaimed for Pass 2's
+        // pairwise scan.
+        while indices.len() >= 2 {
+            let canonical_idx = indices[0];
+            let canonical_set = &forms[canonical_idx].fingerprint_set;
+            let (matched, leftover): (Vec<usize>, Vec<usize>) = indices
+                .iter()
+                .copied()
+                .partition(|&i| forms[i].fingerprint_set == *canonical_set);
 
-        if verified.len() < 2 {
-            // No exact cluster survived verification (extremely
-            // rare 2-element bucket where the sets differ); leave
-            // both indices unclaimed for Pass 2.
-            continue;
-        }
-
-        // Emit a single n-ary match for the verified cluster.
-        let forms_refs: Vec<FormRef> = verified.iter().map(|&i| form_ref_for(&forms[i])).collect();
-        matches.push(Match::new(forms_refs, 1.0, Tier::AutoRefactor));
-
-        for i in verified {
-            claimed.insert(i);
+            if matched.len() >= 2 {
+                let forms_refs: Vec<FormRef> =
+                    matched.iter().map(|&i| form_ref_for(&forms[i])).collect();
+                matches.push(Match::new(forms_refs, 1.0, Tier::AutoRefactor));
+                for i in matched {
+                    claimed.insert(i);
+                }
+            }
+            // Canonical (and any singleton from this partition step)
+            // landed in `matched` — drop it from the working set
+            // either way; `leftover` is the rest of the bucket.
+            indices = leftover;
         }
     }
 }
@@ -259,17 +253,14 @@ fn pass2_sliding_window(
             if score < threshold {
                 continue;
             }
-            // Pass 1 already claimed all score-1.0 exact matches;
-            // Pass 2 only emits below-1.0 pairs. Defensive guard
-            // against an edge case where two forms have equal
-            // fingerprint sets but were left unclaimed (e.g., a
-            // bucket where verification picked a different
-            // canonical set). Clamp to just-below-1.0 so the
-            // tier_for() helper stays in its documented domain.
-            //
-            // In practice this branch should not trigger; if it
-            // does, downgrading to ReviewFirst is safer than
-            // double-emitting an AutoRefactor.
+            // Pass 1 emits ALL equal-set clusters within a bucket
+            // (including XOR-colliding distinct clusters), so any
+            // form with an equal-set partner has been claimed and
+            // Pass 2 should never see `score == 1.0`. The de-rating
+            // to AUTO_REFACTOR_FLOOR is a defensive fallback if a
+            // future refactor regresses Pass 1's exhaustive emit
+            // — a downgrade to AutoRefactor's floor is safer than
+            // a double-emit or a panic in release.
             let final_score = if (score - 1.0).abs() < f64::EPSILON {
                 debug_assert!(
                     false,
@@ -323,12 +314,15 @@ fn tier_for(score: f64, threshold: f64) -> Tier {
 /// sort to the start.
 fn sort_matches_for_output(matches: &mut [Match]) {
     matches.sort_by(|a, b| {
+        // Borrow-only sort keys — `FilePath` wraps `PathBuf` which
+        // is non-trivial to clone, and `sort_by` calls the
+        // comparator O(n log n) times.
         let key_a = (
-            a.forms.first().map(|f| f.file.clone()),
+            a.forms.first().map(|f| &f.file),
             a.forms.first().map(|f| f.span.start),
         );
         let key_b = (
-            b.forms.first().map(|f| f.file.clone()),
+            b.forms.first().map(|f| &f.file),
             b.forms.first().map(|f| f.span.start),
         );
         key_a
@@ -571,6 +565,74 @@ mod tests {
         let forms = vec![make_form(&[1, 2, 3], 3)];
         let matches = compare(&forms, 0.85);
         assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn pass1_emits_distinct_clusters_for_xor_colliding_sets() {
+        // `{1, 2}` and `{4, 7}` both XOR-fold to `3`, so all four
+        // forms land in the same Pass 1 bucket. The pre-fix loop
+        // would emit ONE cluster (the canonical {1,2} group) and
+        // leave the {4,7} pair unclaimed — Pass 2 would then see
+        // them with `jaccard == 1.0` and trip its defensive guard.
+        //
+        // After the multi-cluster Pass 1 loop, both equal-set
+        // clusters are emitted as score-1.0 AutoRefactor matches.
+        debug_assert_eq!(
+            1u64 ^ 2u64,
+            4u64 ^ 7u64,
+            "test premise: both sets must XOR-collide"
+        );
+        let forms = vec![
+            make_form(&[1, 2], 2),
+            make_form(&[1, 2], 2),
+            make_form(&[4, 7], 2),
+            make_form(&[4, 7], 2),
+        ];
+        let matches = compare(&forms, 0.85);
+        assert_eq!(
+            matches.len(),
+            2,
+            "both XOR-colliding clusters must emit independently; \
+             got {matches:?}"
+        );
+        for m in &matches {
+            assert!((m.score - 1.0).abs() < f64::EPSILON);
+            assert_eq!(m.tier, Tier::AutoRefactor);
+            assert_eq!(m.forms.len(), 2);
+        }
+    }
+
+    #[test]
+    fn pass1_leaves_xor_colliding_singletons_for_pass2() {
+        // `{1, 2}` and `{4, 7}` XOR-collide into the same bucket
+        // but each appears only once. Pass 1's partition step
+        // produces `matched = [canonical]` (size 1) for each
+        // iteration — no cluster is emitted, both forms stay
+        // unclaimed, and Pass 2 evaluates the pair via Jaccard
+        // (which is 0/4 = 0.0 here — filtered).
+        let forms = vec![make_form(&[1, 2], 2), make_form(&[4, 7], 2)];
+        let matches = compare(&forms, 0.5);
+        assert!(
+            matches.is_empty(),
+            "XOR-colliding singletons with disjoint sets must not emit; \
+             got {matches:?}"
+        );
+    }
+
+    #[test]
+    fn pass1_emits_cluster_and_leaves_singleton_in_same_bucket() {
+        // Bucket with a 2-form cluster {1,2} plus a singleton
+        // {4,7} (XOR-colliding into the same bucket). Pass 1 must
+        // emit the cluster and leave the singleton unclaimed.
+        let forms = vec![
+            make_form(&[1, 2], 2),
+            make_form(&[1, 2], 2),
+            make_form(&[4, 7], 2),
+        ];
+        let matches = compare(&forms, 0.85);
+        assert_eq!(matches.len(), 1, "only the {{1,2}} cluster should emit");
+        assert!((matches[0].score - 1.0).abs() < f64::EPSILON);
+        assert_eq!(matches[0].forms.len(), 2);
     }
 
     #[test]

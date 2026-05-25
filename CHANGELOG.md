@@ -57,6 +57,26 @@ full release roadmap.
     XOR-collision handling, mixed exact+near input, threshold=1.0
     behaviour, and the debug-only threshold panics.
 
+### Fixed
+
+- **PR 6 (#7) Gemini review follow-up** — two findings on PR #33:
+  - **Multi-cluster Pass 1 buckets** — a single Pass 1 bucket can
+    XOR-collide multiple distinct equal-set clusters (e.g. `{1, 2}`
+    and `{4, 7}` both fold to `3`). The original loop emitted only
+    the canonical cluster and left the others unclaimed, which made
+    Pass 2 legitimately encounter `score == 1.0` pairs and trip its
+    `debug_assert!(false)` defensive guard. Pass 1 now iterates over
+    the bucket until every equal-set cluster has been emitted; the
+    Pass 2 guard remains as a defense-in-depth fallback.
+    Regression tests:
+    `pass1_emits_distinct_clusters_for_xor_colliding_sets`,
+    `pass1_leaves_xor_colliding_singletons_for_pass2`,
+    `pass1_emits_cluster_and_leaves_singleton_in_same_bucket`.
+  - **Sort-comparator clone** — `sort_matches_for_output` cloned
+    `FilePath` (a `PathBuf` newtype) inside the `sort_by` closure,
+    which fires O(n log n) times. Switched to borrow-only sort
+    keys.
+
 - **PR 7 (#8)** — language-agnostic adapters in `dry_core::adapters`:
   - `source::enumerate(&AnalysisConfig)` — file walker via the `ignore`
     crate (honors `.gitignore` / `.ignore` / `.git/info/exclude` like
