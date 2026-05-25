@@ -99,7 +99,7 @@ runs:
     # automatically gets the matching source. `path:` keeps the caller's
     # workspace untouched at `$GITHUB_WORKSPACE`.
     - name: Checkout dry-rs source at action ref
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
         repository: ${{ github.action_repository }}
         ref: ${{ github.action_ref }}
