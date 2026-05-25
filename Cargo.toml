@@ -44,6 +44,22 @@ syn = { version = "2", features = ["full", "extra-traits"] }
 # lefthook pre-push (`span-locations` hook). See the ADR per-crate
 # dep table footnote.
 proc-macro2 = { version = "1", features = ["span-locations"] }
+# Cross-toolchain-stable fingerprint hash for adapter normalizers
+# (dry4rs at PR 5; dry4ts at v0.6+ honors the same hash). The `xxh3`
+# feature provides `Xxh3` — a `Hasher` impl whose u64 output is stable
+# across Rust toolchain releases per upstream contract, unlike
+# `std::hash::DefaultHasher` (SipHash-1-3 with stdlib-internal fixed
+# key — stdlib explicitly reserves the right to change the algorithm
+# in any new toolchain). Cross-toolchain stability is load-bearing for
+# the v0.3+ `--delta` baseline comparison feature (persisted baselines
+# outlive MSRV bumps). See:
+# `ops/decisions/dry-rs/adr-rust-normalization-rules.md` §
+# "Hashing — `xxh3` via `xxhash-rust`" + ADR hexagonal-layout per-crate
+# dep table footnote [²]. Restricted to adapter crates per the layering
+# ADR — `dry-core` does NOT depend on `xxhash-rust` because the
+# comparison engine consumes pre-computed `HashSet<u64>` and never
+# hashes anything itself.
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 # Workspace-wide lint config lands as the comparison engine + CLI come
 # online (PRs 6 + 8). dry4ts joins this workspace at v0.6+ when its

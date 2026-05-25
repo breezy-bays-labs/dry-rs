@@ -67,3 +67,19 @@ full release roadmap.
   files in lockstep: `.github/workflows/ci.yml` (`ast-purity` job),
   `lefthook.yml` (`ast-purity` pre-push hook), and the
   `deny.toml` AST-library policy comment.
+- PR 5 fingerprint hash pulled forward to cross-toolchain stable
+  `xxhash_rust::xxh3::Xxh3` (was: `std::hash::DefaultHasher`). The
+  stdlib reserves the right to change `DefaultHasher`'s SipHash-1-3
+  bit pattern in any new toolchain release; cross-toolchain stability
+  is required for the v0.3+ `--delta` baseline comparison feature
+  (persisted baselines outlive MSRV bumps). Decision trajectory in
+  the amended O5 ADR (`ops/decisions/dry-rs/adr-rust-normalization-rules.md`
+  § "Hashing — `xxh3` via `xxhash-rust`") + hexagonal-layout ADR
+  per-crate dep table footnote [²]. `dry-core` is NOT amended —
+  hashing happens in adapters; the comparison engine consumes
+  pre-computed `HashSet<u64>` and never hashes. `deny.toml` adds
+  `BSL-1.0` to the allow list (xxhash-rust's license; OSI-approved,
+  FSF-recognized, MIT/X11-style permissive). `AGENTS.md` per-crate
+  dep table and bot-context section (`.coderabbit.yaml`,
+  `.gemini/styleguide.md`) updated in lockstep to pre-empt regression
+  suggestions.

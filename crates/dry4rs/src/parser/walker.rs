@@ -13,9 +13,15 @@
 //!   `ImplItemFn`, `TraitItemFn`-with-default, `ExprClosure`), the
 //!   inner form's body subforms are attributed to its own form, and
 //!   the enclosing form sees only an opaque marker token.
-//! - **Deterministic hashing within a toolchain** via
-//!   `std::hash::DefaultHasher`. Stable across runs at a fixed MSRV;
-//!   may shift on MSRV bumps (see ADR § Hashing).
+//! - **Cross-toolchain stable hashing** via
+//!   `xxhash_rust::xxh3::Xxh3`. Cross-toolchain stable per upstream
+//!   contract — unlike `std::hash::DefaultHasher` (SipHash-1-3 with
+//!   stdlib-internal fixed key; the stdlib explicitly reserves the
+//!   right to change the algorithm in any new toolchain). The
+//!   cross-version stability is load-bearing for the v0.3+ `--delta`
+//!   baseline comparison feature, the PR 9 self-check snapshot
+//!   surviving MSRV bumps, and any future fingerprint cache (see
+//!   ADR § Hashing).
 //! - **`identifier_set` populated in walk order** for v0.2+
 //!   rename-signal consumers; the comparison engine does not read it
 //!   at v0.1.
@@ -23,10 +29,11 @@
 //!   cardinality exceeds it.
 
 use std::collections::HashSet;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 
 use dry_core::domain::{FormKind, LineColumn, NormalizedForm, Span};
 use proc_macro2::Span as PmSpan;
+use xxhash_rust::xxh3::Xxh3;
 
 use super::token::NormalizedToken;
 
@@ -275,7 +282,7 @@ impl FormEmitter {
     /// language vocabulary, not a renameable identifier, and including
     /// it would create false rename-diff signal at v0.2+.
     fn hash_attrs(&mut self, attrs: &[syn::Attribute]) {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = Xxh3::new();
         "Attrs".hash(&mut hasher);
         let mut any_preserved = false;
         for attr in attrs {
@@ -294,7 +301,7 @@ impl FormEmitter {
     /// Hash the function signature: name + param types + return type +
     /// modifier keywords (async / const / unsafe).
     fn hash_sig(&mut self, sig: &syn::Signature) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = Xxh3::new();
         "Sig".hash(&mut hasher);
 
         if sig.constness.is_some() {
@@ -336,7 +343,7 @@ impl FormEmitter {
     }
 
     fn hash_generic_param(&mut self, gp: &syn::GenericParam) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = Xxh3::new();
         match gp {
             syn::GenericParam::Type(tp) => {
                 "GenericTypeParam".hash(&mut hasher);
@@ -366,7 +373,7 @@ impl FormEmitter {
     }
 
     fn hash_type_param_bound(&mut self, bound: &syn::TypeParamBound) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = Xxh3::new();
         match bound {
             syn::TypeParamBound::Trait(t) => {
                 "TraitBound".hash(&mut hasher);
@@ -388,7 +395,7 @@ impl FormEmitter {
     }
 
     fn hash_fn_arg(&mut self, arg: &syn::FnArg) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = Xxh3::new();
         match arg {
             syn::FnArg::Receiver(r) => {
                 "Receiver".hash(&mut hasher);
@@ -414,7 +421,7 @@ impl FormEmitter {
     }
 
     fn hash_type(&mut self, ty: &syn::Type) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = Xxh3::new();
         match ty {
             syn::Type::Path(tp) => {
                 "TypePath".hash(&mut hasher);
@@ -492,7 +499,7 @@ impl FormEmitter {
     }
 
     fn hash_path(&mut self, path: &syn::Path) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = Xxh3::new();
         "Path".hash(&mut hasher);
         for seg in &path.segments {
             let name = seg.ident.to_string();
@@ -517,7 +524,7 @@ impl FormEmitter {
     }
 
     fn hash_generic_arg(&mut self, arg: &syn::GenericArgument) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = Xxh3::new();
         match arg {
             syn::GenericArgument::Type(ty) => {
                 "GArgType".hash(&mut hasher);
@@ -544,7 +551,7 @@ impl FormEmitter {
     }
 
     fn hash_pat(&mut self, pat: &syn::Pat) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = Xxh3::new();
         match pat {
             syn::Pat::Ident(pi) => {
                 "PatIdent".hash(&mut hasher);
@@ -640,7 +647,7 @@ impl FormEmitter {
     }
 
     fn hash_block(&mut self, block: &syn::Block) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = Xxh3::new();
         "Block".hash(&mut hasher);
         for stmt in &block.stmts {
             let s_fp = self.hash_stmt(stmt);
@@ -654,7 +661,7 @@ impl FormEmitter {
     }
 
     fn hash_stmt(&mut self, stmt: &syn::Stmt) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = Xxh3::new();
         match stmt {
             syn::Stmt::Local(local) => {
                 "StmtLet".hash(&mut hasher);
@@ -702,7 +709,7 @@ impl FormEmitter {
 
     #[allow(clippy::too_many_lines)] // expression match arms cover the full syn::Expr taxonomy
     fn hash_expr(&mut self, expr: &syn::Expr) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = Xxh3::new();
         match expr {
             syn::Expr::Path(ep) => {
                 // Single-segment, snake-case identifier paths in
@@ -994,7 +1001,7 @@ impl FormEmitter {
     }
 
     fn hash_arm(&mut self, arm: &syn::Arm) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = Xxh3::new();
         "MatchArm".hash(&mut hasher);
         let pat_fp = self.hash_pat(&arm.pat);
         pat_fp.hash(&mut hasher);
@@ -1011,7 +1018,7 @@ impl FormEmitter {
     }
 
     fn hash_macro(&mut self, mac: &syn::Macro) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = Xxh3::new();
         "MacroCall".hash(&mut hasher);
         let name = mac
             .path

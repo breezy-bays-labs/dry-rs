@@ -61,10 +61,22 @@ reviews:
 
     - path: "crates/dry4rs/**"
       instructions: |
-        `dry4rs` uses `syn`, `proc-macro2`, `quote`. `proc-macro2` MUST
-        carry the `span-locations` feature flag (CI enforces this via
-        the `span-locations-check` job; lefthook mirrors). Do NOT
-        suggest removing this feature flag.
+        `dry4rs` uses `syn`, `proc-macro2`, `quote`, `xxhash-rust`.
+          - `proc-macro2` MUST carry the `span-locations` feature flag
+            (CI enforces this via the `span-locations-check` job;
+            lefthook mirrors). Do NOT suggest removing this feature
+            flag.
+          - `xxhash-rust` with the `xxh3` feature is the fingerprint
+            hash. Do NOT suggest swapping for `std::hash::DefaultHasher`,
+            `siphasher`, `ahash`, `fxhash`, or `blake3`. xxh3 is the
+            load-bearing choice for cross-toolchain stability — the
+            stdlib reserves the right to change `DefaultHasher`'s bit
+            pattern in any new toolchain release, and the v0.3+
+            `--delta` baseline-comparison feature requires baselines
+            to outlive MSRV bumps. All adapters MUST share the same
+            hash algorithm. See `adr-rust-normalization-rules.md` §
+            "Hashing" and `adr-hexagonal-layout.md` per-crate dep
+            table footnote [²].
 
     - path: "**/Cargo.toml"
       instructions: |

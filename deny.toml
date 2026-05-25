@@ -25,6 +25,13 @@ allow = [
   "MIT",
   "Apache-2.0",
   "Unicode-3.0",
+  # Boost Software License 1.0 — OSI-approved, FSF-recognized, MIT/X11-style
+  # permissive license. Introduced by `xxhash-rust` (the cross-toolchain-stable
+  # fingerprint hash adopted at PR 5 per the amended O5 ADR). See
+  # `ops/decisions/dry-rs/adr-rust-normalization-rules.md` § "Hashing" and
+  # `ops/decisions/dry-rs/adr-hexagonal-layout.md` per-crate dep table
+  # footnote [²] for the load-bearing rationale.
+  "BSL-1.0",
 ]
 confidence-threshold = 0.93
 

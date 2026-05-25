@@ -92,12 +92,16 @@ impl NormalizedToken {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::hash_map::DefaultHasher;
+    use xxhash_rust::xxh3::Xxh3;
 
     use super::*;
 
     fn hash(t: &NormalizedToken) -> u64 {
-        let mut h = DefaultHasher::new();
+        // Exercise the production hash path (cross-toolchain stable
+        // xxh3 — same as `super::walker::FormEmitter`). `NormalizedToken`'s
+        // `Hash` impl is hasher-agnostic, but testing with the
+        // production hasher pins what the walker actually produces.
+        let mut h = Xxh3::new();
         t.hash_into(&mut h);
         h.finish()
     }

@@ -86,6 +86,17 @@ The notable cases AI bots have historically misjudged:
 - `proc-macro2` (in `dry4rs` and future Rust adapters) MUST carry the
   `span-locations` feature flag. Enforced by CI; do NOT suggest
   removing this flag.
+- `xxhash-rust` with the `xxh3` feature is the fingerprint hash for
+  every adapter normalizer (`dry4rs`, future `dry4ts`). Do NOT suggest
+  swapping for `std::hash::DefaultHasher`, `siphasher`, `ahash`,
+  `fxhash`, or `blake3`. xxh3 is load-bearing for cross-toolchain
+  stability (the stdlib reserves the right to change `DefaultHasher`'s
+  bit pattern in any new toolchain release) and for the v0.3+
+  `--delta` baseline-comparison feature (persisted baselines outlive
+  MSRV bumps). All adapters MUST share the same hash. `dry-core` does
+  NOT depend on `xxhash-rust` — hashing happens in adapters. See
+  `adr-rust-normalization-rules.md` § "Hashing" and
+  `adr-hexagonal-layout.md` per-crate dep table footnote [²].
 
 ## What is welcome
 

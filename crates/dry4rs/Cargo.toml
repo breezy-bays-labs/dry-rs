@@ -37,6 +37,13 @@ syn = { workspace = true }
 # `proc-macro2 span-locations enforcement` CI job (workspace dep
 # declaration carries the feature flag; consuming crates inherit).
 proc-macro2 = { workspace = true }
+# Cross-toolchain-stable fingerprint hash (xxh3). The hexagonal
+# layering ADR per-crate dep table footnote [²] makes xxhash-rust
+# load-bearing across every adapter — the comparison engine compares
+# `HashSet<u64>` set-equality on raw values, so all adapters MUST
+# share the same hash algorithm. `dry-core` itself does NOT depend on
+# this crate; hashing lives entirely in adapter normalizers.
+xxhash-rust = { workspace = true }
 
 [dev-dependencies]
 # Property tests for normalizer invariants (determinism, parseable
