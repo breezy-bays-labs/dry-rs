@@ -33,28 +33,40 @@
 exclude_re = [
     # -- tracked: dry-rs#36 — real test gaps (plug + delete) ----------------
     # tracked: dry-rs#36 — pass2 break-math boundary not asserted (`> -> ==`, `> -> >=`)
-    "comparison/mod\\.rs:346:.* in pass2_sliding_window",
+    # Line moved from 346 -> 367 during the dry-rs#42 refactor sweep
+    # (helper extraction); the `> bound` check still lives in
+    # `pass2_sliding_window`'s driver after the break-math invariant
+    # stayed in the outer function.
+    "comparison/mod\\.rs:367:.* in pass2_sliding_window",
     # tracked: dry-rs#36 — pass2 threshold-equality not asserted (`< -> <=`)
-    "comparison/mod\\.rs:350:.* in pass2_sliding_window",
+    # Line moved from 350 -> 398 and the `score < threshold` gate now
+    # lives in `try_emit_pass2_match` (extracted in dry-rs#42).
+    "comparison/mod\\.rs:398:.* in try_emit_pass2_match",
 
     # -- tracked: dry-rs#37 — equivalent mutants (decide ADR vs in-source) --
-    # tracked: dry-rs#37 — pass1_hash_bucket `==` -> `!=` produces infinite
-    # loop on partition predicate; cargo-mutants catches via timeout (exit 3)
-    # but pollutes the green-CI signal. Skip until the in-source attribute
-    # mechanism lands.
-    "comparison/mod\\.rs:296:.* in pass1_hash_bucket",
+    # tracked: dry-rs#37 — partition predicate `==` -> `!=` produces
+    # infinite loop in Pass 1's cluster-emission loop. cargo-mutants
+    # catches via timeout (exit 3) but pollutes the green-CI signal.
+    # Line moved from 296 -> 311 and the partition predicate now lives
+    # in `emit_clusters_for_bucket` (extracted in dry-rs#42).
+    "comparison/mod\\.rs:311:.* in emit_clusters_for_bucket",
     # tracked: dry-rs#37 — pass2 score-1.0 defensive guard is unreachable
     # by design (`debug_assert!(false, ...)` proves it); 4 mutants on this
     # line (`<` -> `==`/`<=`, `-` -> `+`/`/`) all survive by being on a
     # dead-code branch.
-    "comparison/mod\\.rs:361:.* in pass2_sliding_window",
+    # Line moved from 361 -> 421 and the guard now lives in
+    # `resolve_pass2_score` (extracted in dry-rs#42).
+    "comparison/mod\\.rs:421:.* in resolve_pass2_score",
     # tracked: dry-rs#37 — jaccard `||` -> `&&` short-circuit: both
     # branches produce 0.0 for every single-empty case (intersection
     # of an empty set is 0, union > 0, score = 0/N = 0.0), so this is
     # a provably-equivalent mutant — no test can distinguish the two
     # behaviors without changing the empty-set policy itself.
-    "comparison/mod\\.rs:483:21: replace \\|\\| with && in jaccard",
+    # Line moved from 483 -> 535 during the dry-rs#42 refactor sweep
+    # (helper extractions above pushed `jaccard` further down the file).
+    "comparison/mod\\.rs:535:.*: replace \\|\\| with && in jaccard",
     # tracked: dry-rs#37 — jaccard `a.len() <= b.len()` optimization
     # invariant; the comment literally says "semantically equivalent".
-    "comparison/mod\\.rs:488:35: replace <= with > in jaccard",
+    # Line moved from 488 -> 540 during the dry-rs#42 refactor sweep.
+    "comparison/mod\\.rs:540:.*: replace <= with > in jaccard",
 ]
