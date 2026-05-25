@@ -526,7 +526,8 @@ full release roadmap.
     SHA-pin `29eef336` is actually the `@stable` HEAD commit
     ("toolchain: stable"); the real `@1.85` branch HEAD is `c56a35af`
     ("toolchain: 1.85.1"). The MSRV-gate job consequently exercises
-    @stable, not @1.85. A separate follow-up issue captures the fix.
+    @stable, not @1.85. Surfaced here so the orchestrator can file
+    a follow-up `ci(msrv)` fix.
 
 - **Issue #16 — zizmor + dependabot supply-chain hardening.** Brings
   dry-rs to the org-wide supply-chain bar established by crap4rs#264
