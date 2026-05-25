@@ -210,11 +210,22 @@ MARKER_RE = re.compile(
 _HASH = "#"
 _LBRACK = "["
 
+# Match the suppression marker anywhere within the attribute brackets
+# (not just at the start of the line) so the lint catches:
+#
+#   * ``#[cfg_attr(target_os = "linux", ignore)]`` — conditional ignore
+#   * ``#[some_attr] #[ignore]`` — second attribute on the same line
+#   * ``#[cfg(all(unix, skip_in_ci))]`` — nested skip predicate
+#
+# The ``[^\]]*`` negated-set keeps each match scoped to a single
+# attribute (can't span across multiple ``#[...]`` blocks). The leading
+# ``#[`` literals stay required so identifiers like ``my_ignore_fn``
+# or ``cfg_table`` don't match.
 RUST_IGNORE_RE = re.compile(
-    rf"^[ \t]*{re.escape(_HASH)}{re.escape(_LBRACK)}ignore(\s*=\s*\"[^\"]*\")?\s*\]"
+    rf"{re.escape(_HASH)}{re.escape(_LBRACK)}[^\]]*\bignore\b[^\]]*\]"
 )
 RUST_CFG_SKIP_RE = re.compile(
-    rf"^[ \t]*{re.escape(_HASH)}{re.escape(_LBRACK)}cfg\s*\(\s*(skip_in_ci|skip_[a-z_]+)\b"
+    rf"{re.escape(_HASH)}{re.escape(_LBRACK)}cfg\s*\([^\]]*\b(skip_in_ci|skip_[a-z_]+)\b"
 )
 
 # ``it.skip(``, ``describe.skip(``, ``test.skip(``, ``xtest(``,
@@ -416,7 +427,7 @@ def scan_file(file_path: Path, repo_root: Path) -> list[Hit]:
                 Hit(
                     file=rel,
                     line_no=line_no,
-                    line_text=line.rstrip("\n"),
+                    line_text=line,
                     pattern_name=pattern.name,
                     pattern_description=pattern.description,
                 )

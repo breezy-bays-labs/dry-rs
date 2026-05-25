@@ -57,15 +57,16 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      # SHA-pinned to match the workspace convention adopted in PR #38
+      # (#16): every third-party action carries an immutable SHA + a
+      # trailing tag comment. Verified via
+      # `gh api repos/actions/checkout/git/ref/tags/v4`.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           # Don't persist the `GITHUB_TOKEN` in the worktree's git
           # config — this job runs no `git push`, no API calls, no
           # operations that need it. `persist-credentials: false` is
-          # the zizmor `artipacked` audit's recommendation; the
-          # workspace-wide SHA-pin convergence is the zizmor PR's
-          # (#16) sweep — un-pinned `@v4` here matches sibling
-          # `ci.yml` jobs so #16 can land all pins in one pass.
+          # the zizmor `artipacked` audit's recommendation.
           persist-credentials: false
       - name: Lint tracked-comment coverage of test/coverage suppressions
         run: python3 scripts/tracked-lint.py
