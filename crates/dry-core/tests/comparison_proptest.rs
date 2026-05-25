@@ -151,33 +151,100 @@ proptest! {
         prop_assert_eq!(r1, r2);
     }
 
-    /// Forms emitted in a single exact-match (Pass 1) cluster all
-    /// share a structurally-equal `fingerprint_set`.
+    /// Every emitted match carries `score` in the half-open
+    /// interval `[threshold, 1.0]`. Pass 1 emits exactly 1.0;
+    /// Pass 2 emits >= threshold.
     #[test]
-    fn hash_bucket_emits_only_structurally_equal_clusters(
-        forms in prop::collection::vec(arb_form_with_set_size_node_count(), 0..12),
+    fn every_emitted_match_score_clears_the_threshold(
+        forms in prop::collection::vec(arb_form_with_set_size_node_count(), 0..10),
         threshold in 0.5f64..0.99,
     ) {
         let matches = compare(&forms, threshold);
         for m in &matches {
-            if m.tier != Tier::AutoRefactor {
-                continue;
-            }
-            // Look up each FormRef back to a source form by span;
-            // verify all share the same fingerprint_set. The
-            // FormRef.span is unique-by-index for the test
-            // generator (all spans default to (1,0)-(1,0) so we
-            // can't span-match), so instead verify via the
-            // engine's invariant directly: every Pass 1 match
-            // carries `score == 1.0`.
-            if (m.score - 1.0).abs() < f64::EPSILON {
-                // Score-1.0 matches are Pass 1 emits. Engine
-                // invariant: their underlying forms had equal
-                // fingerprint_sets. We can't recover the source
-                // form here without an index, so we instead
-                // verify the tier mapping is consistent.
-                prop_assert_eq!(m.tier, Tier::AutoRefactor);
-                prop_assert!(m.forms.len() >= 2);
+            prop_assert!(
+                m.score >= threshold,
+                "match score {} must be >= threshold {}",
+                m.score,
+                threshold,
+            );
+            prop_assert!(
+                m.score <= 1.0,
+                "match score {} must be <= 1.0",
+                m.score,
+            );
+        }
+    }
+
+    /// Tier assignment follows the floor table:
+    /// - score == 1.0 -> AutoRefactor (Pass 1)
+    /// - score >= 0.95 -> AutoRefactor
+    /// - score >= 0.85 -> ReviewFirst
+    /// - else (>= threshold) -> Advisory
+    #[test]
+    fn tier_assignment_follows_floor_table(
+        forms in prop::collection::vec(arb_form_with_set_size_node_count(), 0..10),
+        threshold in 0.5f64..0.99,
+    ) {
+        let matches = compare(&forms, threshold);
+        for m in &matches {
+            let expected_tier = if m.score >= 0.95 {
+                Tier::AutoRefactor
+            } else if m.score >= 0.85 {
+                Tier::ReviewFirst
+            } else {
+                Tier::Advisory
+            };
+            prop_assert_eq!(
+                m.tier,
+                expected_tier,
+                "score {} must route to tier {:?}, got {:?}",
+                m.score,
+                expected_tier,
+                m.tier,
+            );
+        }
+    }
+
+    /// Matches are sorted by `(forms[0].file, forms[0].span.start,
+    /// -score)` in the returned vector.
+    #[test]
+    fn output_is_sorted_canonically(
+        forms in prop::collection::vec(arb_form_with_set_size_node_count(), 0..12),
+        threshold in 0.5f64..0.99,
+    ) {
+        let matches = compare(&forms, threshold);
+        for w in matches.windows(2) {
+            let a = &w[0];
+            let b = &w[1];
+            // Both matches are emitted with at least 2 forms (Pass
+            // 1 n-ary or Pass 2 binary), so `forms[0]` is always
+            // present.
+            let af = &a.forms[0];
+            let bf = &b.forms[0];
+            // Lexicographic order on (file, span.start) — if equal,
+            // the score (descending) is the tie-breaker.
+            let prefix_order = (af.file.clone(), af.span.start)
+                .cmp(&(bf.file.clone(), bf.span.start));
+            match prefix_order {
+                std::cmp::Ordering::Less => {} // strictly increasing — OK
+                std::cmp::Ordering::Equal => {
+                    // Within the same (file, span.start), score must
+                    // be descending.
+                    prop_assert!(
+                        a.score >= b.score,
+                        "tied prefix; expected score {} >= {}",
+                        a.score,
+                        b.score,
+                    );
+                }
+                std::cmp::Ordering::Greater => {
+                    prop_assert!(
+                        false,
+                        "sort violation: {:?} should not precede {:?}",
+                        af,
+                        bf,
+                    );
+                }
             }
         }
     }
