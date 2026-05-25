@@ -237,6 +237,17 @@ win, and this section needs updating. See
 [dry-rs#24](https://github.com/breezy-bays-labs/dry-rs/issues/24) for
 the implementation epic.
 
+**Mechanical drift detection** lives in `scripts/bot-context-drift.py`
++ `.github/workflows/bot-context-drift.yml`. As of dry-rs#26, the lint
+verifies AGENTS.md's per-crate dep table matches the actual
+`Cargo.toml` files; cross-repo ADR drift detection is future work (the
+source ADRs live in a private ops vault, and the public CI does not
+yet have cross-repo read access). The bidirectional check catches both
+missing-in-table (Cargo.toml dep absent from the table) and
+extra-in-table (table lists an aspirational dep never landed). Run
+locally with `python3 scripts/bot-context-drift.py`; the same script
+fires as a pre-push hook (`lefthook.yml`) and as a CI job.
+
 ## Cross-references
 
 - **Roadmap**: `ops/workspace/dry-rs/20260508-dry-rs-roadmap/roadmap.md`

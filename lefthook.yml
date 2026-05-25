@@ -76,6 +76,20 @@ pre-push:
       # generous headroom for workspace growth.
       run: python3 scripts/tracked-lint.py
       timeout: 30s
+    bot-context-drift:
+      # Mirror the `bot-context-drift` CI job (dry-rs#26). Rejects any
+      # drift between AGENTS.md's per-crate dep table (under
+      # `## Architecture`) and the actual `[dependencies]` in each
+      # crate's Cargo.toml. Bidirectional check:
+      #   - missing-in-table: Cargo.toml has a dep AGENTS.md doesn't list.
+      #   - extra-in-table:   AGENTS.md lists a dep Cargo.toml doesn't have.
+      # The AGENTS.md "For automated code reviewers" section grounds
+      # CodeRabbit + gemini-code-assist in this table — drift means
+      # bots ground their suggestions in stale data. Single source of
+      # truth in `scripts/bot-context-drift.py`; this hook + CI both
+      # invoke it so any parser tweak only ever touches one file.
+      run: python3 scripts/bot-context-drift.py
+      timeout: 30s
     clippy:
       run: cargo clippy --workspace --all-targets --locked -- -D warnings
       timeout: 300s

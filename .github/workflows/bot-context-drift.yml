@@ -1,0 +1,97 @@
+name: bot-context-drift
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'AGENTS.md'
+      - 'Cargo.toml'
+      - 'crates/**/Cargo.toml'
+      - '.coderabbit.yaml'
+      - '.gemini/**'
+      - 'scripts/bot-context-drift.py'
+      - '.github/workflows/bot-context-drift.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'AGENTS.md'
+      - 'Cargo.toml'
+      - 'crates/**/Cargo.toml'
+      - '.coderabbit.yaml'
+      - '.gemini/**'
+      - 'scripts/bot-context-drift.py'
+      - '.github/workflows/bot-context-drift.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: bot-context-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+# Workflow-level least privilege. The lint reads AGENTS.md + Cargo.toml
+# files and exits with a code — no GitHub API writes required. Matches
+# the convention adopted in `bdd-tracked-lint.yml` and `zizmor.yml`:
+# explicit `permissions: contents: read` on every fresh workflow file.
+# The lint script consumes zero ${{ github.* }} inputs (only static repo
+# source), so command-injection vectors aren't a concern either.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  bot-context-drift:
+    # Mechanical enforcement of dry-rs#26 (option (c), internal
+    # consistency only): the AGENTS.md "For automated code reviewers"
+    # section grounds AI bots (CodeRabbit, gemini-code-assist) in the
+    # project's load-bearing rules. The per-crate dep table under
+    # `## Architecture` is the *authoritative* source the bot-context
+    # section references. If that table drifts from the actual
+    # Cargo.toml files, bots ground their suggestions in stale data
+    # and any "Allowed deps" claim becomes unenforceable.
+    #
+    # The lint scans bidirectionally:
+    #   - missing-in-table: Cargo.toml has a dep AGENTS.md doesn't list.
+    #   - extra-in-table:   AGENTS.md lists a dep Cargo.toml doesn't have.
+    #
+    # Cross-repo verification against the source ADRs in the private
+    # `ops` vault is deferred — that needs a deploy key + cross-repo
+    # CI access, out of scope at v0.1 (see issue #26 Discovery).
+    #
+    # See `scripts/bot-context-drift.py` for the parser logic, scope
+    # rules, and known limitations. Mirrors the `lefthook.yml`
+    # `bot-context-drift` pre-push step — single source of truth in
+    # the script. The script consumes only static repo source (no
+    # `${{ github.* }}` inputs), so injection vectors are structurally
+    # absent from this step.
+    #
+    # Isolated workflow file (rather than appended to `ci.yml`) per
+    # the parallel-agent dispatch convention — keeps the drift gate
+    # independent of other CI jobs being added to ci.yml concurrently.
+    name: bot-context-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # SHA-pinned to match the workspace convention (see bdd-tracked-lint.yml,
+      # ci.yml `fmt` / `clippy` jobs, and zizmor.yml). dependabot keeps
+      # the SHA in lockstep with sibling workflows; this matches the
+      # current pin on `actions/checkout@de0fac2e...` (v6.0.2).
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Don't persist the `GITHUB_TOKEN` in the worktree's git
+          # config — this job runs no `git push`, no API calls, no
+          # operations that need it. `persist-credentials: false` is
+          # the zizmor `artipacked` audit's recommendation.
+          persist-credentials: false
+      - name: Lint AGENTS.md and Cargo.toml dep-table consistency
+        # The script reads only static repo source (AGENTS.md +
+        # crates/*/Cargo.toml) — no `${{ github.* }}` interpolations,
+        # so command-injection vectors are structurally absent. Exit
+        # code 0 = no drift; exit code 1 = drift findings printed to
+        # stderr with `::error::` annotations.
+        run: |
+          set -euo pipefail
+          python3 scripts/bot-context-drift.py
