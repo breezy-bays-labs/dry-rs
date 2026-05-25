@@ -106,6 +106,45 @@ pub trait NormalizerPort {
     /// `PlaceholderPolicy` from a port method now reserves the
     /// surface so PR 5's expansion is purely additive.
     fn placeholder_policy(&self) -> PlaceholderPolicy;
+
+    /// Adapter-binary tool name as it appears in the wire envelope's
+    /// `tool` field (`"dry4rs"`, `"dry4ts"`, ...).
+    ///
+    /// `dry_core::cli::run::<N>()` consumes this to construct
+    /// [`crate::adapters::reporters::json::EnvelopeMeta`]. Hard-coding
+    /// `"dry4rs"` in `dry-core` would break the per-AGENTS.md layering
+    /// rule that the CLI surface is language-agnostic; adapter impls
+    /// override this method to return their crate identity.
+    ///
+    /// The default returns `"dry"` so library callers constructing a
+    /// `NormalizerPort` ad-hoc still get a sensible value; adapter
+    /// binaries (which call `dry_core::cli::run::<N>()`) MUST override.
+    fn tool_name(&self) -> &'static str {
+        "dry"
+    }
+
+    /// Adapter-binary tool version as it appears in the wire envelope's
+    /// `tool_version` field. Adapter impls return
+    /// `env!("CARGO_PKG_VERSION")` evaluated in their crate's source
+    /// (NOT `dry-core`'s); the macro expansion captures the adapter
+    /// crate's version, which is the value consumers need.
+    ///
+    /// The default returns `dry-core`'s `CARGO_PKG_VERSION` as a
+    /// fallback so library callers get a non-empty string; adapter
+    /// binaries MUST override.
+    fn tool_version(&self) -> &'static str {
+        env!("CARGO_PKG_VERSION")
+    }
+
+    /// Source-language identifier as it appears in the wire envelope's
+    /// `language` field (`"rust"`, `"typescript"`, ...).
+    ///
+    /// Mirrors [`Self::tool_name`] in scope: language-agnostic in
+    /// `dry-core`, set per-adapter. Default returns `"unknown"`;
+    /// adapter binaries MUST override.
+    fn language(&self) -> &'static str {
+        "unknown"
+    }
 }
 
 /// Errors produced by [`NormalizerPort`] implementations.
@@ -277,5 +316,35 @@ mod error_smoke {
             PlaceholderPolicy::default(),
             PlaceholderPolicy::v0_1_default()
         );
+    }
+
+    #[test]
+    fn identity_method_defaults_are_safe_fallbacks() {
+        // Library callers that construct a NormalizerPort ad-hoc get
+        // non-empty fallbacks for tool_name / tool_version / language.
+        // Adapter binaries (which call dry_core::cli::run) MUST override
+        // these to return their crate identity; the defaults exist so
+        // unit tests over ad-hoc port impls compile and run without
+        // every test having to override.
+        struct AdHoc;
+        impl NormalizerPort for AdHoc {
+            fn extensions(&self) -> &'static [&'static str] {
+                &[]
+            }
+            fn normalize(
+                &self,
+                _source: &str,
+                _path: &crate::domain::FilePath,
+            ) -> Result<Vec<crate::domain::NormalizedForm>, NormalizeError> {
+                Ok(Vec::new())
+            }
+            fn placeholder_policy(&self) -> PlaceholderPolicy {
+                PlaceholderPolicy::v0_1_default()
+            }
+        }
+        let n = AdHoc;
+        assert_eq!(n.tool_name(), "dry");
+        assert_eq!(n.tool_version(), env!("CARGO_PKG_VERSION"));
+        assert_eq!(n.language(), "unknown");
     }
 }

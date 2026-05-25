@@ -82,6 +82,23 @@ impl NormalizerPort for SynNormalizer {
     fn placeholder_policy(&self) -> PlaceholderPolicy {
         PlaceholderPolicy::v0_1_default()
     }
+
+    /// Wire-envelope `tool` identity for this adapter: `"dry4rs"`.
+    fn tool_name(&self) -> &'static str {
+        "dry4rs"
+    }
+
+    /// Wire-envelope `tool_version` for this adapter. Resolved against
+    /// `dry4rs`'s own `CARGO_PKG_VERSION` (NOT `dry-core`'s) so the
+    /// envelope reports the adapter binary's version.
+    fn tool_version(&self) -> &'static str {
+        env!("CARGO_PKG_VERSION")
+    }
+
+    /// Wire-envelope `language` identity for this adapter: `"rust"`.
+    fn language(&self) -> &'static str {
+        "rust"
+    }
 }
 
 #[cfg(test)]
@@ -139,6 +156,30 @@ mod tests {
         };
         assert!(!message.is_empty());
         assert!(span.is_none());
+    }
+
+    #[test]
+    fn tool_name_is_dry4rs() {
+        // Locks the wire-envelope `tool` value for the Rust adapter.
+        let n = SynNormalizer::new();
+        assert_eq!(n.tool_name(), "dry4rs");
+    }
+
+    #[test]
+    fn tool_version_resolves_to_dry4rs_pkg_version() {
+        // Adapter MUST resolve `tool_version()` against its own
+        // CARGO_PKG_VERSION, not dry-core's. The macro expansion
+        // happens inside this crate, so the constant is `dry4rs`'s
+        // version. Verifies the override site (not the trait default).
+        let n = SynNormalizer::new();
+        assert_eq!(n.tool_version(), env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn language_is_rust() {
+        // Locks the wire-envelope `language` value for the Rust adapter.
+        let n = SynNormalizer::new();
+        assert_eq!(n.language(), "rust");
     }
 
     #[test]
