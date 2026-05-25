@@ -42,9 +42,16 @@ full release roadmap.
     enums; `Format` rejects `markdown` / `html` / `sarif` at parse
     time so users get an actionable error instead of silent
     fall-through.
-  - **`AnalysisConfig`** — minimal config consumed by the walker
-    (`roots` / `extensions` / `include_ignored`); extended with
-    builder methods in PR 7.
+  - **`AnalysisConfig`** — full v0.1 configuration surface: `roots`,
+    `threshold`, `format`, `output` (new `OutputDestination` enum;
+    `Stdout` only at v0.1, `--output PATH` reserved for v0.2),
+    `extensions`, `include_ignored`, `threshold_mode`. Builder chain
+    (`with_threshold` / `with_format` / `with_threshold_mode` /
+    `with_output` / `with_extensions` / `with_include_ignored`) lets
+    library callers embed `dry-core` directly without going through
+    clap. `DEFAULT_THRESHOLD = 0.85` constant aligns with
+    `comparison::REVIEW_FIRST_FLOOR`; a cross-module sanity test
+    fails CI if either constant drifts.
   - **Generic `run<N: NormalizerPort + Default>() -> ExitCode`** — the
     full analyzer pipeline: clap parse → `--completions` short-circuit
     → allowlist-subcommand short-circuit → AnalysisConfig → walker
@@ -99,6 +106,18 @@ full release roadmap.
     3-layer config (lands v0.2); `--exclude` flag (lands v0.2 with
     allowlist); `markdown` / `html` / `sarif` reporters (lands v0.2 /
     v0.3 / v0.4 per roadmap); `--explain` subcommand (lands at v0.3+).
+  - **Comparison engine extension — `compare_with_paths`**: new public
+    entry point taking parallel `forms: &[NormalizedForm]` +
+    `paths: &[FilePath]` slices so emitted `Match.forms[].file` carries
+    real source paths instead of the `qualified_name`-derived stub the
+    library-facing `compare()` falls back to. The CLI run loop tracks
+    `(form, path)` pairs during normalization and threads both. Object-
+    safe `PathResolver` trait (synthetic vs indexed strategies) keeps
+    the engine's two passes parameterized without forcing a type
+    parameter on every helper. Closes the gap in `form_ref_for`'s
+    pre-PR-8 docstring ("PR 8's run loop wires real paths at the higher
+    layer"). The legacy `compare()` keeps the synthetic resolver for
+    backward compat with existing comparison-engine unit tests.
 
 - **PR 6 (#7)** — comparison engine in `dry_core::comparison`. Single
   module per the O6 "no detector taxonomy at v0.1" rule. Two-tier
