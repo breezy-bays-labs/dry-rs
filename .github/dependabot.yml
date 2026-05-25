@@ -1,0 +1,113 @@
+# Dependabot configuration for the dry-rs workspace.
+#
+# Keeps the SHA-pinned `uses:` references in `.github/workflows/*.yml`
+# (and `.github/actions/*/action.yml` when composites land) plus the
+# cargo deps across `crates/*/Cargo.toml` + the workspace `Cargo.toml`
+# fresh. Each weekly run opens grouped PRs bumping the pinned SHAs /
+# crate versions to the latest matching release.
+#
+# Coverage caveat (github-actions): Dependabot's github-actions
+# ecosystem tracks tagged releases + default-branch HEADs only — it
+# does NOT track HEAD advances on non-default branches like
+# `dtolnay/rust-toolchain@stable`. Those pins need manual quarterly
+# refresh; see AGENTS.md "Supply-chain hygiene" rule 2.
+#
+# Coverage caveat (cargo): the `cargo` ecosystem follows the
+# workspace's `Cargo.toml` + `Cargo.lock`. The MSRV gate (CI job
+# `MSRV (1.85)`) catches any dependency that requires a newer
+# rust-version on the next CI run; Dependabot itself does not check
+# MSRV before opening a PR.
+#
+# zizmor (the workflow security audit) is invoked via
+# `pipx run 'zizmor>=1.5,<2'` in `.github/workflows/zizmor.yml` rather
+# than tracked through any Dependabot ecosystem — bumping its version
+# spec is a manual edit when zizmor's release notes warrant the
+# upgrade. `pipx` itself is supplied by the GitHub-hosted runner image.
+#
+# Scope note (v0.1): `npm` ecosystem is NOT declared. dry4ts joins the
+# workspace at v0.6+ with a `napi-rs` Node binding; the corresponding
+# `package.json` / `package-lock.json` lands then, and this file gets
+# an `npm` updates block in the same PR.
+#
+# Companion convention: AGENTS.md → "For automated code reviewers" +
+# sibling-repo refs (crap4rs#264, scrap-rs#38).
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    # Cooldown delays a Dependabot bump for N days after the upstream
+    # release lands, giving the community time to surface a bad
+    # release before automation pulls it. The `github-actions`
+    # ecosystem only supports the flat `default-days` knob (semver-
+    # major/minor/patch granularity is reserved for ecosystems with
+    # semver semantics like npm/cargo/pip).
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    labels:
+      - "type:chore"
+      - "priority:soon"
+    groups:
+      # Group all GitHub Actions bumps into one weekly PR so reviewers
+      # see the full supply-chain delta at once instead of one PR per
+      # action. Excludes major-version bumps — those land as separate
+      # PRs that need human review (breaking-change semantics).
+      # `patterns: ["*"]` is the explicit selector (Dependabot groups
+      # require at least one of `patterns`, `exclude-patterns`, or
+      # `dependency-type`); `update-types` then narrows the scope.
+      github-actions:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    # Cargo's cooldown supports semver-aware delays (the
+    # `github-actions` block above is restricted to `default-days`).
+    # A wider cushion on major bumps gives the ecosystem time to
+    # surface breakage; minor/patch ride the default cushion. These
+    # cushions interact with the grouping rules below — a minor/patch
+    # release older than 7 days lands in the grouped PR; a major
+    # release older than 14 days lands as its own PR per the
+    # `update-types` exclusion in `groups.cargo`. `default-days` is
+    # the fallback for any bump shape not matched by the semver keys
+    # (e.g., pre-release semver) — zizmor's `dependabot-cooldown`
+    # audit requires it explicitly.
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 7
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    labels:
+      - "type:chore"
+      - "priority:soon"
+    groups:
+      # Group cargo minor + patch bumps into one weekly PR; majors land
+      # as separate PRs for human review. Mirrors the github-actions
+      # grouping pattern so reviewers see consistent shape across both
+      # ecosystems.
+      cargo:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
