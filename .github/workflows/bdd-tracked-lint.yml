@@ -59,9 +59,9 @@ jobs:
     steps:
       # SHA-pinned to match the workspace convention adopted in PR #38
       # (#16): every third-party action carries an immutable SHA + a
-      # trailing tag comment. Verified via
-      # `gh api repos/actions/checkout/git/ref/tags/v4`.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # trailing tag comment. dependabot keeps the SHA in lockstep
+      # with sibling workflows; this matches ci.yml's pin.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           # Don't persist the `GITHUB_TOKEN` in the worktree's git
           # config — this job runs no `git push`, no API calls, no
