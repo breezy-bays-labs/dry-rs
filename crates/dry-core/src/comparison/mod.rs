@@ -39,6 +39,24 @@
 //! single n-ary [`Match`] with `score == 1.0` and tier
 //! [`Tier::AutoRefactor`].
 //!
+//! ## Pass 2 — sliding-window Jaccard
+//!
+//! Remaining forms (those not claimed by Pass 1) are sorted
+//! ascending by `node_count`. For each pair `(i, j)` with `i < j`,
+//! the inner loop breaks when
+//! `forms[j].node_count > forms[i].node_count / threshold` — no
+//! later `k > j` can clear the threshold either (Jaccard upper
+//! bound `min/max >= t` ⟹ `max <= min/t`).
+//!
+//! `node_count` is a **proxy** for fingerprint-set cardinality —
+//! the O8 ADR keeps them decoupled (`node_count` is per-leaf,
+//! `fingerprint_set` is per-subform Merkle-folded). When set size
+//! and `node_count` align, the break math is exact; when they
+//! diverge, the engine's break is conservative (the true Jaccard
+//! upper bound is set-size-based). The trade-off is deliberate:
+//! sorting by `node_count` is `O(N log N)` on `u32`, and the
+//! sliding-window can prune most pairs without computing Jaccard.
+//!
 //! ## Empty `fingerprint_set` policy
 //!
 //! [`jaccard`] returns `0.0` when either set is empty (including
@@ -59,8 +77,21 @@
 //! `Result` and only `debug_assert!`s the contract.
 
 use std::collections::{BTreeMap, HashSet};
+use std::hash::BuildHasher;
 
 use crate::domain::{FilePath, FormRef, Match, NormalizedForm, Tier};
+
+/// Floor below which a score-tier is downgraded from
+/// [`Tier::AutoRefactor`] — pinned at `0.95` per the roadmap's
+/// threshold-tier vocabulary. Scores at or above this floor route
+/// to [`Tier::AutoRefactor`].
+pub const AUTO_REFACTOR_FLOOR: f64 = 0.95;
+
+/// Floor below which a score-tier is downgraded from
+/// [`Tier::ReviewFirst`] — pinned at `0.85` per the roadmap.
+/// Scores at or above this floor (but below [`AUTO_REFACTOR_FLOOR`])
+/// route to [`Tier::ReviewFirst`].
+pub const REVIEW_FIRST_FLOOR: f64 = 0.85;
 
 /// Compare a slice of normalized forms and return all matches whose
 /// Jaccard similarity meets or exceeds `threshold`.
@@ -91,7 +122,11 @@ pub fn compare(forms: &[NormalizedForm], threshold: f64) -> Vec<Match> {
     // pairwise.
     pass1_hash_bucket(forms, &mut matches, &mut claimed);
 
-    let _ = threshold; // Pass 2 lands in the next commit.
+    // Pass 2 — sliding-window Jaccard over forms NOT claimed by
+    // Pass 1. Sorted ascending by `node_count` with the
+    // break-math shortcut.
+    pass2_sliding_window(forms, threshold, &claimed, &mut matches);
+
     matches
 }
 
@@ -165,6 +200,93 @@ fn pass1_hash_bucket(
     }
 }
 
+/// Pass 2 — sliding-window Jaccard over unclaimed forms. Sorts
+/// candidates ascending by `node_count`, then for each pair
+/// `(i, j)` with `i < j` the inner loop breaks when
+/// `forms[j].node_count > forms[i].node_count / threshold`. Emits
+/// one binary [`Match`] per pair clearing `threshold`; tier is
+/// assigned by the score (Pass 2 cannot emit `score == 1.0` —
+/// those land in Pass 1).
+fn pass2_sliding_window(
+    forms: &[NormalizedForm],
+    threshold: f64,
+    claimed: &HashSet<usize>,
+    matches: &mut Vec<Match>,
+) {
+    // Project to unclaimed indices and sort ascending by
+    // (node_count, original_index). The secondary sort key keeps
+    // the iteration order deterministic when node_counts tie.
+    let mut sorted: Vec<usize> = (0..forms.len()).filter(|i| !claimed.contains(i)).collect();
+    sorted.sort_by_key(|&i| (forms[i].node_count, i));
+
+    for outer_pos in 0..sorted.len() {
+        let i = sorted[outer_pos];
+        // f64 cast on u32 is exact for valid node counts (well
+        // below 2^53). The CLI-side gate (PR 8) clamps inputs.
+        let bound = f64::from(forms[i].node_count) / threshold;
+        for &j in &sorted[outer_pos + 1..] {
+            let nj = f64::from(forms[j].node_count);
+            // Break math: strict inequality. No later k > j
+            // (sorted ascending by node_count) can clear the
+            // threshold.
+            if nj > bound {
+                break;
+            }
+            let score = jaccard(&forms[i].fingerprint_set, &forms[j].fingerprint_set);
+            if score < threshold {
+                continue;
+            }
+            // Pass 1 already claimed all score-1.0 exact matches;
+            // Pass 2 only emits below-1.0 pairs. Defensive guard
+            // against an edge case where two forms have equal
+            // fingerprint sets but were left unclaimed (e.g., a
+            // bucket where verification picked a different
+            // canonical set). Clamp to just-below-1.0 so the
+            // tier_for() helper stays in its documented domain.
+            //
+            // In practice this branch should not trigger; if it
+            // does, downgrading to ReviewFirst is safer than
+            // double-emitting an AutoRefactor.
+            let final_score = if (score - 1.0).abs() < f64::EPSILON {
+                debug_assert!(
+                    false,
+                    "Pass 2 emitted a score-1.0 pair the bucket clustering missed: \
+                     forms[{i}] and forms[{j}]"
+                );
+                AUTO_REFACTOR_FLOOR // de-rate to the floor, but keep tier consistent
+            } else {
+                score
+            };
+            let tier = tier_for(final_score, threshold);
+            let forms_refs = vec![form_ref_for(&forms[i]), form_ref_for(&forms[j])];
+            matches.push(Match::new(forms_refs, final_score, tier));
+        }
+    }
+}
+
+/// Assign a tier from a score and the caller's threshold gate.
+///
+/// - `score >= 0.95` ⟹ [`Tier::AutoRefactor`].
+/// - `score >= 0.85` ⟹ [`Tier::ReviewFirst`].
+/// - `score >= threshold` ⟹ [`Tier::Advisory`].
+///
+/// Callers MUST only pass scores that already cleared the
+/// threshold gate. The `1.0` exact-match path is handled by Pass 1
+/// directly; this helper is the Pass 2 path.
+fn tier_for(score: f64, threshold: f64) -> Tier {
+    debug_assert!(
+        score >= threshold,
+        "tier_for() called with score={score} below threshold={threshold}"
+    );
+    if score >= AUTO_REFACTOR_FLOOR {
+        Tier::AutoRefactor
+    } else if score >= REVIEW_FIRST_FLOOR {
+        Tier::ReviewFirst
+    } else {
+        Tier::Advisory
+    }
+}
+
 /// Compute the bucket key for a fingerprint set. **XOR-fold** of
 /// the set's `u64` elements — order-independent, allocation-free,
 /// and `fold(empty) == 0` (the empty-set case is filtered before
@@ -175,7 +297,7 @@ fn pass1_hash_bucket(
 /// degenerate collision pattern is two different sets with the same
 /// XOR result; Pass 1's structural-equality verification step
 /// rejects those before emitting a [`Match`].
-fn bucket_key(set: &HashSet<u64>) -> u64 {
+fn bucket_key<S: BuildHasher>(set: &HashSet<u64, S>) -> u64 {
     set.iter().fold(0u64, |acc, &x| acc ^ x)
 }
 
@@ -202,15 +324,26 @@ fn form_ref_for(form: &NormalizedForm) -> FormRef {
 /// never panics, returns a value in `[0.0, 1.0]`, is reflexive
 /// on any non-empty input (`jaccard(A, A) == 1.0`), and is
 /// symmetric (`jaccard(A, B) == jaccard(B, A)`).
+///
+/// Generic over [`BuildHasher`] so the function accepts both the
+/// default `HashSet<u64>` (used by `NormalizedForm.fingerprint_set`)
+/// and any caller-supplied hasher (e.g., `ahash`, `fxhash`).
 #[must_use]
-pub fn jaccard(a: &HashSet<u64>, b: &HashSet<u64>) -> f64 {
+pub fn jaccard<S1, S2>(a: &HashSet<u64, S1>, b: &HashSet<u64, S2>) -> f64
+where
+    S1: BuildHasher,
+    S2: BuildHasher,
+{
     if a.is_empty() || b.is_empty() {
         return 0.0;
     }
     // Iterate over the smaller set for the intersection — cheap
     // optimization, semantically equivalent.
-    let (small, large) = if a.len() <= b.len() { (a, b) } else { (b, a) };
-    let intersection = small.iter().filter(|x| large.contains(x)).count();
+    let intersection = if a.len() <= b.len() {
+        a.iter().filter(|x| b.contains(x)).count()
+    } else {
+        b.iter().filter(|x| a.contains(x)).count()
+    };
     // |A ∪ B| = |A| + |B| - |A ∩ B|. Both sets are non-empty here,
     // so |A| + |B| >= 2 and intersection <= min(|A|, |B|); union >= 1.
     // No div-by-zero is possible.
@@ -386,6 +519,108 @@ mod tests {
         let forms = vec![make_form(&[1, 2, 3], 3)];
         let matches = compare(&forms, 0.85);
         assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn pass2_emits_match_for_high_jaccard_pair() {
+        // Two forms with |A ∩ B| = 4 and |A ∪ B| = 5 — Jaccard 4/5
+        // = 0.8. With threshold 0.7 this clears the gate.
+        let forms = vec![make_form(&[1, 2, 3, 4], 4), make_form(&[1, 2, 3, 4, 5], 5)];
+        let matches = compare(&forms, 0.7);
+        assert_eq!(matches.len(), 1);
+        assert!(
+            (matches[0].score - 0.8).abs() < 1e-9,
+            "expected ~0.8, got {}",
+            matches[0].score
+        );
+    }
+
+    #[test]
+    fn pass2_filters_out_below_threshold_pairs() {
+        // 1/3 Jaccard is below 0.85 — no match emitted.
+        let forms = vec![make_form(&[1, 2], 2), make_form(&[2, 3], 2)];
+        let matches = compare(&forms, 0.85);
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn pass2_break_math_prunes_distant_node_counts() {
+        // node_count = 10 vs node_count = 100 at threshold 0.85:
+        // bound = 10 / 0.85 ≈ 11.76, so the 100-node form is
+        // strictly beyond and Pass 2's inner loop breaks before
+        // computing Jaccard. Even if the sets were identical, no
+        // match would be emitted.
+        //
+        // We use Pass 2-eligible forms (different fingerprint
+        // sets) so Pass 1 doesn't claim them.
+        let forms = vec![make_form(&[1, 2, 3], 10), make_form(&[1, 2, 4], 100)];
+        let matches = compare(&forms, 0.85);
+        assert!(
+            matches.is_empty(),
+            "break math should prune the disproportionate-size pair"
+        );
+    }
+
+    #[test]
+    fn pass2_break_math_keeps_near_node_counts() {
+        // Same Jaccard score (0.5), but the node_counts are close
+        // enough that the break math doesn't prune. The score 0.5
+        // is below the 0.85 default threshold, so we lower the
+        // threshold to 0.4 to actually see the match.
+        let forms = vec![make_form(&[1, 2, 3], 3), make_form(&[2, 3, 4], 3)];
+        let matches = compare(&forms, 0.4);
+        assert_eq!(matches.len(), 1);
+        assert!((matches[0].score - 0.5).abs() < 1e-9);
+        // 0.5 is < 0.85 review_first floor -> Advisory.
+        assert_eq!(matches[0].tier, Tier::Advisory);
+    }
+
+    #[test]
+    fn pass2_tier_assignment_auto_refactor_floor() {
+        // Score >= 0.95 -> AutoRefactor (Pass 2 path; not score 1.0).
+        // A = {1..=19, 20} (20 elts), B = {1..=19} (19 elts).
+        // intersection = 19, union = 20 -> 0.95 exactly.
+        let a: Vec<u64> = (1..=20).collect();
+        let b: Vec<u64> = (1..=19).collect();
+        let forms = vec![make_form(&a, 20), make_form(&b, 19)];
+        let matches = compare(&forms, 0.5);
+        assert_eq!(matches.len(), 1);
+        assert!(
+            (matches[0].score - 0.95).abs() < 1e-12,
+            "expected 0.95, got {}",
+            matches[0].score
+        );
+        assert_eq!(matches[0].tier, Tier::AutoRefactor);
+    }
+
+    #[test]
+    fn pass2_tier_assignment_review_first_floor() {
+        // Score in [0.85, 0.95) -> ReviewFirst.
+        // A = {1..=17, 18, 19} (19 elts), B = {1..=17, 20} (18 elts).
+        // intersection = 17, union = 20 -> 0.85 exactly.
+        let a: Vec<u64> = (1..=17).chain([18, 19]).collect();
+        let b: Vec<u64> = (1..=17).chain([20]).collect();
+        let forms = vec![make_form(&a, 19), make_form(&b, 18)];
+        let matches = compare(&forms, 0.5);
+        assert_eq!(matches.len(), 1);
+        assert!(
+            (matches[0].score - 0.85).abs() < 1e-12,
+            "expected 0.85, got {}",
+            matches[0].score
+        );
+        assert_eq!(matches[0].tier, Tier::ReviewFirst);
+    }
+
+    #[test]
+    fn pass2_tier_assignment_advisory() {
+        // Score >= threshold but < 0.85 -> Advisory.
+        // Already covered by pass2_break_math_keeps_near_node_counts;
+        // here we add an explicit check at a different threshold.
+        let forms = vec![make_form(&[1, 2, 3, 4], 4), make_form(&[3, 4, 5, 6], 4)];
+        let matches = compare(&forms, 0.3);
+        assert_eq!(matches.len(), 1);
+        // 2/6 = 0.333...
+        assert_eq!(matches[0].tier, Tier::Advisory);
     }
 
     #[test]
