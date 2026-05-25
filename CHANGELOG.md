@@ -266,6 +266,20 @@ full release roadmap.
 
 ### Fixed
 
+- **#50 — MSRV-gate SHA was actually @stable.** `ci.yml`'s MSRV job
+  pinned `dtolnay/rust-toolchain@29eef336…` with a `# tracks @1.85
+  branch` comment, but `29eef336` is actually the `@stable` branch
+  HEAD ("toolchain: stable") — the real `@1.85` HEAD is `c56a35af…`
+  ("toolchain: 1.85.1"). The MSRV gate was structurally vacuous,
+  exercising whatever `@stable` resolved to instead of pinning to
+  the 1.85 toolchain. Corrected the SHA in the MSRV job; the other
+  six `dtolnay/rust-toolchain@29eef336…` pins are legitimately
+  tracking `@stable` and unchanged. Surfaced by the #32 SHA-pin-sweep
+  agent during PR #49 (in audit-only scope there; tracked here as
+  a focused fix). Branch-pinned actions need per-branch SHA
+  verification — dependabot's grouped bumps can't distinguish
+  trailing-comment intent from the underlying ref.
+
 - **PR 6 (#7) Gemini review follow-up** — two findings on PR #33:
   - **Multi-cluster Pass 1 buckets** — a single Pass 1 bucket can
     XOR-collide multiple distinct equal-set clusters (e.g. `{1, 2}`
