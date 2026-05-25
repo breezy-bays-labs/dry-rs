@@ -113,6 +113,19 @@ impl Command {
             Self::Ignore { .. } | Self::Ignored | Self::Cleanup => &[],
         }
     }
+
+    /// Whether this subcommand triggers the analyzer pipeline.
+    ///
+    /// `Report` / `Stats` / `Check` are analysis commands; `Ignore` /
+    /// `Ignored` / `Cleanup` manage the allowlist surface and short-
+    /// circuit before the file walker runs.
+    #[must_use]
+    pub const fn is_analysis(&self) -> bool {
+        matches!(
+            self,
+            Self::Report { .. } | Self::Stats { .. } | Self::Check { .. }
+        )
+    }
 }
 
 /// Top-level CLI argument struct for `dry4rs` (and future `dry4ts` /
@@ -211,13 +224,18 @@ impl Args {
     /// [`Command::paths`]).
     ///
     /// Resolution order:
-    /// 1. Subcommand-attached paths (`dry4rs report src/`, `dry4rs check src/`)
-    /// 2. Default — current directory `.` (used when no subcommand is
-    ///    given, or when a path-bearing subcommand is invoked without
+    /// 1. Non-analysis subcommand (`ignore` / `ignored` / `cleanup`) →
+    ///    empty vec; callers should short-circuit before walking files.
+    /// 2. Subcommand-attached paths (`dry4rs report src/`, `dry4rs check src/`)
+    /// 3. Default — current directory `.` (used when no subcommand is
+    ///    given, or when an analysis subcommand is invoked without
     ///    explicit paths).
     #[must_use]
     pub fn analysis_paths(&self) -> Vec<PathBuf> {
         if let Some(cmd) = &self.command {
+            if !cmd.is_analysis() {
+                return Vec::new();
+            }
             let cmd_paths = cmd.paths();
             if !cmd_paths.is_empty() {
                 return cmd_paths.to_vec();

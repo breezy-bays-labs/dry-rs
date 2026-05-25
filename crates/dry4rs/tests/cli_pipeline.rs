@@ -59,8 +59,9 @@ fn json_envelope_omits_view_when_no_shaping_flags_set() {
     // default; we don't care about the exit code here, only the wire
     // shape.
     let _ = status;
+    let envelope: Value = serde_json::from_str(&stdout).expect("envelope must parse");
     assert!(
-        !stdout.contains("\"view\""),
+        envelope.get("view").is_none(),
         "view must be absent: {stdout}"
     );
 }
@@ -73,9 +74,11 @@ fn json_envelope_populates_view_when_top_flag_set() {
     write_duplication_fixture(tmp.path());
     let path_arg = tmp.path().to_string_lossy().into_owned();
     let (_status, stdout, _) = run_dry4rs(&["report", "--format", "json", "--top", "1", &path_arg]);
-    assert!(stdout.contains("\"view\""), "view must populate: {stdout}");
-
     let envelope: Value = serde_json::from_str(&stdout).expect("envelope must parse");
+    assert!(
+        envelope.get("view").is_some(),
+        "view must populate: {stdout}"
+    );
     let result_matches = envelope["result"]["matches"]
         .as_array()
         .expect("result.matches must be an array");

@@ -269,6 +269,27 @@ fn analysis_paths_falls_back_to_current_dir_on_subcommand_without_paths() {
 }
 
 #[test]
+fn analysis_paths_returns_empty_for_non_analysis_subcommands() {
+    // `Ignore` / `Ignored` / `Cleanup` short-circuit before the
+    // analyzer runs (allowlist-management surface, no file walk).
+    // `analysis_paths()` must NOT silently default to `.` for them —
+    // a future caller that forgets the short-circuit would otherwise
+    // start walking the cwd unexpectedly.
+    for argv in [
+        vec!["dry4rs", "ignore", "deadbeef"],
+        vec!["dry4rs", "ignored"],
+        vec!["dry4rs", "cleanup"],
+    ] {
+        let args = Args::try_parse_from(&argv).expect("must parse");
+        assert_eq!(
+            args.analysis_paths(),
+            Vec::<PathBuf>::new(),
+            "non-analysis subcommand {argv:?} must return empty analysis paths"
+        );
+    }
+}
+
+#[test]
 fn check_subcommand_accepts_path_argument() {
     let args =
         Args::try_parse_from(["dry4rs", "check", "src/"]).expect("check subcommand accepts a path");

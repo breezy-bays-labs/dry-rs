@@ -176,6 +176,43 @@ full release roadmap.
     which fires O(n log n) times. Switched to borrow-only sort
     keys.
 
+- **PR 8 (#9) bot-review follow-up** — five findings on PR #34
+  (CodeRabbit + Gemini):
+  - **`clap_complete` in `dry-core` allowed-deps table** — CodeRabbit
+    caught that the workspace `clap_complete` dependency landed in
+    `crates/dry-core/Cargo.toml` without an AGENTS.md per-crate
+    dep-table entry. Amended the table to add `clap_complete`
+    alongside `clap` (derive) — both belong to the v0.1 CLI surface.
+  - **`compare_with_paths` length check elevated to release builds**
+    — the docstring promised "Panics (debug only)" via
+    `debug_assert_eq!`, but `IndexedPathResolver::path_for` indexes
+    `paths[i]` unconditionally — release builds panicked with a
+    cryptic `index out of bounds` from deep inside the engine.
+    Promoted the check to `assert_eq!` so the contract panics in both
+    builds with the argument lengths in the message.
+    `compare_with_paths_panics_in_debug_on_length_mismatch` test
+    renamed to drop the "_in_debug" suffix.
+  - **`Args::analysis_paths()` returns empty for non-analysis
+    subcommands** — `ignore` / `ignored` / `cleanup` previously
+    fell through to `vec![PathBuf::from(".")]` if `analysis_paths()`
+    was called (defensive callers might walk the cwd by mistake).
+    Added `Command::is_analysis()` predicate and updated
+    `analysis_paths()` to return `Vec::new()` when the subcommand is
+    non-analysis. Regression test:
+    `analysis_paths_returns_empty_for_non_analysis_subcommands`.
+  - **JSON-envelope tests use key-based assertions** —
+    `cli_pipeline.rs` previously used `stdout.contains("\"view\"")`,
+    which would false-positive on any string containing `"view"`.
+    Switched both assertions to `serde_json::Value::get("view")`.
+  - **Stale doc path in `binary_smoke.rs`** — module doc pointed at
+    `crates/dry-core/tests/cli_pipeline.rs`; the tests live in
+    `crates/dry4rs/tests/cli_pipeline.rs`.
+
+  Gemini's MEDIUM-priority observation about `fs::read_to_string`
+  being a potential bottleneck on extremely large files is filed as
+  a separate `priority:later` issue rather than addressed in this PR
+  — the suggestion itself frames it as a v0.2+ deferral.
+
 - **PR 7 (#8)** — language-agnostic adapters in `dry_core::adapters`:
   - `source::enumerate(&AnalysisConfig)` — file walker via the `ignore`
     crate (honors `.gitignore` / `.ignore` / `.git/info/exclude` like

@@ -7,7 +7,7 @@
 //! workspace coverage report.
 //!
 //! The full pipeline + JSON-shape integration tests live in
-//! `crates/dry-core/tests/cli_pipeline.rs`; this file is the
+//! `crates/dry4rs/tests/cli_pipeline.rs`; this file is the
 //! adapter-binary smoke layer only.
 
 use std::process::Command;

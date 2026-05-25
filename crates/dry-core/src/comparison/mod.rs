@@ -145,17 +145,22 @@ pub fn compare(forms: &[NormalizedForm], threshold: f64) -> Vec<Match> {
 /// [`compare`] (which falls back to a `qualified_name`-derived
 /// synthetic path).
 ///
-/// # Panics (debug only)
+/// # Panics
 ///
-/// Same threshold-range debug assertion as [`compare`]. Additionally
-/// panics in debug builds when `paths.len() != forms.len()`.
+/// Panics on length mismatch between `forms` and `paths` in both
+/// debug AND release builds — `IndexedPathResolver::path_for` indexes
+/// `paths[i]` unconditionally, so a mismatch would panic with a
+/// cryptic `index out of bounds` deep in the engine. The explicit
+/// `assert_eq!` surfaces the contract violation up front with the
+/// argument lengths in the message. The threshold-range check is the
+/// same debug-only `debug_assert!` as [`compare`].
 #[must_use]
 pub fn compare_with_paths(
     forms: &[NormalizedForm],
     paths: &[FilePath],
     threshold: f64,
 ) -> Vec<Match> {
-    debug_assert_eq!(
+    assert_eq!(
         forms.len(),
         paths.len(),
         "compare_with_paths(): forms and paths must be the same length; \
@@ -1113,9 +1118,13 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "forms and paths must be the same length")]
-    fn compare_with_paths_panics_in_debug_on_length_mismatch() {
+    fn compare_with_paths_panics_on_length_mismatch() {
         let forms = vec![make_form(&[1, 2], 2)];
-        // Empty paths — the debug_assert! catches the length mismatch.
+        // Empty paths — the unconditional `assert_eq!` catches the
+        // length mismatch in both debug AND release builds. The prior
+        // `debug_assert_eq!` left release builds to panic with a
+        // cryptic `index out of bounds` from the resolver's
+        // `paths[i]`; the explicit `assert_eq!` surfaces the lengths.
         let paths: Vec<FilePath> = Vec::new();
         let _ = compare_with_paths(&forms, &paths, 0.85);
     }
