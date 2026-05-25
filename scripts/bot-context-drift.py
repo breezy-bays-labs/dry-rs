@@ -215,16 +215,25 @@ def parse_agents_table(agents_md_path: Path) -> tuple[list[CrateRow], int]:
             # Header row: starts with ``Crate`` (case-insensitive). Skip.
             if cells and cells[0].lower() == "crate":
                 continue
+            # Fail fast on malformed rows. A silent skip would let a
+            # row evade the drift check entirely — e.g. a typo that
+            # collapses two columns into one makes that crate's deps
+            # invisible to the gate, and the gate still passes CI. The
+            # rule is: every row IS a drift-checked crate, or the table
+            # is broken.
             if len(cells) < 3:
-                # Malformed row — record nothing, but don't fail. A
-                # subsequent table-shape regression would surface via a
-                # CI dry-run; this script's job is drift detection, not
-                # table-shape validation.
-                continue
+                raise ValueError(
+                    f"{agents_md_path}: malformed dep-table row at line "
+                    f"{idx + 1} (expected at least 3 columns: "
+                    f"Crate | Purpose | Allowed deps)"
+                )
             # First cell = crate name in backticks.
             crate_match = re.search(r"`([^`]+)`", cells[0])
             if not crate_match:
-                continue
+                raise ValueError(
+                    f"{agents_md_path}: malformed crate cell at line "
+                    f"{idx + 1} (expected backtick-quoted crate name)"
+                )
             crate = crate_match.group(1)
             # Third cell = comma-separated allowed deps.
             deps_cell = cells[2]

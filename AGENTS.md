@@ -230,10 +230,12 @@ Fair-game suggestions (these the project welcomes):
 ### When this section is wrong
 
 This section is curated, not auto-generated. Rules listed here may
-drift from the source ADRs. If a CI job named `bot-context-drift`
-exists (future) it will catch drift mechanically; until then, an
-inconsistency between this section and the ADRs is a bug — the ADRs
-win, and this section needs updating. See
+drift from the source ADRs. The `bot-context-drift` CI job + pre-push
+hook catch AGENTS.md ↔ Cargo.toml dep-table drift mechanically; other
+ADR consistency (wire envelope shapes, layering rules, normalization
+heuristics) still relies on review. An inconsistency between this
+section and the ADRs is a bug — the ADRs win, and this section needs
+updating. See
 [dry-rs#24](https://github.com/breezy-bays-labs/dry-rs/issues/24) for
 the implementation epic.
 
