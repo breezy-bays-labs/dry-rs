@@ -1,0 +1,88 @@
+# Workflow security audit (supply-chain gate).
+#
+# Mechanical enforcement of the SHA-pin + workflow-security policy.
+# Runs `zizmor` (https://woodruffw.github.io/zizmor/) over `.github/`,
+# which covers every workflow + `dependabot.yml` + any future composite
+# actions under `.github/actions/`. The `unpinned-uses` audit is the
+# primary gate — any new floating-tag `uses:` reference fails CI here.
+# Other zizmor audits (template-injection, excessive-permissions,
+# cache-poisoning, github-env-injection) ride along as additional
+# supply-chain hygiene checks at no marginal cost.
+#
+# Dedicated workflow file (rather than a job in ci.yml) per the
+# parallel-agent dispatch convention — keeps the supply-chain gate
+# isolated from other jobs being added to ci.yml concurrently.
+#
+# Triggered only when workflow files / composite actions / dependabot
+# change, plus `workflow_dispatch` for ad-hoc audits — zizmor has no
+# value running on every Rust-source PR. The `paths:` filter scopes
+# to the same set zizmor itself audits.
+#
+# See AGENTS.md "For automated code reviewers" + sibling-repo refs
+# (crap4rs#264, scrap-rs#38) for the org-wide convention this enforces.
+#
+# ---
+# FUTURE-RULE (release.yml does not yet exist):
+#
+# When `release.yml` lands at per-crate v1.0 prep, it MUST NOT
+# `restore` or `save` build caches on tag-triggered runs. A
+# tag-triggered job that touches a cache the main branch later reads
+# (or vice versa) opens a cache-poisoning vector: a compromised release
+# pipeline could poison the cache key the next CI run consumes. zizmor
+# enforces this via the `cache-poisoning` audit — release.yml's `uses:`
+# refs must NOT include any `actions/cache@*`, `Swatinem/rust-cache@*`,
+# or similar restore/save action when the trigger event is `push:
+# tags:` or `release:`. Build artifacts on release runs are throwaway
+# by design; cache participation is structurally forbidden.
+
+name: zizmor (workflow security audit)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+      - '.github/dependabot.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+      - '.github/dependabot.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: zizmor-${{ github.ref }}
+  cancel-in-progress: true
+
+# Default workflow permissions: least privilege. The zizmor job is
+# read-only (audits .github/ source; no commenting, no releasing, no
+# pushing). Closes the workflow-wide leg of zizmor's own
+# `excessive-permissions` audit.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  zizmor:
+    name: zizmor (workflow security audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Run zizmor on .github/
+        # `pipx run` fetches a pinned-by-PyPI build into a transient
+        # venv; the `>=1.5,<2` constraint locks the audit ruleset to
+        # the 1.x major so a zizmor release tightening rules doesn't
+        # flip CI red between PRs. Bumping the constraint is a manual
+        # edit (no Dependabot ecosystem covers this invocation form);
+        # the major-version cap means 2.x lands via human-reviewed PR.
+        # The `.github/` scope (not `.github/workflows/`) audits
+        # dependabot.yml + any composite actions under `.github/actions/`
+        # in the same pass.
+        run: pipx run 'zizmor>=1.5,<2' .github/
