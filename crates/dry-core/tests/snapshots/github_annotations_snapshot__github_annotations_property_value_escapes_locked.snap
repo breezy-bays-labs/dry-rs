@@ -1,0 +1,6 @@
+---
+source: crates/dry-core/tests/github_annotations_snapshot.rs
+assertion_line: 78
+expression: out
+---
+::error file=src/100%25/foo%3Abar%2Cbaz.rs,line=1,col=1,endLine=2,endColumn=1::Duplicate of src/partner.rs:5 (score=0.95, tier=auto_refactor)
