@@ -147,7 +147,7 @@ jobs:
       # tag-poisoning attack on the action would silently disable every
       # other supply-chain check. Tag v2 -> 91bf2b6 (verified via
       # `gh api repos/EmbarkStudios/cargo-deny-action/git/ref/tags/v2`).
-      - uses: EmbarkStudios/cargo-deny-action@91bf2b620e09e18d6eb78b92e7861937469acedb # v2
+      - uses: EmbarkStudios/cargo-deny-action@6c8f9facfa5047ec02d8485b6bf52b587b7777d1 # v2
         with:
           command: check
 
