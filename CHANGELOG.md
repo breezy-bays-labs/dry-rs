@@ -497,6 +497,38 @@ full release roadmap.
 
 ### Security
 
+- **Issue #32 — SHA-pin sweep for self-test / mutants / scorecard.**
+  Brings the workflows + composite action added after PR #38 up to the
+  same SHA-pin discipline by converging on the LATEST pins already
+  enforced in `ci.yml`. Prepares dry-rs for the org-wide "Require
+  actions to be pinned to a full-length commit SHA" setting at
+  https://github.com/organizations/breezy-bays-labs/settings/actions
+  (deferred until all sibling repos close their SHA-pin issues).
+  - **`.github/workflows/self-test.yml`** — 2× `actions/checkout`
+    pins lifted `34e11487 → de0fac2e` (v4 → v6.0.2). Other refs
+    (`dtolnay/rust-toolchain`, `Swatinem/rust-cache`,
+    `taiki-e/install-action`) already matched `ci.yml`.
+  - **`.github/workflows/mutants.yml`** — `actions/checkout` lifted
+    `34e11487 → de0fac2e` (v4 → v6.0.2); `actions/upload-artifact`
+    lifted `ea165f8d → 043fb46d` (v4 → v7.0.1).
+  - **`.github/actions/scorecard/action.yml`** — `actions/checkout`
+    lifted `34e11487 → de0fac2e` (v4 → v6.0.2). The
+    `dtolnay/rust-toolchain` + `Swatinem/rust-cache` pins were already
+    current.
+  - **Dependabot** — `.github/dependabot.yml` already configured for
+    the `github-actions` ecosystem (PR #38). Future bumps land
+    automatically across all 5 workflow + composite-action files in
+    grouped weekly PRs.
+  - **Verification**: `pipx run 'zizmor>=1.5,<2' .github/` reports
+    "No findings to report" — zero `unpinned-uses` audit findings.
+  - Pre-existing on main, NOT in this PR's scope:
+    `.github/workflows/ci.yml`'s `dtolnay/rust-toolchain@1.85`
+    SHA-pin `29eef336` is actually the `@stable` HEAD commit
+    ("toolchain: stable"); the real `@1.85` branch HEAD is `c56a35af`
+    ("toolchain: 1.85.1"). The MSRV-gate job consequently exercises
+    @stable, not @1.85. Surfaced here so the orchestrator can file
+    a follow-up `ci(msrv)` fix.
+
 - **Issue #16 — zizmor + dependabot supply-chain hardening.** Brings
   dry-rs to the org-wide supply-chain bar established by crap4rs#264
   and scrap-rs#38.
