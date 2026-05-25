@@ -1,0 +1,93 @@
+name: Mutants
+
+# Mutation testing via cargo-mutants. Per-PR gate scoped to the
+# comparison engine — the load-bearing math of dry-core (hash-bucket
+# clustering + sliding-window Jaccard, per AGENTS.md "Comparison
+# algorithm contract"). Mutating real logic earns its keep here; the
+# rest of the workspace (domain newtypes, port traits, file walker,
+# reporters) is dominated by trivial constructors and serde derive
+# where mutations either survive trivially or are caught structurally
+# by the existing wire-envelope snapshots. Widen scope via
+# `--file` / `examine_globs` in `.cargo/mutants.toml` when new
+# load-bearing logic lands (e.g. the syn normalizer in
+# `crates/dry4rs/src/normalizer.rs` — currently exercised by the
+# parser-integration tests in `crates/dry4rs/tests/`).
+#
+# Skip-on-docs: doc-only PRs (`**/*.md`, `docs/**`) can't possibly
+# change mutation outcomes; gating on docs would burn 2+ minutes of
+# CI for no signal. Mirrors crap4rs's docs-skip pattern.
+#
+# Workflow-dispatch is wired so an operator can trigger a full run
+# from the Actions UI without opening a no-op PR.
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+concurrency:
+  group: mutants-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  mutants:
+    # Single job, single file. cargo-mutants reads `.cargo/mutants.toml`
+    # automatically; the per-line `exclude_re` patterns there carry
+    # `tracked: dry-rs#36` / `tracked: dry-rs#37` references per
+    # `~/.claude/rules/exclusions.md`. The local run on this scope
+    # completes in ~2 min; the 30 min job timeout is the
+    # cargo-mutants-recommended generous backstop for first-time CI
+    # contention and proptest-shrinker tail latency.
+    name: Mutation testing (dry-core comparison engine)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # SHA-pinned action refs per the zizmor `unpinned-uses` audit
+      # (see `.github/workflows/zizmor.yml`). Pin hashes match the
+      # ones in `ci.yml` after PR #38 (zizmor + dependabot hardening
+      # for #16) — dependabot updates them in lockstep across both
+      # workflows.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # tracks @stable branch
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          # Distinct cache key from the main `dry-rs` key in
+          # `ci.yml`: mutants installs cargo-mutants as a host tool
+          # and reuses the workspace target dir, but the cache shape
+          # benefits from staying separated so the main CI cache
+          # eviction policy doesn't churn on this job's working set.
+          shared-key: dry-rs-mutants
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2
+        with:
+          tool: cargo-mutants
+      - name: Run cargo mutants on crates/dry-core/src/comparison/mod.rs
+        # `--no-shuffle` keeps mutant order deterministic for triage
+        # (re-runs match prior logs); `--in-place` avoids the
+        # source-tree copy overhead under the single-worker CI shape.
+        # Surviving / timed-out mutants are governed by
+        # `.cargo/mutants.toml` `exclude_re` — each line there
+        # references its tracking issue.
+        run: cargo mutants --package dry-core --file crates/dry-core/src/comparison/mod.rs --no-shuffle --in-place
+      - name: Upload mutants.out on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mutants-out
+          path: mutants.out/
+          retention-days: 7

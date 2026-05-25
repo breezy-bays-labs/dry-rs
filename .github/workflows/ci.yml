@@ -250,9 +250,12 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo doc --workspace --no-deps --document-private-items --locked
 
-  # cargo-public-api (semver-style public API gate) and cargo-mutants
-  # (mutation testing) are deliberately deferred. cargo-public-api
-  # lands at v1.0 when semver gating begins; cargo-mutants lands with
-  # the comparison engine PR (PR 6) when mutating real logic earns its
-  # keep. Self-check, dry-self, and crap-self land with PR 9 (the
-  # self-referential test + symmetric dogfood + composite action).
+  # cargo-public-api (semver-style public API gate) is deliberately
+  # deferred — it lands at v1.0 when semver gating begins.
+  # cargo-mutants (mutation testing) landed via #20 in
+  # `.github/workflows/mutants.yml` — kept as a separate workflow
+  # file rather than a job here because mutation testing is PR-only
+  # + skip-on-docs and has its own concurrency group; folding it in
+  # here would blur the `pull_request: branches: [main]` shape of
+  # this file. Self-check, dry-self, and crap-self land with PR 9
+  # (the self-referential test + symmetric dogfood + composite action).

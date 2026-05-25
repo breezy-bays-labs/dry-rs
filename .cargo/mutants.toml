@@ -1,0 +1,60 @@
+# cargo-mutants config — https://mutants.rs/
+#
+# Scope at v0.1: dry-core's comparison engine
+# (`crates/dry-core/src/comparison/mod.rs`). The hash-bucket
+# clustering + sliding-window Jaccard is the load-bearing math of
+# the tool; mutation testing earns its keep exactly here. The CI
+# workflow (`.github/workflows/mutants.yml`) passes
+# `--package dry-core --file crates/dry-core/src/comparison/mod.rs`
+# so this config currently only governs that scope. Future PRs may
+# widen the scope via `examine_globs`; the exclude_re patterns below
+# are line-anchored to `comparison/mod.rs` so widening is safe.
+#
+# Mirrors crap4rs's `.cargo/mutants.toml` shape (sibling-coherence
+# track per ops/vision/agentic-driven-development/sensor-suite-vision.md).
+# Differences from crap4rs:
+#   - No `additional_cargo_test_args` (dry-core has no adapter-bin
+#     -shelling tests that the scoped `--package dry-core` build
+#     would fail to build). When dry4ts joins (v0.6+), revisit.
+#   - No `copy_target = true` (CI uses `--in-place`; the setting is
+#     irrelevant under `--in-place` and adds disk pressure on local
+#     `-j N` runs).
+#   - No `minimum_test_timeout` floor (the baseline test time is
+#     ~3s; cargo-mutants's auto-derived 20s timeout is comfortable
+#     for every mutant in the comparison module).
+
+# Per-line exclude regexes for mutants that survive by design or for
+# a documented reason. Anchored on `file:line:` so the regex matches
+# exactly the lines named in each tracking issue. NOTE: line
+# anchors will silently drift if `comparison/mod.rs` is refactored —
+# when either issue is closed (or the file is refactored), re-pin
+# or remove the matching line accordingly. The per-line ordering
+# here matches `cargo mutants --list` output for grep-ability.
+exclude_re = [
+    # -- tracked: dry-rs#36 — real test gaps (plug + delete) ----------------
+    # tracked: dry-rs#36 — pass2 break-math boundary not asserted (`> -> ==`, `> -> >=`)
+    "comparison/mod\\.rs:346:.* in pass2_sliding_window",
+    # tracked: dry-rs#36 — pass2 threshold-equality not asserted (`< -> <=`)
+    "comparison/mod\\.rs:350:.* in pass2_sliding_window",
+
+    # -- tracked: dry-rs#37 — equivalent mutants (decide ADR vs in-source) --
+    # tracked: dry-rs#37 — pass1_hash_bucket `==` -> `!=` produces infinite
+    # loop on partition predicate; cargo-mutants catches via timeout (exit 3)
+    # but pollutes the green-CI signal. Skip until the in-source attribute
+    # mechanism lands.
+    "comparison/mod\\.rs:296:.* in pass1_hash_bucket",
+    # tracked: dry-rs#37 — pass2 score-1.0 defensive guard is unreachable
+    # by design (`debug_assert!(false, ...)` proves it); 4 mutants on this
+    # line (`<` -> `==`/`<=`, `-` -> `+`/`/`) all survive by being on a
+    # dead-code branch.
+    "comparison/mod\\.rs:361:.* in pass2_sliding_window",
+    # tracked: dry-rs#37 — jaccard `||` -> `&&` short-circuit: both
+    # branches produce 0.0 for every single-empty case (intersection
+    # of an empty set is 0, union > 0, score = 0/N = 0.0), so this is
+    # a provably-equivalent mutant — no test can distinguish the two
+    # behaviors without changing the empty-set policy itself.
+    "comparison/mod\\.rs:483:21: replace \\|\\| with && in jaccard",
+    # tracked: dry-rs#37 — jaccard `a.len() <= b.len()` optimization
+    # invariant; the comment literally says "semantically equivalent".
+    "comparison/mod\\.rs:488:35: replace <= with > in jaccard",
+]
