@@ -156,15 +156,41 @@ pub struct Match {
   side identity (zero-padded hex display); the set is hot-path input
   to Jaccard intersection. Newtypes are zero-cost so the choice is
   ergonomic, not performance-driven — but it IS deliberate.
+- **`Span { start: LineColumn, end: LineColumn }`** and
+  **`LineColumn { line: u32, column: u32 }`** carry the canonical
+  source-position contract. Locked at v0.1 per the
+  `adr-span-coordinate-semantics.md` council verdict (2026-05-26):
+  - **Line is 1-based**, mirrors `proc_macro2::LineColumn::line`.
+  - **Column is 0-based** on the wire and in the domain, mirrors
+    `proc_macro2::LineColumn::column`. The text reporter and the
+    GitHub annotations reporter convert column to 1-based via
+    `saturating_add(1)` at the boundary; do NOT suggest unifying
+    these surfaces — the per-surface split is deliberate and
+    documented.
+  - **End-inclusive on BOTH line and column.** A one-character token
+    has `start == end`. This diverges from rustc diagnostic JSON
+    (inclusive line, exclusive column); see the ADR for the
+    multi-consumer rationale. Do NOT suggest matching rustc.
+  - **No `byte_offset` field at v0.1.** The future amendment
+    (deferred to the first real consumer — v0.4 SARIF reporter
+    likely) lands `byte_offset: Option<usize>` on `LineColumn` (NOT
+    `byte_range` on `Span`), with a `Span::with_byte_range(start,
+    end, range)` constructor helper absorbing the `-1` adjustment
+    from proc-macro2's half-open `byte_range()`. Do NOT pre-add the
+    field at v0.1.
+  - **Field order on `LineColumn` is load-bearing**: derived
+    `PartialOrd` produces lexicographic ordering on `(line, column)`;
+    `Span::try_new`'s inverted-range validation depends on it.
+    Reordering or renaming silently breaks the validator.
 
 ### `#[non_exhaustive]` discipline — enums YES, structs NO
 
 - Every public **enum** in `dry-core::domain` carries `#[non_exhaustive]`
   (`Tier`, `Severity`, `FormKind`, `NormalizeError`, `SpanError`,
   `ScoreError`, future `ThresholdMode`, `OutputFormat`).
-- Public **result structs** (`Match`, `Score`, `Span`, `Fingerprint`,
-  `Report`, `Summary`, `NormalizedForm`, `FormRef`) do NOT carry
-  `#[non_exhaustive]`. They evolve via constructor pattern
+- Public **result structs** (`Match`, `Score`, `Span`, `LineColumn`,
+  `Fingerprint`, `Report`, `Summary`, `NormalizedForm`, `FormRef`)
+  do NOT carry `#[non_exhaustive]`. They evolve via constructor pattern
   (`Foo::new`, `Foo::try_new`, `Foo::default`) and serde versioning
   (`#[serde(default)]`, `#[serde(rename = ...)]`,
   `#[serde(skip_serializing_if = ...)]`).
