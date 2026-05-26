@@ -13,10 +13,14 @@
 //!   `start == end` represents a single source position; a one-character
 //!   token `x` at line 1 column 0 has `start == end == LineColumn { line: 1, column: 0 }`.
 //!
-//! The O9 ADR (`adr-span-coordinate-semantics.md`) will canonicalize
-//! these as part of the orchestrator's closeout deliverables. This
-//! module ships the v0.1 working convention; downstream PRs use these
-//! types verbatim.
+//! The O9 ADR (`adr-span-coordinate-semantics.md`, in the private ops
+//! vault under `ops/decisions/dry-rs/`) **canonicalizes** these
+//! conventions as `status: approved` (council 2026-05-26). The wire
+//! shape `Span { start, end }` + `LineColumn { line, column }` is
+//! locked at v0.1 — see `AGENTS.md` "Locked wire shapes" for the
+//! bot-review-facing summary, and the ADR for the council-approved
+//! rationale (DEFER `byte_offset`; LOCK future `byte_offset: Option<usize>`
+//! on `LineColumn` shape; DIVERGE from rustc on column-inclusivity).
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

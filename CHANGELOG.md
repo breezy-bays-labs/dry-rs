@@ -20,6 +20,35 @@ full release roadmap.
 
 ### Added
 
+- **#13 — O9 Span coordinate semantics ADR** approved (council
+  2026-05-26). `ops/decisions/dry-rs/adr-span-coordinate-semantics.md`
+  in the private ops vault canonicalizes the v0.1 in-production
+  convention for `dry-core::domain::Span` / `LineColumn`:
+  - **Coordinate system**: `LineColumn` only at v0.1; byte-offset
+    **deferred** to a future amendment scoped to its first real
+    consumer (v0.4 SARIF reporter likely). When the amendment lands,
+    the shape will be `byte_offset: Option<usize>` on `LineColumn`
+    (NOT `byte_range` on `Span`), with `Span::with_byte_range`
+    constructor helper absorbing the `-1` half-open-to-inclusive
+    arithmetic from proc-macro2's `Span::byte_range()`.
+  - **Indexing**: line 1-based everywhere; column 0-based on
+    Domain + JSON wire, 1-based on Text + GHA via `saturating_add(1)`
+    at the reporter boundary.
+  - **End-bound**: end-inclusive on BOTH line AND column at the
+    Domain layer (diverges from rustc's split-axis exclusivity;
+    matches proc-macro2 native + SARIF top-level region).
+  - **`AGENTS.md` "Locked wire shapes"** now explicitly locks
+    `Span` and `LineColumn` field shapes against bot-review drift
+    (per the council's D5 decision), including explicit
+    "no `#[non_exhaustive]`" rule for `LineColumn` (was implicit;
+    surfaced by the CAO during council debate).
+  - `crates/dry-core/src/domain/span.rs:16-23` docstring updated
+    to point at the now-approved ADR.
+  - AC item 5 ("property test for `Span::try_new` rejecting
+    inverted ranges") was already satisfied at v0.1 by
+    `crates/dry-core/tests/domain_proptest.rs:22-35`
+    (`span_try_new_rejects_every_inverted_range`).
+
 - New CI job `bot-context-drift` (closes #26): mechanical enforcement
   of AGENTS.md ↔ Cargo.toml dep-table consistency. The AGENTS.md "For
   automated code reviewers" section (landed via #24) grounds AI bots
@@ -486,7 +515,9 @@ full release roadmap.
   blocked by #3): #11 — O5 smart-normalization rules for ~17 Rust syn
   constructs (resolved by PR 5); #12 — O8 NormalizedForm cross-language
   schema (folds O11 + O12, resolved by PR 4); #13 — O9 Span coordinate
-  semantics (resolved by PR 3 closeout-deliverable ADR).
+  semantics (resolved per the dedicated [Unreleased]/Added entry above
+  — PR 3 shipped the v0.1 working convention; the canonical ADR landed
+  separately under this PR).
 - New CI job `span-locations-check`: mechanical enforcement of the
   `proc-macro2` `span-locations` requirement via `cargo metadata + jq`.
   Vacuously passes at PR 2 time (no `proc-macro2` deps yet); activates
