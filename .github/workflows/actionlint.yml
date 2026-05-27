@@ -3,11 +3,15 @@
 # expression injection, etc.). Per CQO F3 plan audit
 # (`ops/workspace/dry-rs/20260526-18-ci-ergonomics/impl-plan.md`).
 #
-# Implementation note: `rhysd/actionlint` is a CLI, not a JS/composite
-# GitHub Action — no `action.yml` lives at the repo root. We pin the
-# upstream Docker image by digest, which preserves SHA-pinning
-# discipline (zizmor + supply-chain) and is one of two patterns the
-# upstream README officially documents.
+# Implementation note: `rhysd/actionlint` upstream ships as a CLI +
+# Docker image, not a JavaScript/composite GitHub Action — no
+# `action.yml` lives at the repo root. The Docker-image route via
+# `uses: docker://rhysd/actionlint@<digest>` is documented upstream
+# but GHA's `uses:` parser rejects digest-only Docker refs at workflow
+# parse time (verified empirically — startup_failure on attempts 1 +
+# 2 of this PR). We use `reviewdog/action-actionlint`, which IS a
+# real GitHub Action wrapping the same upstream CLI and SHA-pins
+# normally.
 name: actionlint
 
 on:
@@ -28,6 +32,4 @@ jobs:
           persist-credentials: false
 
       - name: Run actionlint
-        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667  # v1.7.12
-        with:
-          args: -color
+        uses: reviewdog/action-actionlint@6fb7acc99f4a1008869fa8a0f09cfca740837d9d  # v1.72.0
