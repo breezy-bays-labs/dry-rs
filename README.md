@@ -152,18 +152,21 @@ jobs:
 
 ```bash
 # From within dry-rs:
-cargo run -p dry4rs -- --src crates --format json
+cargo run -p dry4rs -- report crates --format json
 ```
 
 Mokumo CI consumes dry-rs via the composite action published from
-this repo (lands at PR 9):
+this repo:
 
 ```yaml
-- uses: actions/checkout@v4
-- uses: breezy-bays-labs/dry-rs/.github/actions/scorecard@v0.1.0
+- uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
   with:
-    src: crates
-    config: dry4rs.toml
+    persist-credentials: false
+- uses: breezy-bays-labs/dry-rs/.github/actions/scorecard@<sha>  # pin to a dry-rs release SHA
+  with:
+    paths: crates/
+    extensions: 'rs'
+    threshold: '0.85'
 ```
 
 The action builds `dry4rs` from the pinned ref on every run. v1.0 adds
