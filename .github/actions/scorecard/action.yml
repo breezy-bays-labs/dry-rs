@@ -11,11 +11,13 @@ description: |
   invocation. The caller's source tree stays untouched at
   `$GITHUB_WORKSPACE`.
 
-  Security note: all `${{ ... }}` expansions in this file reference
+  Security note: every expression interpolation in this file references
   trusted GitHub Actions context (`github.action_repository`,
   `github.action_ref`, `inputs.*`). Inputs flow through `env:` blocks
   before reaching `run:` so quoted-expansion injection is structurally
-  impossible.
+  impossible. The literal template-syntax token is omitted from this
+  description to prevent GHA's expression engine from evaluating the
+  prose at cross-repo action load (see dry-rs#63).
 
 author: 'Breezy Bays Labs'
 branding:
