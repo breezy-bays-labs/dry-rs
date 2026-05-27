@@ -1,0 +1,164 @@
+# Quick-start dogfood smoke for the templated example at
+# `.github/workflows/examples/dry-scorecard.yml`. Invokes the local
+# scorecard composite action with the SAME inputs the templated example
+# demonstrates, plus four mechanical assertions on the action's outputs.
+#
+# What this smoke catches:
+#
+#   (1) action-liveness drift — the composite action's I/O contract
+#       breaks (output shape changes, exit code regresses with
+#       `fail-on-findings: false`, a previously-defaulted input becomes
+#       required). Surfaced by one of the four assertions below.
+#
+#   (2) smoke-invocation drift — this file's own invocation becomes
+#       invalid (typo in an input key, removed required input). Surfaced
+#       by the action step itself failing.
+#
+# What this smoke does NOT catch:
+#
+#   - drift between this smoke and `examples/dry-scorecard.yml`. The
+#     two files are independently authored; keeping their inputs in
+#     sync is a discipline cost paid by reviewers (or — when it ships —
+#     by the dry-rs#57 sync mechanism). The smoke re-invokes from its
+#     OWN inputs, not the example's, so a divergence between the two
+#     files is invisible here. State this honestly so future readers
+#     do not mistake this smoke for a sync gate.
+#
+# Sibling-coherent with crap-rs `.github/workflows/quick-start-smoke.yml`,
+# scaled down to dry-rs's smaller v0.1 surface (no HTML reporter, no
+# multi-language wrapper, no sticky-comment emission — the action is
+# reporter-agnostic at v0.1; sticky-comment posting is a consumer
+# responsibility per the breadboard's N5 audit-revision note).
+#
+# Distinct from `dry-self` (in `self-test.yml`): dry-self proves the
+# binary works on dry-rs source; this smoke proves the example
+# workflow — the documented usage pattern — stays valid. Both jobs
+# exist for distinct reasons per the breadboard's N10 cohesion note
+# and must NOT be consolidated.
+#
+# Files under `.github/workflows/examples/` are documentation only and
+# do not auto-trigger — GitHub Actions only fires triggers for files
+# DIRECTLY under `.github/workflows/`; subdirectories are ignored. So
+# the templated example's own `pull_request:`/`push:` triggers are
+# dormant inside dry-rs; this file is the trigger that exercises the
+# action against dry-rs's own source.
+#
+# Security note: every `${{ ... }}` expansion in `run:` blocks below
+# references trusted GitHub Actions context only — step outputs from a
+# sibling step in this same workflow (`steps.scorecard.outcome` /
+# `steps.scorecard.outputs.report-path`). Per the same
+# env-then-quote discipline used in `.github/actions/scorecard/action.yml`,
+# these values flow through `env:` before reaching `run:` so the
+# security boundary stays uniform with the action this smoke invokes.
+name: Example workflow smoke
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  example-smoke:
+    name: example-smoke (templated example dogfood)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # Invoke the local composite action with the SAME inputs as the
+      # templated example (`.github/workflows/examples/dry-scorecard.yml`).
+      # The action self-checks out dry-rs source at the action ref into
+      # a side directory and self-builds dry4rs via `cargo build --locked`
+      # — `paths:` is interpreted relative to the caller's
+      # `$GITHUB_WORKSPACE`, which is dry-rs's own checkout here, so
+      # `crates/` resolves to dry-rs's own production source.
+      - name: Invoke dry-scorecard action (mirrors templated example inputs)
+        id: scorecard
+        uses: ./.github/actions/scorecard
+        with:
+          paths: crates/
+          extensions: 'rs'
+          threshold: '0.85'
+          fail-on-findings: 'false'
+
+      # ================================================================
+      # Mechanical assertions on the action's contract.
+      # ================================================================
+      #
+      # Run with `if: always()` so the assertion step executes even when
+      # the action step regresses; this surfaces the most informative
+      # failure mode (e.g., action exited non-zero on a no-fail
+      # invocation — that's a contract regression worth reporting
+      # distinctly from a missing-file failure).
+      #
+      # All four assertions live in one shell step so a single regression
+      # surfaces a single failure with clear context, rather than a
+      # cascade of N consecutive step-level reds.
+      - name: Assertions — action contract holds
+        if: always()
+        env:
+          SCORECARD_OUTCOME: ${{ steps.scorecard.outcome }}
+          REPORT_PATH: ${{ steps.scorecard.outputs.report-path }}
+        run: |
+          set -euo pipefail
+
+          # (a) action step exit code matches expected.
+          #     With `fail-on-findings: 'false'`, the action MUST exit 0
+          #     regardless of whether matches surface — that is the
+          #     measurement-only contract. A non-success outcome here is
+          #     either a binary regression (dry4rs panicked / build
+          #     failed) or a contract regression (the gate-on-findings
+          #     posture broke).
+          if [ "$SCORECARD_OUTCOME" != "success" ]; then
+            echo "::error::action step outcome was '$SCORECARD_OUTCOME', expected 'success' (fail-on-findings: false should never gate)"
+            exit 1
+          fi
+          echo "(a) action exit code = success ok"
+
+          # (b) `outputs.report-path` surfaces a path AND that path is a
+          #     file present on disk. An empty output or a missing file
+          #     means the action's output wiring regressed (e.g., the
+          #     `report_path=` line dropped from `$GITHUB_OUTPUT`) or
+          #     the artifact write itself failed silently.
+          if [ -z "$REPORT_PATH" ]; then
+            echo "::error::outputs.report-path is empty — action did not surface the report path"
+            exit 1
+          fi
+          if [ ! -f "$REPORT_PATH" ]; then
+            echo "::error::report-path '$REPORT_PATH' is not a file (action did not write the JSON envelope)"
+            exit 1
+          fi
+          REPORT_BYTES=$(wc -c <"$REPORT_PATH")
+          echo "(b) report-path '$REPORT_PATH' exists (${REPORT_BYTES} bytes) ok"
+
+          # (c) the file parses as JSON. `jq .` exits non-zero on a parse
+          #     error; redirecting stdout discards the pretty-printed
+          #     output (the workflow log already shows the bytes above).
+          #     Catches the case where the binary writes a corrupted /
+          #     empty / partial envelope but exits 0.
+          if ! jq . "$REPORT_PATH" >/dev/null; then
+            echo "::error::JSON envelope at '$REPORT_PATH' did not parse as JSON"
+            exit 1
+          fi
+          echo "(c) JSON envelope parses ok"
+
+          # (d) at least one of `schema_version` / `result` / `view` is a
+          #     top-level key. Locks the nested-envelope contract per
+          #     adr-nested-json-envelope.md without freezing the exact
+          #     shape — if the schema bumps and `result` rearranges into
+          #     `result.summary` only, the `view` and `schema_version`
+          #     slots remain. Catches a regression where the binary
+          #     emits a structurally-valid JSON object that is NOT the
+          #     dry-rs envelope (e.g., a clap error rendered as JSON
+          #     instead of the report).
+          if ! jq -e 'has("schema_version") or has("result") or has("view")' "$REPORT_PATH" >/dev/null; then
+            echo "::error::JSON envelope at '$REPORT_PATH' is missing all of schema_version, result, view — does not match the dry-rs v0.1 wire envelope"
+            exit 1
+          fi
+          echo "(d) envelope has at least one of schema_version|result|view ok"
