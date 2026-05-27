@@ -1,0 +1,58 @@
+# GHA-semantic lint — catches issues yamllint misses (invalid step
+# inputs, missing required keys, undefined matrix references, untrusted
+# expression injection, etc.). Per CQO F3 plan audit
+# (`ops/workspace/dry-rs/20260526-18-ci-ergonomics/impl-plan.md`).
+#
+# Implementation note: actionlint is fetched + executed via the
+# upstream download script. Three earlier attempts to use `uses:`
+# refs failed on this PR:
+#
+#   1. `docker://rhysd/actionlint:1.7.12@sha256:<digest>` — GHA's
+#      Docker-ref parser rejects tag+digest concatenation.
+#   2. `docker://rhysd/actionlint@sha256:<digest>` — digest-only
+#      Docker refs are also rejected at workflow parse time.
+#   3. `reviewdog/action-actionlint@<sha>` — repo's `allowed_actions:
+#      "selected"` allowlist (18 patterns) does not include
+#      reviewdog/*. Adding it would require repo-settings access.
+#
+# The download script avoids the allowlist entirely (no `uses:` ref
+# for actionlint itself) and pins version via the URL tag (`v1.7.12`)
+# + the version argument. The script's outputs.executable is a
+# step-internal filepath, not user input — no injection vector.
+name: actionlint
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download actionlint
+        id: get_actionlint
+        run: bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+
+      - name: Run actionlint
+        # `executable` is a step-internal filepath emitted by the
+        # upstream download script; not user input. Route it through
+        # `env:` per zizmor `template-injection` audit + the org-wide
+        # workflow-injection guideline (no `${{ ... }}` directly in
+        # `run:` bodies).
+        env:
+          ACTIONLINT_BIN: ${{ steps.get_actionlint.outputs.executable }}
+        run: |
+          "$ACTIONLINT_BIN" -color
