@@ -126,7 +126,16 @@ runs:
     # `Cargo.lock`.
     - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:
-        workspaces: __dry-rs-source -> __dry-rs-source/target
+        # Swatinem's `workspaces:` second value is RELATIVE TO the
+        # crate root (not to GITHUB_WORKSPACE). The previous form
+        # `__dry-rs-source -> __dry-rs-source/target` resolved the cache
+        # target as `__dry-rs-source/__dry-rs-source/target` (doubled
+        # path), AND set CARGO_TARGET_DIR to the doubled path — which
+        # meant cargo wrote the binary somewhere the subsequent
+        # `ls target/release/dry4rs` (relative to crate root) could not
+        # find. dry-rs#59 PR thread has the full diagnosis. The default
+        # target (`target` relative to crate root) is what we want.
+        workspaces: __dry-rs-source
         key: dry-rs-scorecard-${{ github.action_ref }}
 
     # Build the dry4rs binary from the action ref. `--locked` ensures
