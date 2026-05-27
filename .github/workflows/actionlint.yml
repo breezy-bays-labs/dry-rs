@@ -54,4 +54,5 @@ jobs:
         # `run:` bodies).
         env:
           ACTIONLINT_BIN: ${{ steps.get_actionlint.outputs.executable }}
-        run: "$ACTIONLINT_BIN" -color
+        run: |
+          "$ACTIONLINT_BIN" -color
