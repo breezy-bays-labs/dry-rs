@@ -1,0 +1,38 @@
+# Templated dry-scorecard workflow — copy this file into your repo's
+# `.github/workflows/` directory, change `paths:` to point at your
+# crates, push, done.
+#
+# This file lives at `.github/workflows/examples/` (subdirectory) so
+# GitHub Actions does NOT auto-trigger it inside this repo. Workflow
+# triggers only fire for files DIRECTLY under `.github/workflows/` —
+# subdirectories are documentation. dry-rs's own dogfood smoke at
+# `.github/workflows/example-smoke.yml` (lands in dry-rs#59) invokes
+# the action with identical inputs to keep this file mechanically
+# honest.
+name: dry Scorecard
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scorecard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: breezy-bays-labs/dry-rs/.github/actions/scorecard@<sha>  # pin to a dry-rs release SHA
+        with:
+          paths: crates/
+          extensions: 'rs'
+          threshold: '0.85'
+          # Start with 'false' to observe signal. Promote to 'true' once a clean
+          # baseline is established — see README "Getting started" note.
+          fail-on-findings: 'false'

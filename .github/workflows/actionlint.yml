@@ -1,0 +1,33 @@
+# GHA-semantic lint — catches issues yamllint misses (invalid step
+# inputs, missing required keys, undefined matrix references, untrusted
+# expression injection, etc.). Per CQO F3 plan audit
+# (`ops/workspace/dry-rs/20260526-18-ci-ergonomics/impl-plan.md`).
+#
+# Implementation note: `rhysd/actionlint` is a CLI, not a JS/composite
+# GitHub Action — no `action.yml` lives at the repo root. We pin the
+# upstream Docker image by digest, which preserves SHA-pinning
+# discipline (zizmor + supply-chain) and is one of two patterns the
+# upstream README officially documents.
+name: actionlint
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Run actionlint
+        uses: docker://rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: -color

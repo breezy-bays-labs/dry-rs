@@ -1,5 +1,8 @@
 # dry-rs
 
+[![CI](https://github.com/breezy-bays-labs/dry-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/breezy-bays-labs/dry-rs/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+
 Structural duplication detector — Rust workspace.
 
 ```text
@@ -93,6 +96,57 @@ shapeable display projection. Multi-score envelope shape locked at
 v0.1 with null defaults — `score`, `structural_score`, `rename_count`,
 `rename_density` per finding (v0.1 fills only `score`; v0.2+ fills the
 others without changing shape).
+
+## Quick start
+
+Drop the workflow below into a Rust repo at `.github/workflows/dry-scorecard.yml` and dry-rs runs structural-duplication analysis on every PR + push to `main`. The action checks out, builds dry4rs from a pinned source ref, scans the paths you point it at, and writes a JSON envelope + text summary to the step summary.
+
+```yaml
+# Templated dry-scorecard workflow — copy this file into your repo's
+# `.github/workflows/` directory, change `paths:` to point at your
+# crates, push, done.
+#
+# This file lives at `.github/workflows/examples/` (subdirectory) so
+# GitHub Actions does NOT auto-trigger it inside this repo. Workflow
+# triggers only fire for files DIRECTLY under `.github/workflows/` —
+# subdirectories are documentation. dry-rs's own dogfood smoke at
+# `.github/workflows/example-smoke.yml` (lands in dry-rs#59) invokes
+# the action with identical inputs to keep this file mechanically
+# honest.
+name: dry Scorecard
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scorecard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: breezy-bays-labs/dry-rs/.github/actions/scorecard@<sha>  # pin to a dry-rs release SHA
+        with:
+          paths: crates/
+          extensions: 'rs'
+          threshold: '0.85'
+          # Start with 'false' to observe signal. Promote to 'true' once a clean
+          # baseline is established — see README "Getting started" note.
+          fail-on-findings: 'false'
+```
+
+> **Today**: Rust source analysis via syn. TypeScript support tracked at dry4ts (v0.6+).
+
+> **v0.x build-time cost**: this action self-builds dry4rs from source on every invocation (~1-2 minutes). Per-crate v1.0 unlocks the binstall path.
+
+> **Getting started**: start with `fail-on-findings: 'false'` to observe signal. Promote to `'true'` once you're happy with the baseline.
 
 ## Usage (v0.x — internal only)
 
