@@ -47,4 +47,11 @@ jobs:
         run: bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
 
       - name: Run actionlint
-        run: ${{ steps.get_actionlint.outputs.executable }} -color
+        # `executable` is a step-internal filepath emitted by the
+        # upstream download script; not user input. Route it through
+        # `env:` per zizmor `template-injection` audit + the org-wide
+        # workflow-injection guideline (no `${{ ... }}` directly in
+        # `run:` bodies).
+        env:
+          ACTIONLINT_BIN: ${{ steps.get_actionlint.outputs.executable }}
+        run: "$ACTIONLINT_BIN" -color
