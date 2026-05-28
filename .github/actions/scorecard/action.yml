@@ -58,14 +58,16 @@ inputs:
       `dry-rs-report.json`. Surfaced on `outputs.report-path`.
     required: false
     default: 'dry-rs-report.json'
-  extensions:
-    description: |
-      Space-separated list of file extensions to include (without the
-      leading dot — `rs`, `ts`). Empty (the default) leaves the dry4rs
-      adapter's compiled-in default in charge — for `dry4rs` that is
-      the syn normalizer's `rs` allowlist.
-    required: false
-    default: ''
+  # `extensions:` input was originally exposed here at V1 (PR #61) but the
+  # wiring was never hooked into the dry4rs CLI — the binary has no
+  # `--extensions` flag (the normalizer's allowlist is compiled-in:
+  # `.rs` for the syn adapter). Splicing `--extensions <ext>` into
+  # `dry4rs report` crashed cross-repo invocations with `unexpected
+  # argument`. Removed at v0.1 (dry-rs#66); re-introduced at v0.2+ in
+  # concert with a real `--extensions` flag on the CLI, alongside the
+  # dry4ts adapter (v0.6+) where the multi-extension surface actually
+  # bites. Consumers MUST drop the input from their workflow YAML.
+
   fail-on-findings:
     description: |
       When `true` (the default), the action exits non-zero if dry4rs's
@@ -198,7 +200,6 @@ runs:
         DRY_THRESHOLD: ${{ inputs.threshold }}
         DRY_FORMAT: ${{ inputs.format }}
         DRY_OUTPUT_PATH: ${{ inputs.output-path }}
-        DRY_EXTENSIONS: ${{ inputs.extensions }}
         DRY_FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings }}
         # Route action_ref through env too so EVERY interpolation in
         # this `run:` block follows the same env-then-quote discipline.
@@ -226,16 +227,11 @@ runs:
         # shellcheck disable=SC2086
         set -- $DRY_PATHS
 
-        # Extension flag is only emitted when the caller set one;
-        # passing an empty string would trigger clap's value-validation
-        # error.
-        ext_args=()
-        if [ -n "$DRY_EXTENSIONS" ]; then
-          # shellcheck disable=SC2086
-          for ext in $DRY_EXTENSIONS; do
-            ext_args+=(--extensions "$ext")
-          done
-        fi
+        # `--extensions` flag was originally spliced here at V1 from the
+        # `extensions:` input. Removed at v0.1 (dry-rs#66) because the
+        # dry4rs CLI has no such flag; the syn normalizer's allowlist
+        # (`.rs`) is compiled in. Forward compat for v0.2+ tracked in
+        # the action.yml input-list comment block.
 
         # Stay in the caller's workspace so emitted FormRef.file paths
         # are relative to the caller's checkout (not to
@@ -249,7 +245,6 @@ runs:
           --format json \
           --threshold "$DRY_THRESHOLD" \
           --no-fail \
-          "${ext_args[@]}" \
           "$@" \
           > "$DRY_OUTPUT_PATH"
 
@@ -291,7 +286,6 @@ runs:
             --format text \
             --threshold "$DRY_THRESHOLD" \
             --no-fail \
-            "${ext_args[@]}" \
             "$@" || true
           echo '```'
           echo "</details>"
