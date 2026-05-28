@@ -122,10 +122,15 @@ fn discover_fixtures() -> Vec<PathBuf> {
         .unwrap_or_else(|e| panic!("read examples root {}: {e}", root.display()));
 
     let mut fixtures: Vec<PathBuf> = Vec::new();
+    // Use `DirEntry::file_type()` instead of `PathBuf::is_dir()` —
+    // the latter performs a per-entry `stat` syscall (`is_dir` queries
+    // the filesystem after the read_dir batch), while `file_type()` is
+    // typically already cached from the readdir result. Same pattern
+    // throughout this function.
     let mut tier_dirs: Vec<PathBuf> = tier_entries
         .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
         .map(|e| e.path())
-        .filter(|p| p.is_dir())
         .collect();
     tier_dirs.sort();
 
@@ -134,8 +139,8 @@ fn discover_fixtures() -> Vec<PathBuf> {
             .unwrap_or_else(|e| panic!("read tier dir {}: {e}", tier_dir.display()));
         let mut fixture_dirs: Vec<PathBuf> = fixture_entries
             .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
             .map(|e| e.path())
-            .filter(|p| p.is_dir())
             .collect();
         fixture_dirs.sort();
         for fixture_dir in fixture_dirs {
@@ -205,11 +210,13 @@ fn run_dry4rs_against(fixture_dir: &Path) -> Value {
             manifest.display()
         )
     });
-    // Append a `/` so the path is recognized as a directory by the
-    // walker; not strictly required but matches the documented
-    // invocation pattern.
-    let relative_str = format!("{}/", relative.display());
 
+    // Pass the relative path directly via `Command::arg`, NOT via
+    // `format!("{}/", relative.display())`. On Windows the `display()`
+    // string uses backslashes; concatenating a forward-slash trailing
+    // separator produces a mixed-separator path that breaks on the
+    // walker side. Letting `Command::arg(&Path)` handle the OsStr
+    // round-trip keeps the spawned argument platform-native.
     let output = Command::new(env!("CARGO"))
         .current_dir(&manifest)
         .args([
@@ -224,8 +231,8 @@ fn run_dry4rs_against(fixture_dir: &Path) -> Value {
             "json",
             "--no-fail",
             "--include-ignored",
-            &relative_str,
         ])
+        .arg(relative)
         .output()
         .unwrap_or_else(|e| panic!("spawn cargo run dry4rs: {e}"));
 
@@ -430,9 +437,20 @@ fn tier_sort_key(tier_prefix: &str) -> u32 {
 ///
 /// Table rows are matched by the leading pipe + path-shape. The
 /// header row, separator row, and prose lines are filtered out.
-fn parse_expected_md_paths() -> Option<Vec<(String, String)>> {
+///
+/// Panics if `EXPECTED.md` is missing or unreadable. `EXPECTED.md` is
+/// a permanent corpus artifact (per ADR-4); its absence is a real
+/// regression, not a fixture-in-progress state. Silently no-oping
+/// the sort lint when the file is missing would let an accidental
+/// delete or rename ship undetected.
+fn parse_expected_md_paths() -> Vec<(String, String)> {
     let md_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("EXPECTED.md");
-    let text = fs::read_to_string(&md_path).ok()?;
+    let text = fs::read_to_string(&md_path).unwrap_or_else(|e| {
+        panic!(
+            "read {}: {e} — EXPECTED.md is a required corpus artifact per ADR-4",
+            md_path.display()
+        )
+    });
     let mut paths: Vec<(String, String)> = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim();
@@ -473,7 +491,7 @@ fn parse_expected_md_paths() -> Option<Vec<(String, String)>> {
         }
         paths.push((tier, fixture));
     }
-    Some(paths)
+    paths
 }
 
 /// The canonical comparator for EXPECTED.md rows: sort by
@@ -488,23 +506,20 @@ fn sort_key(row: &(String, String)) -> (u32, String, String) {
 /// Assert the catalogue table in EXPECTED.md is sorted by
 /// `(tier_number, fixture_path_lex)` with `edge_cases` last.
 ///
-/// EXPECTED.md may not exist yet — Stage 2.6 lands it. When absent,
-/// this test no-ops (returns the empty case from
-/// `parse_expected_md_paths` and asserts on a length-0 vec, which is
-/// trivially sorted). Once EXPECTED.md exists, the lint activates.
+/// Per ADR-4, `EXPECTED.md` is a permanent corpus artifact; its
+/// absence panics in `parse_expected_md_paths` rather than allowing
+/// the lint to silently no-op (which would let an accidental delete
+/// or rename ship undetected). An empty table (file present but no
+/// rows) is also a hard failure — every fixture must carry a
+/// catalogue row.
 #[test]
 fn expected_md_table_is_sorted() {
-    let Some(rows) = parse_expected_md_paths() else {
-        // EXPECTED.md missing — pre-Stage-2.6 state; lint is vacuous.
-        return;
-    };
-    if rows.is_empty() {
-        // Table parsed but contained no fixture rows — possibly
-        // EXPECTED.md exists but hasn't been populated yet. Treat as
-        // vacuous; the fixture-envelope test still catches actual
-        // corpus regressions.
-        return;
-    }
+    let rows = parse_expected_md_paths();
+    assert!(
+        !rows.is_empty(),
+        "EXPECTED.md contains no fixture rows — every discovered fixture must \
+         have a catalogue row per ADR-4"
+    );
 
     let mut sorted = rows.clone();
     sorted.sort_by_key(sort_key);

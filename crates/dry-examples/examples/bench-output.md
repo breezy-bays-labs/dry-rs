@@ -23,12 +23,6 @@ nag (`::warning::` after 30 days).
 
 | Tier | Fixture | dry4rs | similarity-rs |
 |------|---------|--------|---------------|
-| edge_cases | `async_vs_sync_same_body/` | review_first @ 0.882 | 83.82% |
-| edge_cases | `cross_file_duplicate/` | review_first @ 0.9 | no match |
-| edge_cases | `doctest_duplicates/` | no match | no match |
-| edge_cases | `generic_with_different_bounds/` | no match | 83.17% |
-| edge_cases | `macro_expansion_duplicate/` | no match | no match |
-| edge_cases | `trait_impl_vs_free_fn/` | no match | 75.76% |
 | tier_1_exact | `identical_async_fns/` | review_first @ 0.913 | 92.62% |
 | tier_1_exact | `identical_method_bodies/` | no match | 99.25% |
 | tier_1_exact | `identical_signatures/` | review_first @ 0.857 | 76.59% |
@@ -43,6 +37,12 @@ nag (`::warning::` after 30 days).
 | tier_4_false_positive_bait | `similar_signatures_different_bodies/` | no match | no match |
 | tier_5_algorithmic | `iterative_vs_recursive_factorial/` | no match | 76.70% |
 | tier_5_algorithmic | `sort_via_quicksort_vs_mergesort/` | no match | 83.80% |
+| edge_cases | `async_vs_sync_same_body/` | review_first @ 0.882 | 83.82% |
+| edge_cases | `cross_file_duplicate/` | review_first @ 0.9 | no match |
+| edge_cases | `doctest_duplicates/` | no match | no match |
+| edge_cases | `generic_with_different_bounds/` | no match | 83.17% |
+| edge_cases | `macro_expansion_duplicate/` | no match | no match |
+| edge_cases | `trait_impl_vs_free_fn/` | no match | 75.76% |
 
 ## Reading the verdicts
 

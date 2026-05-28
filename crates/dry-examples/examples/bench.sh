@@ -73,6 +73,12 @@ dry4rs_verdict() {
     local relative
     relative="${fixture_dir#$CRATE_DIR/}"
     local envelope
+    # Leave stderr unredirected: `cargo run --quiet` already suppresses
+    # the normal cargo status output, so anything that DOES surface
+    # (compile errors, dry4rs panics, exit-code-bearing diagnostics)
+    # is real signal that should reach the shell — silencing it would
+    # turn cryptic `jq` parse failures into the only visible symptom
+    # of a broken build.
     envelope=$(
         cd "$CRATE_DIR" &&
         cargo run --quiet --locked -p dry4rs -- \
@@ -80,7 +86,7 @@ dry4rs_verdict() {
             --format json \
             --no-fail \
             --include-ignored \
-            "${relative}/" 2>/dev/null
+            "${relative}/"
     )
     # `jq -r` on the highest-score match. Empty matches array → "no match".
     echo "$envelope" | jq -r '
@@ -167,9 +173,24 @@ nag (\`::warning::\` after 30 days).
 |------|---------|--------|---------------|
 HEADER
 
-# Iterate tier dirs first (sorted), then fixtures within each.
-for tier_dir in $(find "$EXAMPLES_DIR" -mindepth 1 -maxdepth 1 -type d | sort); do
-    tier_name="$(basename "$tier_dir")"
+# Hardcode the tier order per ADR-4: `tier_1_exact` < `tier_2_renamed`
+# < `tier_3_reordered` < `tier_4_false_positive_bait` < `tier_5_algorithmic`
+# < `edge_cases`. The same ordering drives the EXPECTED.md sort lint;
+# this list is the bench-side mirror so both tables share their row
+# order by construction. A `find | sort` would put `edge_cases` first
+# (ASCII-lexicographic), which would diverge from the catalogue.
+TIERS=(
+    "tier_1_exact"
+    "tier_2_renamed"
+    "tier_3_reordered"
+    "tier_4_false_positive_bait"
+    "tier_5_algorithmic"
+    "edge_cases"
+)
+
+for tier_name in "${TIERS[@]}"; do
+    tier_dir="$EXAMPLES_DIR/$tier_name"
+    [ -d "$tier_dir" ] || continue
     for fixture_dir in $(find "$tier_dir" -mindepth 1 -maxdepth 1 -type d | sort); do
         fixture_name="$(basename "$fixture_dir")"
         # Skip directories that have no .rs files (defensive against
