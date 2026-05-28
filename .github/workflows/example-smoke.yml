@@ -14,6 +14,15 @@
 #       invalid (typo in an input key, removed required input). Surfaced
 #       by the action step itself failing.
 #
+#   (3) cross-platform path-resolution drift — the action navigates from
+#       `$GITHUB_ACTION_PATH` up to the dry-rs repo root via three `..`
+#       segments (`scorecard → actions → .github → root`). A future
+#       refactor that moves the action's directory or breaks the
+#       runner-OS path semantics shows up here on the next CI run, not
+#       three weeks later in mokumo. (Linux runs here; Windows is
+#       covered by dry-rs#63's path-quoting fix landed in commit
+#       `30d8a01`.)
+#
 # What this smoke does NOT catch:
 #
 #   - drift between this smoke and `examples/dry-scorecard.yml`. The
@@ -23,6 +32,16 @@
 #     OWN inputs, not the example's, so a divergence between the two
 #     files is invisible here. State this honestly so future readers
 #     do not mistake this smoke for a sync gate.
+#
+#   - cross-repo template-eval bugs — when GHA's action-loader template
+#     engine evaluates expressions in the composite action's metadata
+#     blocks at cross-repo load time. These reproduce ONLY on the
+#     remote `@<sha>` invocation path that consumer repos use; local
+#     `./` invocation here loads the action in-place and sidesteps the
+#     loader pass. V3 (mokumo Tier 1) is the cross-repo canary by
+#     design. The original `${{ ... }}` description-block bug fixed in
+#     PR #64 / commit `fc60284` was discovered through V3's mokumo CI;
+#     a smoke that runs only in dry-rs cannot catch this class.
 #
 # Sibling-coherent with crap-rs `.github/workflows/quick-start-smoke.yml`,
 # scaled down to dry-rs's smaller v0.1 surface (no HTML reporter, no
@@ -73,11 +92,13 @@ jobs:
 
       # Invoke the local composite action with the SAME inputs as the
       # templated example (`.github/workflows/examples/dry-scorecard.yml`).
-      # The action self-checks out dry-rs source at the action ref into
-      # a side directory and self-builds dry4rs via `cargo build --locked`
-      # — `paths:` is interpreted relative to the caller's
-      # `$GITHUB_WORKSPACE`, which is dry-rs's own checkout here, so
-      # `crates/` resolves to dry-rs's own production source.
+      # The action navigates from `$GITHUB_ACTION_PATH` up three levels
+      # to the dry-rs repo root (per the structural fix in PR #65 /
+      # commit `e7eca78`) and self-builds dry4rs via
+      # `cargo build --release -p dry4rs --locked` from there. `paths:`
+      # is interpreted relative to the caller's `$GITHUB_WORKSPACE`,
+      # which is dry-rs's own checkout here, so `crates/` resolves to
+      # dry-rs's own production source.
       - name: Invoke dry-scorecard action (mirrors templated example inputs)
         id: scorecard
         uses: ./.github/actions/scorecard
