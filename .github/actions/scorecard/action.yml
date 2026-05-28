@@ -125,13 +125,34 @@ runs:
     # by Swatinem cache, build, and binary-invocation steps below.
     # `cd … && pwd` collapses any `..` segments so downstream consumers
     # see a clean absolute path with no fragile path arithmetic.
+    #
+    # Cross-platform notes:
+    # - `pwd` under Git Bash on Windows returns a POSIX-style path
+    #   (e.g. `/d/a/dry-rs/dry-rs`). Native Windows tools and Node.js
+    #   (Swatinem/rust-cache) prefer Windows-style paths. `pwd -W`
+    #   produces the Windows form (`D:/a/dry-rs/dry-rs`) under Git Bash.
+    # - dry4rs's compiled binary carries a `.exe` suffix on Windows.
+    #   `exe_ext` is the platform-specific suffix to splice onto the
+    #   binary path in downstream steps.
     - name: Resolve dry-rs source root
       id: paths
       shell: bash
       run: |
-        DRY_ROOT="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)"
-        echo "dry_root=$DRY_ROOT" >> "$GITHUB_OUTPUT"
+        set -euo pipefail
+        cd "$GITHUB_ACTION_PATH/../../.."
+        if [ "${RUNNER_OS:-}" = "Windows" ]; then
+          DRY_ROOT="$(pwd -W)"
+          EXE_EXT=".exe"
+        else
+          DRY_ROOT="$(pwd)"
+          EXE_EXT=""
+        fi
+        {
+          echo "dry_root=$DRY_ROOT"
+          echo "exe_ext=$EXE_EXT"
+        } >> "$GITHUB_OUTPUT"
         echo "Resolved dry-rs root: $DRY_ROOT"
+        echo "Executable extension: '$EXE_EXT'"
 
     # Cache the dry-rs build artifacts under a per-action-ref key so
     # repeated invocations don't re-download the dependency tree. The
@@ -156,11 +177,12 @@ runs:
       shell: bash
       env:
         DRY_ROOT: ${{ steps.paths.outputs.dry_root }}
+        EXE_EXT: ${{ steps.paths.outputs.exe_ext }}
       run: |
         set -euo pipefail
         cd "$DRY_ROOT"
         cargo build --release -p dry4rs --locked
-        ls -l target/release/dry4rs
+        ls -l "target/release/dry4rs${EXE_EXT}"
 
     # Run the binary against caller-supplied paths. Inputs flow through
     # `env:` rather than direct `${{ }}` interpolation so a path
@@ -171,7 +193,7 @@ runs:
       id: run
       shell: bash
       env:
-        DRY_BIN: ${{ steps.paths.outputs.dry_root }}/target/release/dry4rs
+        DRY_BIN: ${{ steps.paths.outputs.dry_root }}/target/release/dry4rs${{ steps.paths.outputs.exe_ext }}
         DRY_PATHS: ${{ inputs.paths }}
         DRY_THRESHOLD: ${{ inputs.threshold }}
         DRY_FORMAT: ${{ inputs.format }}
