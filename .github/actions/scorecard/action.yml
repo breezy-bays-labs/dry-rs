@@ -308,7 +308,7 @@ runs:
 
         by_crate_md=$(jq -r '
           def fmt2: . as $w
-            | ($w * 100 | floor) as $h
+            | ($w * 100 | round) as $h
             | if $h >= 100 then "1.00"
               elif $h >= 10 then "0.\($h)"
               else "0.0\($h)"
@@ -318,6 +318,7 @@ runs:
               | . as $m
               | ($m.forms
                  | map(.file
+                       | gsub("\\\\"; "/")
                        | split("/")
                        | if .[0] == "crates" and length > 1 then .[1] else "<unknown>" end)
                  | unique) as $crates
