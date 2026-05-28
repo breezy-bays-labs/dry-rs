@@ -31,7 +31,6 @@ jobs:
       - uses: breezy-bays-labs/dry-rs/.github/actions/scorecard@<sha>  # pin to a dry-rs release SHA
         with:
           paths: crates/
-          extensions: 'rs'
           threshold: '0.85'
           # Start with 'false' to observe signal. Promote to 'true' once a clean
           # baseline is established — see README "Getting started" note.
