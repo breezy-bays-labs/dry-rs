@@ -1,0 +1,135 @@
+name: Refresh cross-tool bench
+
+# Manual-trigger workflow that regenerates
+# `crates/dry-examples/examples/bench-output.md` and opens a PR with
+# the refresh. Workflow_dispatch only — no `on: push`, no
+# `on: pull_request`, no `on: schedule`.
+#
+# Per ADR-8 (`ops/decisions/dry-rs/adr-dry-examples-corpus.md`), the
+# bench artifact backs marketing claims and is NOT a per-PR gate.
+# Auto-refresh on every PR would (a) churn the file constantly,
+# (b) require installing similarity-rs in every runner, and
+# (c) defeat the "this is the official empirical comparison"
+# positioning. The corpus-smoke job carries a passive staleness nag
+# that emits `::warning::` when bench-output.md's `last_refreshed:`
+# is more than 30 days old; the maintainer triggers this workflow in
+# response.
+#
+# The workflow installs similarity-rs via `cargo install --locked`
+# (slow but reliable; `taiki-e/install-action` doesn't carry a
+# similarity-rs entry yet). The bench script handles the absence of
+# similarity-rs gracefully (TBD column) but here we expect it to be
+# present.
+#
+# Security note: every `${{ ... }}` expansion in this file references
+# trusted GitHub context only (`github.run_id` — an integer set by
+# the workflow runtime; not user-controlled). All such references
+# flow through `env:` per the org-wide env-then-quote convention
+# (`.github/workflows/example-smoke.yml` carries the same pattern).
+# `peter-evans/create-pull-request` is the only action touching write
+# scopes; permissions are job-scoped to `contents: write` +
+# `pull-requests: write`.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TARGET_DIR: target
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  refresh:
+    name: Refresh bench-output.md
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      # Flow trusted-context expansions through env per the org's
+      # injection-defense convention. `github.run_id` is a numeric
+      # GitHub-set value, not user input, but the discipline of
+      # always routing `${{ ... }}` through env keeps the security
+      # boundary uniform with the rest of the repo's workflows.
+      RUN_ID: ${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: true
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # tracks @stable branch
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: dry-rs
+
+      # similarity-rs is the cross-tool comparison target. `cargo
+      # install --locked` is slow (~2 min cold) but reliable.
+      # `taiki-e/install-action` does not carry a similarity-rs entry
+      # at this writing; if it adds one, swap in.
+      - name: Install similarity-rs
+        run: cargo install similarity-rs --locked
+
+      # Build dry4rs once so `cargo run -p dry4rs` inside bench.sh
+      # doesn't pay a cold compile per fixture. The bench script
+      # uses `cargo run` not the bin directly because the script is
+      # designed for both CI and local use; warming the cache is the
+      # right tradeoff in CI.
+      - name: Build dry4rs
+        run: cargo build --release --locked -p dry4rs
+
+      - name: Regenerate bench-output.md
+        run: |
+          set -euo pipefail
+          bash crates/dry-examples/examples/bench.sh \
+            > crates/dry-examples/examples/bench-output.md
+          # The bench script stamps today's date into the
+          # frontmatter; the resulting file is what the PR will
+          # commit.
+
+      - name: Open refresh PR
+        uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e # v7.0.8
+        with:
+          commit-message: |
+            chore(bench): refresh bench-output.md via workflow_dispatch
+
+            Regenerated `crates/dry-examples/examples/bench-output.md`
+            against the current corpus + the latest similarity-rs.
+
+            Per ADR-8, this artifact is manually refreshed pre-release;
+            this workflow run is the documented mechanism.
+          branch: refresh-bench/run-${{ env.RUN_ID }}
+          delete-branch: true
+          title: "chore(bench): refresh bench-output.md (workflow run ${{ env.RUN_ID }})"
+          body: |
+            ## Summary
+
+            Auto-generated refresh of
+            `crates/dry-examples/examples/bench-output.md`. The
+            `last_refreshed:` frontmatter field is stamped to the run
+            date.
+
+            ## How this was triggered
+
+            Manual `workflow_dispatch` of
+            `.github/workflows/refresh-bench.yml`. Per ADR-8, this
+            artifact backs marketing claims, not gates; it is
+            intentionally NOT refreshed on push/PR/schedule.
+
+            ## Reviewing
+
+            Compare the diff to the previous version. Expect:
+            - `last_refreshed:` date bumped to today.
+            - Per-fixture columns may shift if either dry4rs's
+              normalizer or similarity-rs's algorithm has changed
+              since the prior refresh.
+
+            ## Cross-references
+
+            - ADR: `ops/decisions/dry-rs/adr-dry-examples-corpus.md`
+            - Corpus crate README: `crates/dry-examples/README.md`
