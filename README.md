@@ -87,6 +87,52 @@ emission, plus typed-placeholder normalization:
 dry4rs uses [syn][syn] for Rust source; dry4ts uses [swc][swc] or
 [oxc][oxc] for TypeScript (decided at PR 5 / v0.6).
 
+## What dry-rs catches
+
+A curated corpus of intentional DRY violations lives at
+[`crates/dry-examples/`](crates/dry-examples/README.md). The corpus
+exists to (a) prevent regressions in detection behavior on every PR
+via the `corpus-smoke` CI job and (b) back empirical comparisons
+against competitor tools.
+
+### Catalogue
+
+The full per-fixture table — including verdicts from dry4rs and
+competitor tools — lives in
+[`crates/dry-examples/EXPECTED.md`](crates/dry-examples/EXPECTED.md).
+
+### Cross-tool comparison
+
+The empirical comparison vs `similarity-rs` lives in
+[`crates/dry-examples/examples/bench-output.md`](crates/dry-examples/examples/bench-output.md).
+Refresh: trigger the
+[`refresh-bench`](.github/workflows/refresh-bench.yml)
+workflow_dispatch from the Actions tab.
+
+### Example
+
+The simplest fixture — two free functions with identical bodies,
+differing only in identifier names:
+
+```rust
+// crates/dry-examples/examples/tier_1_exact/identical_signatures/main.rs
+fn add_one(x: i32) -> i32 {
+    let result = x + 1;
+    println!("computed {result}");
+    result
+}
+
+fn increment(value: i32) -> i32 {
+    let result = value + 1;
+    println!("computed {result}");
+    result
+}
+```
+
+dry4rs flags this as `review_first` (Jaccard score ~0.86 after
+typed-placeholder normalization). The exact captured verdict lives
+in the fixture's `expected.json` and is the regression contract.
+
 ## Wire envelope
 
 `--format json` emits a nested envelope with `schema_version` mirroring
