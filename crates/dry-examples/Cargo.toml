@@ -43,9 +43,14 @@ path = "src/lib.rs"
 # Binary spawn target — `CARGO_BIN_EXE_dry4rs` resolves to the
 # release/debug binary path inside test contexts. Pattern mirrors
 # `crates/dry4rs/tests/self_check.rs:75` so the harness invokes the
-# real consumer-facing binary, not a library-level shortcut. Workspace
-# path pin defeats `cargo-deny`'s `wildcards = "deny"` rule.
-dry4rs = { path = "../dry4rs" }
+# real consumer-facing binary, not a library-level shortcut. The
+# `version = "0.1.0"` pin (alongside `path = "../dry4rs"`) defeats
+# `cargo-deny`'s `wildcards = "deny"` rule (deny.toml). Sibling
+# pattern from scrap-examples (scrap-rs#80, 2026-05-27).
+# `publish = false` on this crate means the version pin is not
+# load-bearing for any release path; it exists solely to satisfy
+# cargo-deny.
+dry4rs = { path = "../dry4rs", version = "0.1.0" }
 # `serde_json::Value` powers the round-trip diff between live dry4rs
 # stdout (parsed) and committed `expected.json` (parsed). Workspace
 # pin keeps the version coherent with `dry-core`'s serializer side.
