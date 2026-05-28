@@ -91,6 +91,27 @@ outputs:
       from the JSON envelope via `jq '.result.matches | length'`;
       truthful-gate value (not affected by `--top` / `--only-failing`).
     value: ${{ steps.run.outputs.findings_count }}
+  by-kind-path:
+    description: |
+      Absolute path to a Markdown table rendering matches by
+      (`FormKind`, `Tier`). Rows: `production` / `test` / `doctest`;
+      columns: `auto_refactor` / `review_first` / `advisory` plus a
+      total. Cells use the "any form involved" semantic — matches whose
+      forms span multiple kinds count in each row they touch; row sums
+      can exceed the unfiltered match count. Consumers `cat` this file
+      into a sticky-comment body or render it as documentation. See
+      dry-rs#68.
+    value: ${{ steps.run.outputs.by_kind_path }}
+  by-crate-path:
+    description: |
+      Absolute path to a Markdown table rendering matches by crate.
+      One row per crate parsed from each match's `forms[].file` prefix
+      (`crates/<name>/...`); files outside that layout bucket into
+      `<unknown>`. Columns: match count + worst (highest) score across
+      that crate's matches. Multi-crate matches contribute one row to
+      each crate they touch. Rows sorted descending by match count.
+      See dry-rs#68.
+    value: ${{ steps.run.outputs.by_crate_path }}
 
 runs:
   using: 'composite'
@@ -255,6 +276,73 @@ runs:
         findings_count=$(jq '.result.matches | length' "$DRY_OUTPUT_PATH")
         passed=$(jq -r '.result.passed' "$DRY_OUTPUT_PATH")
 
+        # Aggregate matches by (FormKind, Tier) and by crate. Both
+        # tables use "any form involved" semantics — a match with forms
+        # of mixed kinds (or in multiple crates) contributes one count
+        # to each row it touches. This is honest for reviewer triage
+        # ("how many matches involve test code?") but means row sums
+        # can exceed the total match count. The two tables answer
+        # orthogonal questions to the existing tier-summary; positioning
+        # them in the step summary is additive (the binary's text
+        # reporter still renders unchanged). See dry-rs#68.
+        #
+        # Score formatting matches the dry4rs text reporter's two-decimal
+        # display (`1.00`, `0.85`). Pure jq has no printf-style fixed
+        # precision, so the inline padding ladder produces the same
+        # visual shape.
+        by_kind_md=$(jq -r '
+          .result.matches as $matches
+          | (["production","test","doctest"]) as $kinds
+          | (["auto_refactor","review_first","advisory"]) as $tiers
+          | "| kind | auto_refactor | review_first | advisory | total |",
+            "| --- | ---: | ---: | ---: | ---: |",
+            ( $kinds[] as $k
+              | ( $tiers
+                  | map(. as $t
+                        | $matches
+                        | map(select(.tier == $t
+                                     and any(.forms[]; .kind == $k)))
+                        | length) ) as $row
+              | "| `\($k)` | \($row[0]) | \($row[1]) | \($row[2]) | \(($row | add)) |" )
+        ' "$DRY_OUTPUT_PATH")
+
+        by_crate_md=$(jq -r '
+          def fmt2: . as $w
+            | ($w * 100 | round) as $h
+            | if $h >= 100 then "1.00"
+              elif $h >= 10 then "0.\($h)"
+              else "0.0\($h)"
+              end;
+          .result.matches as $matches
+          | [ $matches[]
+              | . as $m
+              | ($m.forms
+                 | map(.file
+                       | gsub("\\\\"; "/")
+                       | split("/")
+                       | if .[0] == "crates" and length > 1 then .[1] else "<unknown>" end)
+                 | unique) as $crates
+              | $crates[]
+              | {crate: ., score: $m.score} ]
+          | group_by(.crate)
+          | map({crate: .[0].crate, matches: length, worst: (map(.score) | max)})
+          | sort_by(-.matches, .crate)
+          | if length == 0 then "| crate | matches | worst score |", "| --- | ---: | ---: |", "| _(no matches)_ | 0 | — |"
+            else "| crate | matches | worst score |",
+                 "| --- | ---: | ---: |",
+                 (.[] | "| `\(.crate)` | \(.matches) | \(.worst | fmt2) |")
+            end
+        ' "$DRY_OUTPUT_PATH")
+
+        # Persist the rendered tables to RUNNER_TEMP files so callers
+        # can splice them into sticky-comment bodies without
+        # re-implementing the jq aggregations. File-path outputs side-
+        # step the multi-line escaping pain of GHA step outputs.
+        by_kind_path="${RUNNER_TEMP}/dry-rs-by-kind.md"
+        by_crate_path="${RUNNER_TEMP}/dry-rs-by-crate.md"
+        printf '%s\n' "$by_kind_md" > "$by_kind_path"
+        printf '%s\n' "$by_crate_md" > "$by_crate_path"
+
         # Resolve output-path to an absolute path so downstream steps
         # can reference it without re-computing relative-to-workspace
         # arithmetic.
@@ -262,6 +350,8 @@ runs:
         {
           echo "report_path=$report_path"
           echo "findings_count=$findings_count"
+          echo "by_kind_path=$by_kind_path"
+          echo "by_crate_path=$by_crate_path"
         } >> "$GITHUB_OUTPUT"
 
         # Render the human-facing text summary onto the workflow step
@@ -278,6 +368,18 @@ runs:
           echo "- Threshold: \`$DRY_THRESHOLD\`"
           echo "- Findings: \`$findings_count\`"
           echo "- Passed: \`$passed\`"
+          echo ""
+          echo "### Matches by kind × tier"
+          echo ""
+          echo "$by_kind_md"
+          echo ""
+          echo "<sub>Mixed-kind matches count in multiple rows (\"any form involved\" semantic).</sub>"
+          echo ""
+          echo "### Matches by crate"
+          echo ""
+          echo "$by_crate_md"
+          echo ""
+          echo "<sub>Multi-crate matches contribute one row to each crate they touch.</sub>"
           echo ""
           echo "<details><summary>Text report</summary>"
           echo ""
