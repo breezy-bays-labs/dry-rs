@@ -93,20 +93,23 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    # Pull the dry-rs source at the action ref into a side directory.
-    # `github.action_repository` + `github.action_ref` are GitHub
-    # context variables that resolve to "the repo this action lives in
-    # at the SHA the caller pinned" — so a caller pinning
-    # `breezy-bays-labs/dry-rs/.github/actions/scorecard@v0.1.0`
-    # automatically gets the matching source. `path:` keeps the caller's
-    # workspace untouched at `$GITHUB_WORKSPACE`.
-    - name: Checkout dry-rs source at action ref
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      with:
-        repository: ${{ github.action_repository }}
-        ref: ${{ github.action_ref }}
-        path: __dry-rs-source
-        persist-credentials: false
+    # No explicit checkout of dry-rs source. When this composite action
+    # is invoked cross-repo (`uses: breezy-bays-labs/dry-rs/.github/actions/scorecard@<SHA>`),
+    # GitHub Actions auto-downloads the full dry-rs repo at the action
+    # ref to `_work/_actions/breezy-bays-labs/dry-rs/<SHA>/` and exposes
+    # the path via `$GITHUB_ACTION_PATH`. When invoked locally
+    # (`uses: ./.github/actions/scorecard`), the action is read in-place
+    # from `$GITHUB_WORKSPACE/.github/actions/scorecard`. Both modes
+    # resolve `$GITHUB_ACTION_PATH/../../..` to the dry-rs repo root
+    # (3 levels up: scorecard → actions → .github → root).
+    #
+    # An earlier design used `actions/checkout` with
+    # `repository: ${{ github.action_repository }}`. That fails because
+    # `github.action_repository` is scoped to the inner action being
+    # invoked (here `actions/checkout` itself), NOT the composite
+    # action's own repo — so the checkout pulled actions/checkout's
+    # source instead of dry-rs's, and cargo built the wrong workspace.
+    # See dry-rs#63 for the full diagnosis.
 
     # Pull the Rust toolchain. `stable` matches what `ci.yml` uses for
     # every Rust job; pinning to MSRV here would force callers to
@@ -118,6 +121,39 @@ runs:
     # the underlying behavior is "track stable rustc."
     - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # tracks @stable branch
 
+    # Resolve the dry-rs repo root to an absolute path. Used uniformly
+    # by Swatinem cache, build, and binary-invocation steps below.
+    # `cd … && pwd` collapses any `..` segments so downstream consumers
+    # see a clean absolute path with no fragile path arithmetic.
+    #
+    # Cross-platform notes:
+    # - `pwd` under Git Bash on Windows returns a POSIX-style path
+    #   (e.g. `/d/a/dry-rs/dry-rs`). Native Windows tools and Node.js
+    #   (Swatinem/rust-cache) prefer Windows-style paths. `pwd -W`
+    #   produces the Windows form (`D:/a/dry-rs/dry-rs`) under Git Bash.
+    # - dry4rs's compiled binary carries a `.exe` suffix on Windows.
+    #   `exe_ext` is the platform-specific suffix to splice onto the
+    #   binary path in downstream steps.
+    - name: Resolve dry-rs source root
+      id: paths
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "$GITHUB_ACTION_PATH/../../.."
+        if [ "${RUNNER_OS:-}" = "Windows" ]; then
+          DRY_ROOT="$(pwd -W)"
+          EXE_EXT=".exe"
+        else
+          DRY_ROOT="$(pwd)"
+          EXE_EXT=""
+        fi
+        {
+          echo "dry_root=$DRY_ROOT"
+          echo "exe_ext=$EXE_EXT"
+        } >> "$GITHUB_OUTPUT"
+        echo "Resolved dry-rs root: $DRY_ROOT"
+        echo "Executable extension: '$EXE_EXT'"
+
     # Cache the dry-rs build artifacts under a per-action-ref key so
     # repeated invocations don't re-download the dependency tree. The
     # cache key includes `github.action_ref` so a pinned `@v0.1.0` and
@@ -126,7 +162,12 @@ runs:
     # `Cargo.lock`.
     - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:
-        workspaces: __dry-rs-source -> __dry-rs-source/target
+        # Workspace path must point at the dry-rs `Cargo.toml`. For
+        # cross-repo invocations that's the auto-downloaded action repo
+        # under `_work/_actions/breezy-bays-labs/dry-rs/<SHA>/`; for
+        # local invocations it's `$GITHUB_WORKSPACE`. The resolved
+        # absolute path handles both modes uniformly.
+        workspaces: ${{ steps.paths.outputs.dry_root }}
         key: dry-rs-scorecard-${{ github.action_ref }}
 
     # Build the dry4rs binary from the action ref. `--locked` ensures
@@ -134,11 +175,14 @@ runs:
     # resolve to a newer dep version than what the dry-rs PR validated.
     - name: Build dry4rs from action ref
       shell: bash
+      env:
+        DRY_ROOT: ${{ steps.paths.outputs.dry_root }}
+        EXE_EXT: ${{ steps.paths.outputs.exe_ext }}
       run: |
         set -euo pipefail
-        cd __dry-rs-source
+        cd "$DRY_ROOT"
         cargo build --release -p dry4rs --locked
-        ls -l target/release/dry4rs
+        ls -l "target/release/dry4rs${EXE_EXT}"
 
     # Run the binary against caller-supplied paths. Inputs flow through
     # `env:` rather than direct `${{ }}` interpolation so a path
@@ -149,7 +193,7 @@ runs:
       id: run
       shell: bash
       env:
-        DRY_BIN: ${{ github.workspace }}/__dry-rs-source/target/release/dry4rs
+        DRY_BIN: ${{ steps.paths.outputs.dry_root }}/target/release/dry4rs${{ steps.paths.outputs.exe_ext }}
         DRY_PATHS: ${{ inputs.paths }}
         DRY_THRESHOLD: ${{ inputs.threshold }}
         DRY_FORMAT: ${{ inputs.format }}
