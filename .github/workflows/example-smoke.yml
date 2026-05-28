@@ -104,7 +104,12 @@ jobs:
         uses: ./.github/actions/scorecard
         with:
           paths: crates/
-          extensions: 'rs'
+          # `extensions:` intentionally omitted — the action.yml input
+          # is broken at V1 (the `--extensions rs` flag it splices into
+          # the dry4rs CLI does not exist; tracked: dry-rs#66, fix in
+          # PR #67). The default (empty) leaves dry4rs's syn normalizer
+          # compiled-in `rs` allowlist in charge — functionally identical
+          # for this smoke's purpose.
           threshold: '0.85'
           fail-on-findings: 'false'
 
