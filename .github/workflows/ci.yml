@@ -113,7 +113,17 @@ jobs:
       # uncovered lines, but catches the agentic-dev failure mode where
       # a future PR adds 200 lines of code and 30 lines of test. Promote
       # to 90% once comparison-engine + reporter coverage settles.
-      - run: cargo llvm-cov nextest --workspace --locked --fail-under-lines 85 --lcov --output-path lcov.info
+      #
+      # `--exclude dry-examples`: the corpus crate is a curated DRY-
+      # violation fixture set + cross-tool benchmark harness. Its
+      # tests/snapshots.rs spawns dry4rs as a subprocess (via
+      # `cargo run -p dry4rs`), so line coverage of the harness itself
+      # is not informative; and the fixture .rs files under
+      # examples/<tier>/<fixture>/ are PARSED by dry4rs (never
+      # compiled by cargo) so they contribute zero meaningful
+      # coverage to a Rust source measurement.
+      # adr: ops/decisions/dry-rs/adr-dry-examples-corpus.md (ADR-1)
+      - run: cargo llvm-cov nextest --workspace --exclude dry-examples --locked --fail-under-lines 85 --lcov --output-path lcov.info
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lcov
