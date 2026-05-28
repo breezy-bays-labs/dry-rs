@@ -188,3 +188,82 @@ jobs:
             exit 1
           fi
           echo "(d) envelope has at least one of schema_version|result|view ok"
+
+  # ================================================================
+  # corpus-smoke — dry-examples regression gate (ADR-3)
+  # ================================================================
+  #
+  # Target:   `crates/dry-examples/` ONLY (the curated fixture corpus
+  #           + cross-tool benchmark harness).
+  # Mechanism: `cargo nextest run -p dry-examples --locked` exercises
+  #           `tests/snapshots.rs` which spawns the dry4rs binary
+  #           against each fixture and diffs the resulting JSON
+  #           envelope against the committed `expected.json` (after
+  #           sentinel normalization per ADR-5).
+  # Contract: dry4rs's DETECTION BEHAVIOR matches each fixture's
+  #           recorded expectation. Catches regressions in the
+  #           normalizer, comparison engine, threshold-tier routing,
+  #           and JSON envelope shape against curated inputs.
+  #
+  # Orthogonal to the `example-smoke` job above: that job exercises
+  # the composite action's I/O contract against production-shaped
+  # code; this job exercises dry4rs's detection contract against
+  # curated fixtures. Per ADR-3, both jobs stay — they measure
+  # different surfaces.
+  #
+  # Staleness nag: parses `bench-output.md`'s `last_refreshed:`
+  # frontmatter and emits `::warning::` when the date is more than 30
+  # days old. Maintainer-visible passive drift detection without the
+  # cost of a scheduled job. Per ADR-8.
+  corpus-smoke:
+    name: corpus-smoke (dry-examples fixture regression gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # tracks @stable branch
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: dry-rs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2
+        with:
+          tool: cargo-nextest@0.9
+      # The harness invokes dry4rs via `cargo run -p dry4rs --` inside
+      # the test process (cross-package, so `CARGO_BIN_EXE_dry4rs` is
+      # unavailable — cargo PR #8038). Building it ahead-of-time
+      # ensures the per-fixture spawn doesn't pay a cold compile.
+      - name: Build dry4rs (warm cache for harness spawns)
+        run: cargo build --locked -p dry4rs
+      - name: Run dry-examples snapshot harness
+        run: cargo nextest run -p dry-examples --locked
+
+      # Staleness nag for the cross-tool bench. Parses the
+      # `last_refreshed:` frontmatter date and emits `::warning::` if
+      # older than 30 days. Skipped (silently) when the file is
+      # missing — the corpus may not always ship the bench artifact.
+      - name: bench-output.md staleness nag
+        run: |
+          set -euo pipefail
+          BENCH_FILE="crates/dry-examples/examples/bench-output.md"
+          if [ ! -f "$BENCH_FILE" ]; then
+            echo "::notice::bench-output.md missing — skipping staleness nag"
+            exit 0
+          fi
+          # Extract last_refreshed: YYYY-MM-DD from the YAML
+          # frontmatter (first 10 lines is plenty).
+          LAST=$(head -n 10 "$BENCH_FILE" | sed -nE 's/^last_refreshed:[[:space:]]*([0-9]{4}-[0-9]{2}-[0-9]{2}).*/\1/p' | head -n 1)
+          if [ -z "$LAST" ]; then
+            echo "::warning file=$BENCH_FILE::bench-output.md missing 'last_refreshed:' frontmatter field — refresh-bench.yml workflow_dispatch sets this"
+            exit 0
+          fi
+          # date diff in days, GNU date (Linux runner).
+          LAST_EPOCH=$(date -u -d "$LAST" +%s)
+          NOW_EPOCH=$(date -u +%s)
+          AGE_DAYS=$(( (NOW_EPOCH - LAST_EPOCH) / 86400 ))
+          echo "bench-output.md last_refreshed: $LAST ($AGE_DAYS days ago)"
+          if [ "$AGE_DAYS" -gt 30 ]; then
+            echo "::warning file=$BENCH_FILE::bench-output.md is $AGE_DAYS days old (> 30) — trigger the refresh-bench.yml workflow_dispatch to refresh"
+          fi

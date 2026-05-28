@@ -1,0 +1,17 @@
+{
+  "language": "rust",
+  "result": {
+    "matches": [],
+    "passed": true,
+    "summary": {
+      "by_kind": {},
+      "by_tier": {},
+      "total_forms": 3
+    }
+  },
+  "schema_version": 1,
+  "threshold_mode": "default",
+  "timestamp": "TIMESTAMP_REDACTED",
+  "tool": "dry4rs",
+  "tool_version": "0.1.0"
+}

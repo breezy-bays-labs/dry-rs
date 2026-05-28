@@ -264,6 +264,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dry-examples"
+version = "0.1.0"
+dependencies = [
+ "dry4rs",
+ "serde_json",
+]
+
+[[package]]
 name = "dry4rs"
 version = "0.1.0"
 dependencies = [

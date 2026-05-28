@@ -1,0 +1,59 @@
+{
+  "language": "rust",
+  "result": {
+    "matches": [
+      {
+        "forms": [
+          {
+            "file": "examples/edge_cases/async_vs_sync_same_body/main.rs",
+            "kind": "production",
+            "span": {
+              "end": {
+                "column": 1,
+                "line": 17
+              },
+              "start": {
+                "column": 0,
+                "line": 12
+              }
+            }
+          },
+          {
+            "file": "examples/edge_cases/async_vs_sync_same_body/main.rs",
+            "kind": "production",
+            "span": {
+              "end": {
+                "column": 1,
+                "line": 10
+              },
+              "start": {
+                "column": 6,
+                "line": 5
+              }
+            }
+          }
+        ],
+        "rename_count": null,
+        "rename_density": null,
+        "score": 0.8823529411764706,
+        "structural_score": null,
+        "tier": "review_first"
+      }
+    ],
+    "passed": false,
+    "summary": {
+      "by_kind": {
+        "production": 1
+      },
+      "by_tier": {
+        "review_first": 1
+      },
+      "total_forms": 3
+    }
+  },
+  "schema_version": 1,
+  "threshold_mode": "default",
+  "timestamp": "TIMESTAMP_REDACTED",
+  "tool": "dry4rs",
+  "tool_version": "0.1.0"
+}

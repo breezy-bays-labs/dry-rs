@@ -108,13 +108,16 @@ jobs:
         with:
           tool: cargo-llvm-cov@0.6
 
+      # The dry-examples corpus is excluded from this LCOV measurement
+      # because it is a curated DRY-violation corpus + cross-tool
+      # benchmark harness; its tests spawn dry4rs as a subprocess and
+      # its fixture source files are parsed (not compiled) by dry4rs.
+      # Including the crate in the LCOV file would feed irrelevant
+      # lines into crap4rs's production-code CC ladder. Defense-in-
+      # depth on top of the crap4rs.toml exclude entry.
+      # adr: ops/decisions/dry-rs/adr-dry-examples-corpus.md (ADR-1)
       - name: Generate workspace LCOV coverage
-        run: |
-          cargo llvm-cov nextest \
-            --workspace \
-            --locked \
-            --lcov \
-            --output-path lcov.info
+        run: cargo llvm-cov nextest --workspace --exclude dry-examples --locked --lcov --output-path lcov.info
 
       # crap-rs composite action — runs the crap4rs analyzer against
       # the production-code coverage file and emits a markdown

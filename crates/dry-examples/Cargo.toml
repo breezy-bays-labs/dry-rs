@@ -1,0 +1,67 @@
+[package]
+name = "dry-examples"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+description = "Curated DRY-violation corpus + cross-tool benchmark harness for the dry-rs ecosystem. publish=false; not a binary."
+keywords = ["dry", "duplication", "testing", "fixtures", "benchmark"]
+categories = ["development-tools::testing"]
+readme = "README.md"
+rust-version.workspace = true
+# Pedagogical / dogfood-only crate. Never reaches crates.io;
+# release-plz must NOT propose bumps. The crate's purpose is to host
+# intentional DRY violations for the per-PR snapshot harness in
+# `tests/snapshots.rs` + the offline cross-tool bench in
+# `examples/bench.sh`. See
+# `ops/decisions/dry-rs/adr-dry-examples-corpus.md` for the full
+# architectural rationale (ADR-1 covers per-gate exclusions; ADR-2
+# covers the `.ignore` mechanism that keeps the corpus invisible to
+# `crates/dry4rs/tests/self_check.rs`'s default walks).
+publish = false
+# Disable cargo's magic `examples/` directory: files under
+# `crates/dry-examples/examples/<tier>/<fixture>/main.rs` are fixture
+# source files the harness PARSES via dry4rs (path passed to the
+# spawned binary), NOT cargo binary targets to compile. Sibling-
+# coherent with scrap-examples (scrap-rs#80, 2026-05-27).
+autoexamples = false
+
+[lib]
+name = "dry_examples"
+path = "src/lib.rs"
+
+# `dry-examples` is a CONSUMER of the dry-rs detector ecosystem, NOT
+# a hexagon-layer member. See `adr-hexagonal-layout` — this crate
+# ships no library logic of its own; its `src/lib.rs` is intentionally
+# empty (docstring only). The corpus and harness live under
+# `examples/` and `tests/` respectively. publish=false; never reaches
+# crates.io.
+
+[dev-dependencies]
+# Binary spawn target — `CARGO_BIN_EXE_dry4rs` resolves to the
+# release/debug binary path inside test contexts. Pattern mirrors
+# `crates/dry4rs/tests/self_check.rs:75` so the harness invokes the
+# real consumer-facing binary, not a library-level shortcut. The
+# `version = "0.1.0"` pin (alongside `path = "../dry4rs"`) defeats
+# `cargo-deny`'s `wildcards = "deny"` rule (deny.toml). Sibling
+# pattern from scrap-examples (scrap-rs#80, 2026-05-27).
+# `publish = false` on this crate means the version pin is not
+# load-bearing for any release path; it exists solely to satisfy
+# cargo-deny.
+dry4rs = { path = "../dry4rs", version = "0.1.0" }
+# `serde_json::Value` powers the round-trip diff between live dry4rs
+# stdout (parsed) and committed `expected.json` (parsed). Workspace
+# pin keeps the version coherent with `dry-core`'s serializer side.
+serde_json = { workspace = true }
+
+[lints.clippy]
+# Crate-local opt-out — intentional duplications + edge-case Rust
+# fixtures would otherwise trip `clippy::similar_names`,
+# `clippy::redundant_clone`, and friends workspace-wide. The clippy
+# silence is scoped to THIS crate; production gates (the workspace
+# block in `Cargo.toml` if/when added, plus per-crate `[lints]` on
+# dry-core / dry4rs) stay sharp. Sibling-coherent with crap-examples
+# (crap-rs#314, landed 2026-05-28).
+all = "allow"

@@ -1,0 +1,59 @@
+{
+  "language": "rust",
+  "result": {
+    "matches": [
+      {
+        "forms": [
+          {
+            "file": "examples/tier_1_exact/identical_signatures/main.rs",
+            "kind": "production",
+            "span": {
+              "end": {
+                "column": 1,
+                "line": 10
+              },
+              "start": {
+                "column": 0,
+                "line": 6
+              }
+            }
+          },
+          {
+            "file": "examples/tier_1_exact/identical_signatures/main.rs",
+            "kind": "production",
+            "span": {
+              "end": {
+                "column": 1,
+                "line": 16
+              },
+              "start": {
+                "column": 0,
+                "line": 12
+              }
+            }
+          }
+        ],
+        "rename_count": null,
+        "rename_density": null,
+        "score": 0.8571428571428571,
+        "structural_score": null,
+        "tier": "review_first"
+      }
+    ],
+    "passed": false,
+    "summary": {
+      "by_kind": {
+        "production": 1
+      },
+      "by_tier": {
+        "review_first": 1
+      },
+      "total_forms": 3
+    }
+  },
+  "schema_version": 1,
+  "threshold_mode": "default",
+  "timestamp": "TIMESTAMP_REDACTED",
+  "tool": "dry4rs",
+  "tool_version": "0.1.0"
+}

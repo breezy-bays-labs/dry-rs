@@ -23,4 +23,12 @@
 # once scrap-rs ships its composite action).
 exclude = [
     "**/tests/**",
+    # adr: ops/decisions/dry-rs/adr-dry-examples-corpus.md (ADR-1)
+    # — dry-examples is a curated DRY-violation corpus + cross-tool
+    # benchmark harness; the intentional duplications would inflate
+    # complexity / smell metrics if scanned alongside production
+    # code. Exclusion is permanent + architectural per ADR-1; the
+    # ADR is the right pointer (not a `tracked:` issue reference)
+    # because there is no closing condition.
+    "crates/dry-examples/**",
 ]
