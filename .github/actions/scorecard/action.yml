@@ -463,7 +463,7 @@ runs:
         # in the action so we can keep a single source of truth across
         # the binary's exit code and the action's gate input.
         if [ "$DRY_FAIL_ON_FINDINGS" = "true" ] && [ "$passed" != "true" ]; then
-          threshold_display="${DRY_THRESHOLD:-(deferred to dry.toml or 0.85)}"
+          threshold_display="${DRY_THRESHOLD:-deferred to dry.toml or 0.85}"
           echo "::error::dry-rs scorecard surfaced $findings_count match(es) at or above the threshold ($threshold_display)"
           exit 1
         fi
