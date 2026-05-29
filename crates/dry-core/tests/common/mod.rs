@@ -81,6 +81,7 @@ pub const TEST_META: AdapterMeta = AdapterMeta {
                   `result.*` stays unaffected per the truthful-gate ADR.",
     after_help: "",
     config_file_name: "test-adapter.toml",
+    example_file_name: "test-adapter.example.toml",
     extensions: &["rs"],
     tool_info_uri: "https://github.com/breezy-bays-labs/dry-rs",
     rule_help_uri: "https://github.com/breezy-bays-labs/dry-rs#thresholds",

@@ -30,6 +30,24 @@ serde_json = "1"
 # + `toml::to_string_pretty(&Config)` (the latter for the round-trip
 # property test). See `ops/decisions/org/adr-config-file-pattern.md`.
 toml = "0.8"
+# Format-preserving TOML writer for the Starship-style doc-gen
+# emitter (lands with dry-rs#77). `toml::to_string_pretty` only
+# emits values; `toml_edit::DocumentMut` carries leading comments
+# attached via `decor::set_prefix`, which is the load-bearing API
+# for emitting `dry.example.toml` with per-field annotations sourced
+# from the struct's `///` doc comments. Already a transitive dep
+# (via `toml`); naming it directly keeps the adapters/config layer
+# self-documenting. Restricted to `dry-core` per the hexagonal-
+# layout ADR — adapter crates do not need TOML writing.
+toml_edit = "0.22"
+# Doc-comment reflection for the Starship-style doc-gen emitter
+# (lands with dry-rs#77). `#[derive(DocumentedFields)]` exposes
+# each field's `///` doc as an associated constant accessible at
+# runtime, giving the emitter a single source of truth (the field
+# definition) for both docs.rs and the annotated example. MSRV
+# 1.70 (under workspace 1.85). Restricted to `dry-core` — the
+# doc-gen emitter lives there per the hexagonal layout.
+documented = "0.9"
 insta = { version = "1", features = ["json"] }
 proptest = "1"
 thiserror = "2"

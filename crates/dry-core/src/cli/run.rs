@@ -106,6 +106,13 @@ fn run_with_args<N: NormalizerPort + Default>(meta: &AdapterMeta, args: &Args) -
         return ExitCode::SUCCESS;
     }
 
+    // `init` short-circuits — write the annotated `<tool>.example.toml`
+    // to the current directory (Starship-pattern doc-gen, dry-rs#77)
+    // and exit 0. No analyzer pipeline; no config-file discovery.
+    if let Some(Command::Init { force }) = args.command.as_ref() {
+        return handle_init(meta, *force);
+    }
+
     // Allowlist-management subcommands short-circuit — they DO NOT
     // run the analyzer pipeline at v0.1 (skeletal per the discovery
     // decision; full UX lands at v0.2 with `.dry-rs-ignore.toml`).
@@ -226,7 +233,43 @@ fn emit_allowlist_stub_note(command: &Command) {
         // Other variants are not allowlist-management; the caller
         // gated this match in `run_with_args` so we never reach here
         // in production. The fall-through is a defensive no-op.
-        Command::Report { .. } | Command::Stats { .. } | Command::Check { .. } => {}
+        Command::Report { .. }
+        | Command::Stats { .. }
+        | Command::Check { .. }
+        | Command::Init { .. } => {}
+    }
+}
+
+/// `init` handler — writes `render_example_config(meta)` to
+/// `<cwd>/<meta.example_file_name>` (Starship-pattern doc-gen,
+/// dry-rs#77).
+///
+/// Errors loud if the target file already exists unless `force` is
+/// true; this mirrors the `cargo deny init` convention. The dispatch
+/// is intentionally CWD-relative — `dry4rs init` from the workspace
+/// root writes the canonical `dry.example.toml` next to `dry.toml`.
+///
+/// Returns `EXIT_USAGE` on file-exists-without-force and on `fs::write`
+/// failures; `ExitCode::SUCCESS` on a clean write.
+fn handle_init(meta: &AdapterMeta, force: bool) -> ExitCode {
+    let path = PathBuf::from(meta.example_file_name);
+    if path.exists() && !force {
+        eprintln!(
+            "error: `{}` already exists; pass `--force` to overwrite",
+            meta.example_file_name
+        );
+        return ExitCode::from(EXIT_USAGE);
+    }
+    let body = crate::adapters::config_doc_gen::render_example_config(meta);
+    match fs::write(&path, &body) {
+        Ok(()) => {
+            eprintln!("wrote `{}` ({} bytes)", meta.example_file_name, body.len());
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("error: failed to write `{}`: {err}", meta.example_file_name);
+            ExitCode::from(EXIT_USAGE)
+        }
     }
 }
 
@@ -548,11 +591,15 @@ fn dispatch_output<N: NormalizerPort>(
         Command::Stats { .. } => emit_stats(config, normalizer, report, view),
         // `Check` is exit-code-only — no stdout. The gate verdict drives
         // the exit code in `run_with_args` after `dispatch_output`
-        // returns. `Ignore` / `Ignored` / `Cleanup` short-circuit
-        // BEFORE the analyzer pipeline runs (see [`run_with_args`]);
-        // their inclusion here is a defensive fallback for the
-        // exhaustive match.
-        Command::Check { .. } | Command::Ignore { .. } | Command::Ignored | Command::Cleanup => {}
+        // returns. `Ignore` / `Ignored` / `Cleanup` / `Init`
+        // short-circuit BEFORE the analyzer pipeline runs (see
+        // [`run_with_args`]); their inclusion here is a defensive
+        // fallback for the exhaustive match.
+        Command::Check { .. }
+        | Command::Ignore { .. }
+        | Command::Ignored
+        | Command::Cleanup
+        | Command::Init { .. } => {}
     }
 }
 

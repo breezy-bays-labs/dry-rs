@@ -73,6 +73,19 @@ clap_complete = { workspace = true }
 # strict-deny-unknown-fields schema; `toml::to_string_pretty(&Config)`
 # powers the round-trip property test.
 toml = { workspace = true }
+# Format-preserving TOML writer for the Starship-style doc-gen
+# emitter (`adapters::config::doc_gen`, dry-rs#77). `toml_edit::
+# DocumentMut` carries per-field leading comments via
+# `decor::set_prefix` — the load-bearing API for the annotated
+# `dry.example.toml` output. `toml` only emits values; comments
+# require `toml_edit`.
+toml_edit = { workspace = true }
+# Doc-comment reflection for the Starship-style doc-gen emitter
+# (dry-rs#77). `#[derive(DocumentedFields)]` on each POD config
+# struct exposes each field's `///` doc as an associated constant
+# accessible at runtime — the single source of truth that feeds
+# docs.rs, IDE hovers, AND the annotated example output.
+documented = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

@@ -24,10 +24,11 @@
 
 /// Identity/data struct supplied by each adapter binary at startup.
 ///
-/// The shared minimum spans 13 `&'static`-typed fields (per cross-tool
-/// ADR D1). Tools MAY extend with tool-specific fields (e.g.,
-/// crap-rs's `default_metric`); dry-rs has no tool-specific fields at
-/// v0.1.
+/// The shared minimum spans 14 `&'static`-typed fields (the original
+/// 13 per cross-tool ADR D1, plus `example_file_name` for the
+/// Starship-pattern `init` emitter — dry-rs#77). Tools MAY extend
+/// with tool-specific fields (e.g., crap-rs's `default_metric`);
+/// dry-rs has no tool-specific fields at v0.1.
 ///
 /// # Field semantics
 ///
@@ -44,6 +45,13 @@
 /// - `config_file_name` — the file name `discover_config` walks for
 ///   (e.g. `"dry.toml"`). Adapter-name-agnostic plumbing flows
 ///   exclusively through this field (per ADR D7).
+/// - `example_file_name` — the file name the `init` subcommand
+///   writes (e.g. `"dry.example.toml"`). Adapter-name-agnostic
+///   plumbing — same shape as `config_file_name`. Distinct from
+///   the real config: `<tool>.toml` is the minimal user-loaded
+///   file; `<tool>.example.toml` is the exhaustive committed
+///   reference produced by `dry4rs init` (Starship doc-gen
+///   pattern, dry-rs#77).
 /// - `extensions` — file extensions to walk by default (without the
 ///   leading dot). Overridable by `[walk] extensions = [...]` in
 ///   TOML or future CLI flag.
@@ -82,6 +90,14 @@ pub struct AdapterMeta {
     /// The loader (`dry_core::adapters::config::discover_config`) lands
     /// in Stage 2 of dry-rs#71 and consumes this field.
     pub config_file_name: &'static str,
+    /// The file name the `init` subcommand writes (e.g.,
+    /// `"dry.example.toml"`). Adapter-name-agnostic plumbing —
+    /// mirrors `config_file_name` in shape. Distinct from the real
+    /// config file: the example is the exhaustive, deterministically-
+    /// generated reference (Starship doc-gen pattern, dry-rs#77); the
+    /// config is the minimal user-loaded file (dry-rs#71). MUST be
+    /// non-empty.
+    pub example_file_name: &'static str,
     /// File extensions to walk by default (without the leading dot).
     /// Consumers may convert to `Vec<String>` via
     /// [`AdapterMeta::extensions_owned`]. MUST be non-empty (every
@@ -144,6 +160,10 @@ impl AdapterMeta {
             "AdapterMeta::config_file_name must be non-empty"
         );
         assert!(
+            !self.example_file_name.is_empty(),
+            "AdapterMeta::example_file_name must be non-empty"
+        );
+        assert!(
             !self.extensions.is_empty(),
             "AdapterMeta::extensions must contain at least one entry"
         );
@@ -185,6 +205,7 @@ mod tests {
         long_about: "test long about",
         after_help: "",
         config_file_name: "test-adapter.toml",
+        example_file_name: "test-adapter.example.toml",
         extensions: &["x"],
         tool_info_uri: "https://example.test/info",
         rule_help_uri: "https://example.test/rules",
@@ -222,6 +243,16 @@ mod tests {
     fn validate_or_panic_rejects_empty_config_file_name() {
         let bad = AdapterMeta {
             config_file_name: "",
+            ..TEST_META
+        };
+        bad.validate_or_panic();
+    }
+
+    #[test]
+    #[should_panic(expected = "example_file_name")]
+    fn validate_or_panic_rejects_empty_example_file_name() {
+        let bad = AdapterMeta {
+            example_file_name: "",
             ..TEST_META
         };
         bad.validate_or_panic();

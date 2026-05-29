@@ -17,5 +17,6 @@
 //! during the v0.1 walking-skeleton phase.
 
 pub mod config;
+pub mod config_doc_gen;
 pub mod reporters;
 pub mod source;

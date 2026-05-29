@@ -25,6 +25,7 @@
 //! - Map types (none yet at v0.1) MUST use `BTreeMap` (deterministic
 //!   key order, byte-stable round-trip per ADR D9).
 
+use documented::DocumentedFields;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{Format, ThresholdMode};
@@ -39,7 +40,7 @@ use crate::cli::{Format, ThresholdMode};
 /// `#[serde(deny_unknown_fields)]` per ADR D4 — typos in TOML surface
 /// at parse time with a clear `path:line:key` message. NO silent
 /// default fallback.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, DocumentedFields)]
 #[serde(deny_unknown_fields, default)]
 pub struct Config {
     /// `[gate]` table — threshold + threshold-mode preset.
@@ -61,7 +62,7 @@ pub struct Config {
 /// fallback).
 ///
 /// [`AdapterMeta`]: crate::cli::AdapterMeta
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, DocumentedFields)]
 #[serde(deny_unknown_fields, default)]
 pub struct GateConfig {
     /// Jaccard similarity threshold. CLI `--threshold` overrides this
@@ -90,7 +91,7 @@ impl GateConfig {
 /// At v0.1 the `format` field is the only knob; `[output]` exists as
 /// a table for forward-compat with v0.2+ `--output <path>` (file
 /// destination) + reporter-specific knobs.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, DocumentedFields)]
 #[serde(deny_unknown_fields, default)]
 pub struct OutputConfig {
     /// Output format (`text` / `json`). CLI `--format` overrides this.
@@ -113,7 +114,7 @@ impl OutputConfig {
 /// default (`AdapterMeta::extensions`). An explicit empty list
 /// (`extensions = []`) is a user-supplied override that disables the
 /// extension filter — the loader preserves that semantic difference.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, DocumentedFields)]
 #[serde(deny_unknown_fields, default)]
 pub struct WalkConfig {
     /// Walk files normally excluded by `.gitignore` / `.ignore`. CLI
