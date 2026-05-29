@@ -197,6 +197,53 @@ mod precedence {
     }
 
     #[test]
+    fn n65_config_threshold_applies_when_cli_unset() {
+        // Config supplies [gate] threshold = 0.9; no CLI --threshold.
+        // The merger MUST read the config value, not silently fall
+        // back to the compiled-in 0.85.
+        let mut cfg = dry_core::domain::Config::default();
+        cfg.gate.threshold = Some(0.9);
+
+        let args = parse_test_args(&["report"]).expect("parse args");
+        let analysis = merge_effective_inputs_for_test(&TEST_META, Some(&cfg), &args);
+        assert!(
+            (analysis.threshold - 0.9).abs() < f64::EPSILON,
+            "config-supplied threshold should apply when CLI is unset; got: {}",
+            analysis.threshold
+        );
+    }
+
+    #[test]
+    fn n65_cli_threshold_overrides_config() {
+        // CLI sets --threshold 0.95; config sets [gate] threshold =
+        // 0.85. CLI MUST win.
+        let mut cfg = dry_core::domain::Config::default();
+        cfg.gate.threshold = Some(0.85);
+
+        let args = parse_test_args(&["--threshold", "0.95", "report"]).expect("parse args");
+        let analysis = merge_effective_inputs_for_test(&TEST_META, Some(&cfg), &args);
+        assert!(
+            (analysis.threshold - 0.95).abs() < f64::EPSILON,
+            "CLI --threshold should override config; got: {}",
+            analysis.threshold
+        );
+    }
+
+    #[test]
+    fn n65_config_format_applies_when_cli_unset() {
+        let mut cfg = dry_core::domain::Config::default();
+        cfg.output.format = Some(dry_core::cli::Format::Json);
+
+        let args = parse_test_args(&["report"]).expect("parse args");
+        let analysis = merge_effective_inputs_for_test(&TEST_META, Some(&cfg), &args);
+        assert_eq!(
+            analysis.format,
+            dry_core::cli::Format::Json,
+            "config-supplied format should apply when CLI is unset"
+        );
+    }
+
+    #[test]
     fn n66_default_only_path_uses_adapter_meta_extensions() {
         // No config, no CLI overrides → AnalysisConfig.extensions ==
         // TEST_META.extensions_owned().

@@ -173,25 +173,34 @@ pub struct Args {
     /// `(0.0, 1.0]`. Matches at or above this value surface in the
     /// report.
     ///
-    /// The default `0.85` matches the comparison engine's
-    /// [`crate::comparison::REVIEW_FIRST_FLOOR`] — v0.1 surfaces
-    /// `review_first` / `auto_refactor` by default; users opt into
-    /// the advisory tier with a lower threshold.
+    /// `None` when the user did NOT pass `--threshold` (the
+    /// precedence merger then consults `[gate] threshold` from
+    /// `dry4rs.toml`, falling back to the compiled-in default
+    /// [`crate::comparison::REVIEW_FIRST_FLOOR`] = 0.85). `Some(t)`
+    /// is the user-supplied value; CLI > config > meta default.
     ///
-    /// Out-of-range values (`<= 0.0` or `> 1.0`) reject at parse time
-    /// with `ExitCode::from(2)` (clap's standard argument-error
+    /// Out-of-range values (`<= 0.0` or `> 1.0`) reject at parse
+    /// time with `ExitCode::from(2)` (clap's standard argument-error
     /// exit).
-    pub threshold: f64,
+    pub threshold: Option<f64>,
 
     /// Output format. v0.1: `text` (default) or `json`; markdown /
     /// html / sarif land in later waves.
-    pub format: Format,
+    ///
+    /// `None` when the user did NOT pass `--format` (the precedence
+    /// merger then consults `[output] format` from `dry4rs.toml`,
+    /// falling back to `Format::Text`).
+    pub format: Option<Format>,
 
     /// Threshold-mode preset (`strict` / `default` / `lenient`).
     /// Currently informational at v0.1 — the preset is recorded on
     /// the wire envelope's `threshold_mode` field; numeric override
     /// stays the truthful gate.
-    pub threshold_mode: ThresholdMode,
+    ///
+    /// `None` when the user did NOT pass `--threshold-mode` (the
+    /// precedence merger then consults `[gate] threshold_mode`,
+    /// falling back to `ThresholdMode::Default`).
+    pub threshold_mode: Option<ThresholdMode>,
 
     /// Limit `view.candidates` to the top N matches by descending
     /// score. **View-shaping only** — `result.*` stays unaffected
@@ -281,26 +290,15 @@ impl Args {
     ///
     /// [bc]: super::build_command()
     pub fn from_matches(matches: &clap::ArgMatches) -> Result<Self, clap::Error> {
-        let threshold = *matches.get_one::<f64>("threshold").ok_or_else(|| {
-            clap::Error::raw(
-                clap::error::ErrorKind::MissingRequiredArgument,
-                "--threshold missing (build_command must default to 0.85)",
-            )
-        })?;
-        let format = *matches.get_one::<Format>("format").ok_or_else(|| {
-            clap::Error::raw(
-                clap::error::ErrorKind::MissingRequiredArgument,
-                "--format missing (build_command must default to text)",
-            )
-        })?;
-        let threshold_mode = *matches
-            .get_one::<ThresholdMode>("threshold_mode")
-            .ok_or_else(|| {
-                clap::Error::raw(
-                    clap::error::ErrorKind::MissingRequiredArgument,
-                    "--threshold-mode missing (build_command must default to default)",
-                )
-            })?;
+        // `--threshold` / `--format` / `--threshold-mode` produce
+        // `Option<T>` — absence means "let the precedence merger
+        // consult [gate]/[output] from dry4rs.toml" (per ADR D3).
+        // The compiled-in defaults (0.85 / Format::Text /
+        // ThresholdMode::Default) apply ONLY when neither CLI nor
+        // config supplied a value.
+        let threshold = matches.get_one::<f64>("threshold").copied();
+        let format = matches.get_one::<Format>("format").copied();
+        let threshold_mode = matches.get_one::<ThresholdMode>("threshold_mode").copied();
         let top = matches.get_one::<u32>("top").copied();
         let only_failing = matches.get_flag("only_failing");
         let no_fail = matches.get_flag("no_fail");

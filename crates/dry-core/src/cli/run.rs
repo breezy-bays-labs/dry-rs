@@ -361,13 +361,22 @@ pub fn merge_effective_inputs(
         config.and_then(|c| c.walk.include_ignored).unwrap_or(false)
     };
 
-    // threshold: CLI wins because clap default-supplied 0.85 IS the
-    // compiled-in fallback. If a future v0.2 makes the CLI flag
-    // optional, the precedence resolves to config-then-default here.
-    let threshold = args.threshold;
-    // Same reasoning for format + threshold_mode.
-    let format = args.format;
-    let threshold_mode = args.threshold_mode;
+    // threshold / format / threshold_mode now produce Option<T>
+    // from clap (no built-in default; per dry-rs#71 the precedence
+    // merger owns the compiled-in fallback). Precedence chain per
+    // ADR D3: CLI > config > compiled-in default.
+    let threshold = args
+        .threshold
+        .or_else(|| config.and_then(|c| c.gate.threshold))
+        .unwrap_or(crate::comparison::REVIEW_FIRST_FLOOR);
+    let format = args
+        .format
+        .or_else(|| config.and_then(|c| c.output.format))
+        .unwrap_or(Format::Text);
+    let threshold_mode = args
+        .threshold_mode
+        .or_else(|| config.and_then(|c| c.gate.threshold_mode))
+        .unwrap_or(ThresholdMode::Default);
 
     AnalysisConfig::new(args.analysis_paths())
         .with_extensions(extensions)

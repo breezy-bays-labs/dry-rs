@@ -79,14 +79,18 @@ fn parses_with_cleanup_subcommand() {
 }
 
 #[test]
-fn threshold_defaults_to_0_85() {
-    // 0.85 mirrors the comparison engine's `REVIEW_FIRST_FLOOR` —
-    // the v0.1 default surfaces review_first / auto_refactor by
-    // default; users opt into advisory tier with a lower threshold.
+fn threshold_defaults_to_none_when_cli_unset() {
+    // The compiled-in default (0.85, `REVIEW_FIRST_FLOOR`) is
+    // applied by `merge_effective_inputs` ONLY when neither CLI
+    // nor config supplies a value. At the Args layer, absence ==
+    // None — the precedence merger sees the None and consults the
+    // config / compiled-in fallback chain. See
+    // crates/dry-core/tests/config.rs precedence:: tests for the
+    // end-to-end behaviour.
     let args = parse_test_args(&[]).expect("must parse");
     assert!(
-        (args.threshold - 0.85).abs() < f64::EPSILON,
-        "default threshold should be 0.85, got: {}",
+        args.threshold.is_none(),
+        "default invocation should produce threshold = None, got: {:?}",
         args.threshold
     );
 }
@@ -94,7 +98,8 @@ fn threshold_defaults_to_0_85() {
 #[test]
 fn threshold_flag_accepts_user_value() {
     let args = parse_test_args(&["--threshold", "0.75"]).expect("--threshold accepts a decimal");
-    assert!((args.threshold - 0.75).abs() < f64::EPSILON);
+    let t = args.threshold.expect("--threshold sets the field");
+    assert!((t - 0.75).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -118,21 +123,24 @@ fn threshold_rejects_zero_and_above_one() {
 }
 
 #[test]
-fn format_defaults_to_text() {
+fn format_defaults_to_none_when_cli_unset() {
+    // Same Option-as-precedence-input pattern as --threshold:
+    // absence at the Args layer is None; the merger applies
+    // Format::Text when nothing else supplies it.
     let args = parse_test_args(&[]).expect("must parse");
-    assert_eq!(args.format, Format::Text);
+    assert!(args.format.is_none());
 }
 
 #[test]
 fn format_flag_accepts_text() {
     let args = parse_test_args(&["--format", "text"]).expect("--format text parses");
-    assert_eq!(args.format, Format::Text);
+    assert_eq!(args.format, Some(Format::Text));
 }
 
 #[test]
 fn format_flag_accepts_json() {
     let args = parse_test_args(&["--format", "json"]).expect("--format json parses");
-    assert_eq!(args.format, Format::Json);
+    assert_eq!(args.format, Some(Format::Json));
 }
 
 #[test]
@@ -197,23 +205,25 @@ fn include_ignored_flag_is_true_when_set() {
 }
 
 #[test]
-fn threshold_mode_defaults_to_default() {
+fn threshold_mode_defaults_to_none_when_cli_unset() {
+    // Same Option-as-precedence-input pattern: merger applies
+    // ThresholdMode::Default when CLI nor config supplies one.
     let args = parse_test_args(&[]).expect("must parse");
-    assert_eq!(args.threshold_mode, ThresholdMode::Default);
+    assert!(args.threshold_mode.is_none());
 }
 
 #[test]
 fn threshold_mode_accepts_strict() {
     let args =
         parse_test_args(&["--threshold-mode", "strict"]).expect("--threshold-mode strict parses");
-    assert_eq!(args.threshold_mode, ThresholdMode::Strict);
+    assert_eq!(args.threshold_mode, Some(ThresholdMode::Strict));
 }
 
 #[test]
 fn threshold_mode_accepts_lenient() {
     let args =
         parse_test_args(&["--threshold-mode", "lenient"]).expect("--threshold-mode lenient parses");
-    assert_eq!(args.threshold_mode, ThresholdMode::Lenient);
+    assert_eq!(args.threshold_mode, Some(ThresholdMode::Lenient));
 }
 
 #[test]

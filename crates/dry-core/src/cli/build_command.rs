@@ -59,29 +59,33 @@ pub fn build_command(meta: &AdapterMeta) -> Command {
         .after_help(meta.after_help)
         // Global universal flags. Each `.global(true)` lets the flag
         // appear before OR after the subcommand on the CLI.
+        // No `default_value` on `--threshold` / `--format` /
+        // `--threshold-mode` — absence-on-CLI means "let the
+        // precedence merger consult [gate]/[output] from
+        // dry4rs.toml" (per ADR D3). The compiled-in defaults
+        // (0.85 / text / default) live in
+        // `dry_core::cli::run::merge_effective_inputs`, applied
+        // ONLY when neither CLI nor config supplied a value.
         .arg(
             Arg::new("threshold")
                 .long("threshold")
                 .global(true)
                 .value_parser(parse_threshold)
-                .default_value("0.85")
-                .help("Jaccard similarity threshold in the half-open interval (0.0, 1.0]"),
+                .help("Jaccard similarity threshold in the half-open interval (0.0, 1.0]; defaults to 0.85 when neither CLI nor [gate] in dry4rs.toml supplies one"),
         )
         .arg(
             Arg::new("format")
                 .long("format")
                 .global(true)
                 .value_parser(value_parser!(Format))
-                .default_value("text")
-                .help("Output format (`text` or `json`)"),
+                .help("Output format (`text` or `json`); defaults to text"),
         )
         .arg(
             Arg::new("threshold_mode")
                 .long("threshold-mode")
                 .global(true)
                 .value_parser(value_parser!(ThresholdMode))
-                .default_value("default")
-                .help("Threshold-mode preset (`strict` / `default` / `lenient`)"),
+                .help("Threshold-mode preset (`strict` / `default` / `lenient`); defaults to default"),
         )
         .arg(
             Arg::new("top")
