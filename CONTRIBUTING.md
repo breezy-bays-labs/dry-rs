@@ -78,31 +78,42 @@ touching code. The hexagonal layering rule is **strict**:
 ## Config schema discipline
 
 The `dry-core` config schema (`crates/dry-core/src/domain/config.rs`)
-is the **single source of truth** for both the loader (`dry.toml`)
-and the annotated reference (`dry.example.toml`). When changing the
-schema:
+is the **single source of truth** for the loader (`dry.toml`), the
+annotated reference (`dry.example.toml`), AND the JSON schema
+(`dry.schema.json`). When changing the schema:
 
 1. Add or rename the field on the appropriate POD struct in
    `domain/config.rs` with a `///` doc comment — that doc comment
    becomes the annotation in the example output (Starship-style
-   doc-gen, dry-rs#77).
+   doc-gen, dry-rs#77) AND the `description` in the JSON schema
+   (`#[derive(JsonSchema)]` from schemars, dry-rs#78).
 2. Wire the new field into the doc-gen emitter at
    `crates/dry-core/src/adapters/config_doc_gen.rs`. The exhaustive
-   destructure in `build_exhaustive_example_config` enforces this at
-   compile time — `cargo check` fails until you add the field.
-3. Regenerate the example from the workspace root:
+   destructure in `build_exhaustive_example_config` (and each
+   `annotate_*_table` helper) enforces this at compile time —
+   `cargo check` fails until you add the field.
+3. If the change adds a shared knob (`[gate]`/`[output]`/`[walk]`)
+   that should cascade, ALSO add the matching `Option<T>` field on
+   `LanguageConfig` in `domain/config.rs` and extend
+   `EffectiveConfig::resolve` in `cli/effective.rs`. The cascade
+   resolver's exhaustive destructure of BOTH `LanguageConfig` AND
+   every shared section struct is the compile-time guard — adding
+   the knob to one side and not the other fails `cargo check`.
+4. Regenerate the example AND schema from the workspace root:
 
    ```bash
    cargo run -p dry4rs --release -- init --force
    ```
 
-4. Commit the updated `dry.example.toml`. The sync test
-   (`crates/dry4rs/tests/dry_example_sync.rs`) asserts the committed
-   file is byte-identical to the emitter's output; it fails loud
-   until step 3 lands.
+5. Commit BOTH updated `dry.example.toml` AND `dry.schema.json`.
+   Two sync tests
+   (`crates/dry4rs/tests/dry_example_sync.rs` and
+   `crates/dry4rs/tests/dry_schema_sync.rs`) assert the committed
+   files are byte-identical to the emitter's output; they fail loud
+   until step 4 lands.
 
-If you find yourself running step 3 multiple times during
-development, that's expected — the test is the rot guard, not
+If you find yourself running step 4 multiple times during
+development, that's expected — the tests are rot guards, not
 ergonomic friction. Memory: `feedback_documentation-rots-ci-doesnt`.
 
 ## Comparison-engine authoring checklist

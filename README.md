@@ -211,46 +211,96 @@ threshold_mode = "default" # strict | default | lenient
 
 [output]
 format = "text"           # text | json
+title = "..."             # scorecard header (optional)
+subtitle = "..."          # scorecard subheader (optional)
 
 [walk]
 include_ignored = false   # walk .gitignore'd directories?
 extensions = ["rs"]       # file extensions to analyze (optional)
+
+# Per-language overrides (dry-rs#78). dry4rs reads `[rust]` first and
+# falls back to the shared `[gate]` / `[output]` / `[walk]` for any
+# unset knob; future dry4ts reads `[typescript]` symmetrically.
+[rust]
+threshold = 0.90          # rust-only threshold override
 ```
 
 The exhaustive annotated reference lives at
 [`dry.example.toml`](dry.example.toml). It is **deterministically
 generated** from the schema's `///` doc comments by `dry4rs init`
-(Starship-style doc-gen pattern, dry-rs#77) — a sync test in
+(Starship-style doc-gen pattern, dry-rs#77+#78) — sync tests in
 [`crates/dry4rs/tests/dry_example_sync.rs`](crates/dry4rs/tests/dry_example_sync.rs)
-keeps the committed file byte-identical to the emitter's output so
-the canonical option reference never rots behind the schema. To
-regenerate after a schema change:
+and [`crates/dry4rs/tests/dry_schema_sync.rs`](crates/dry4rs/tests/dry_schema_sync.rs)
+keep the committed files byte-identical to the emitter's output so
+the canonical option reference and JSON schema never rot behind the
+schema. To regenerate after a schema change:
 
 ```bash
 cargo run -p dry4rs --release -- init --force
 ```
 
-The `init` subcommand writes `dry.example.toml` to the current
-directory; `--force` is required when the file already exists. The
-example is distinct from `dry.toml` (the minimal loaded config) —
-it documents every option with inline annotations sourced from the
-field-level Rust docs.
+The `init` subcommand writes BOTH `dry.example.toml` AND
+`dry.schema.json` to the current directory atomically; `--force` is
+required when either file already exists. The example is distinct
+from `dry.toml` (the minimal loaded config) — it documents every
+option with inline annotations sourced from the field-level Rust docs.
+
+### Editor integration (JSON schema)
+
+dry4rs emits a JSON schema for `dry.toml` at
+[`dry.schema.json`](dry.schema.json). `$schema`-aware editors (VS
+Code with the EvenBetterTOML extension, IntelliJ family, etc.)
+consume it for autocomplete + inline validation. To wire it up,
+add a schema directive at the top of your `dry.toml`:
+
+```toml
+# :schema https://raw.githubusercontent.com/breezy-bays-labs/dry-rs/main/dry.schema.json
+```
+
+Or, for the workspace-local file, configure your editor to map
+`dry.toml` files to the committed `dry.schema.json` at repo root.
+
+### Cascade model (multi-language)
+
+dry-rs ships a multi-language config shape so `dry-core` can be
+shared by `dry4rs` AND the future `dry4ts` adapter without forking
+the schema:
+
+- `[gate]` / `[output]` / `[walk]` carry SHARED knobs every adapter
+  honors.
+- `[rust]` carries per-language overrides for `dry4rs`. Every knob
+  in `[rust]` cascades — when set, it replaces the corresponding
+  shared value for the rust adapter ONLY.
+- `[typescript]` carries the same shape for the future `dry4ts`
+  adapter (v0.6+). Reserved at v0.1 so the cross-tool schema stays
+  stable.
+
+Worked example:
+
+```toml
+[gate]
+threshold = 0.85          # baseline for everyone
+
+[rust]
+threshold = 0.90          # dry4rs uses 0.90; dry4ts would still use 0.85
+```
 
 ### Precedence
 
 CLI flag values ALWAYS override config. Missing values resolve via:
 
 ```text
-CLI flag > [config] section value > AdapterMeta default > compiled-in fallback
+CLI flag > [<language>] section value > [<shared>] section value > AdapterMeta default > compiled-in fallback
 ```
 
 For example, `dry4rs report --threshold 0.95 crates/foo/` uses `0.95`
 regardless of what `dry.toml` says. With no `--threshold` flag,
-`[gate] threshold = 0.9` from `dry.toml` applies; if neither
-supplies a value, the `AdapterMeta`-supplied default kicks in (e.g.,
-the `extensions` field defaults to `&["rs"]` for `dry4rs`); the
-compiled-in fallback (`REVIEW_FIRST_FLOOR = 0.85` for `threshold`)
-applies last.
+`[rust] threshold = 0.9` from `dry.toml` shadows
+`[gate] threshold = 0.85`; with no `[rust]` override, the shared
+`[gate]` value applies. If neither tier supplies a value, the
+`AdapterMeta`-supplied default kicks in (e.g., the `extensions`
+field defaults to `&["rs"]` for `dry4rs`); the compiled-in fallback
+(`REVIEW_FIRST_FLOOR = 0.85` for `threshold`) applies last.
 
 ### Discovery
 
