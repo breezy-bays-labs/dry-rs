@@ -145,20 +145,14 @@ others without changing shape).
 
 ## Quick start
 
-Drop the workflow below into a Rust repo at `.github/workflows/dry-scorecard.yml` and dry-rs runs structural-duplication analysis on every PR + push to `main`. The action checks out, builds dry4rs from a pinned source ref, scans the paths you point it at, and writes a JSON envelope + text summary to the step summary.
+Commit a `dry.toml` at your repo root ([schema](#schema) below) and drop the workflow snippet into `.github/workflows/dry-scorecard.yml`. dry-rs runs structural-duplication analysis on every PR + push to `main`. The action checks out, builds dry4rs from a pinned source ref, auto-discovers your `dry.toml`, writes a JSON envelope to `output-path` (always JSON — the artifact contract is fixed for downstream tooling), and renders a step-summary block whose format follows `[output].format` (falling back to text).
+
+The recommended invocation is **minimal** — pass only `fail-on-findings`; let `dry.toml` drive the analysis knobs. Add `threshold` / `paths` / `format` inputs only when a specific workflow needs to override config.
 
 ```yaml
 # Templated dry-scorecard workflow — copy this file into your repo's
-# `.github/workflows/` directory, change `paths:` to point at your
-# crates, push, done.
-#
-# This file lives at `.github/workflows/examples/` (subdirectory) so
-# GitHub Actions does NOT auto-trigger it inside this repo. Workflow
-# triggers only fire for files DIRECTLY under `.github/workflows/` —
-# subdirectories are documentation. dry-rs's own dogfood smoke at
-# `.github/workflows/example-smoke.yml` (lands in dry-rs#59) invokes
-# the action with identical inputs to keep this file mechanically
-# honest.
+# `.github/workflows/` directory, commit a `dry.toml` at your repo
+# root, push, done.
 name: dry Scorecard
 
 on:
@@ -178,13 +172,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # Minimal-input invocation — defers to dry.toml. Add
+      # `threshold` / `paths` / `format` only to override config
+      # for this specific workflow.
       - uses: breezy-bays-labs/dry-rs/.github/actions/scorecard@<sha>  # pin to a dry-rs release SHA
         with:
-          paths: crates/
-          extensions: 'rs'
-          threshold: '0.85'
           # Start with 'false' to observe signal. Promote to 'true' once a clean
-          # baseline is established — see README "Getting started" note.
+          # baseline is established — see "Getting started" note below.
           fail-on-findings: 'false'
 ```
 
@@ -193,6 +187,8 @@ jobs:
 > **v0.x build-time cost**: this action self-builds dry4rs from source on every invocation (~1-2 minutes). Per-crate v1.0 unlocks the binstall path.
 
 > **Getting started**: start with `fail-on-findings: 'false'` to observe signal. Promote to `'true'` once you're happy with the baseline.
+
+> **No dry.toml yet?** The action still works — it'll use compiled-in defaults (threshold `0.85`, format `text`, scan `$GITHUB_WORKSPACE`). Commit a `dry.toml` when you want your analysis knobs in version control.
 
 ## Configuration
 
@@ -262,17 +258,23 @@ cargo run -p dry4rs -- report crates --format json
 ```
 
 Mokumo CI consumes dry-rs via the composite action published from
-this repo:
+this repo. The minimal-input shape (recommended) defers to
+`dry.toml`; the explicit-input shape overrides specific values:
 
 ```yaml
 - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
   with:
     persist-credentials: false
+# Recommended — minimal inputs, dry.toml drives.
+- uses: breezy-bays-labs/dry-rs/.github/actions/scorecard@<sha>  # pin to a dry-rs release SHA
+  with:
+    fail-on-findings: 'false'
+# OR explicit overrides for a stricter scan.
 - uses: breezy-bays-labs/dry-rs/.github/actions/scorecard@<sha>  # pin to a dry-rs release SHA
   with:
     paths: crates/
-    extensions: 'rs'
-    threshold: '0.85'
+    threshold: '0.95'
+    fail-on-findings: 'false'
 ```
 
 The action builds `dry4rs` from the pinned ref on every run. v1.0 adds
