@@ -106,6 +106,13 @@ fn run_with_args<N: NormalizerPort + Default>(meta: &AdapterMeta, args: &Args) -
         return ExitCode::SUCCESS;
     }
 
+    // `init` short-circuits — write the annotated `<tool>.example.toml`
+    // to the current directory (Starship-pattern doc-gen, dry-rs#77)
+    // and exit 0. No analyzer pipeline; no config-file discovery.
+    if let Some(Command::Init { force }) = args.command.as_ref() {
+        return handle_init(meta, *force);
+    }
+
     // Allowlist-management subcommands short-circuit — they DO NOT
     // run the analyzer pipeline at v0.1 (skeletal per the discovery
     // decision; full UX lands at v0.2 with `.dry-rs-ignore.toml`).
@@ -226,7 +233,57 @@ fn emit_allowlist_stub_note(command: &Command) {
         // Other variants are not allowlist-management; the caller
         // gated this match in `run_with_args` so we never reach here
         // in production. The fall-through is a defensive no-op.
-        Command::Report { .. } | Command::Stats { .. } | Command::Check { .. } => {}
+        Command::Report { .. }
+        | Command::Stats { .. }
+        | Command::Check { .. }
+        | Command::Init { .. } => {}
+    }
+}
+
+/// `init` handler — writes `render_example_config(meta)` to
+/// `<cwd>/<meta.example_file_name>` (Starship-pattern doc-gen,
+/// dry-rs#77).
+///
+/// Thin wrapper around [`handle_init_in_dir`] that supplies the
+/// current working directory. The inner helper exists so unit tests
+/// can target a tempdir without `set_current_dir` (which serializes
+/// the test suite — every CWD-mutating test forces single-threaded
+/// execution).
+fn handle_init(meta: &AdapterMeta, force: bool) -> ExitCode {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    handle_init_in_dir(meta, force, &cwd)
+}
+
+/// Inner `init` handler — writes `render_example_config(meta)` to
+/// `<base>/<meta.example_file_name>`. Splits the CWD lookup out of
+/// the production [`handle_init`] so unit tests can drive the
+/// happy path / `--force` overwrite path / file-exists-error path
+/// against an isolated tempdir.
+///
+/// Errors loud if the target file already exists unless `force` is
+/// true; this mirrors the `cargo deny init` convention.
+///
+/// Returns `EXIT_USAGE` on file-exists-without-force and on
+/// `fs::write` failures; `ExitCode::SUCCESS` on a clean write.
+fn handle_init_in_dir(meta: &AdapterMeta, force: bool, base: &Path) -> ExitCode {
+    let path = base.join(meta.example_file_name);
+    if path.exists() && !force {
+        eprintln!(
+            "error: `{}` already exists; pass `--force` to overwrite",
+            meta.example_file_name
+        );
+        return ExitCode::from(EXIT_USAGE);
+    }
+    let body = crate::adapters::config_doc_gen::render_example_config(meta);
+    match fs::write(&path, &body) {
+        Ok(()) => {
+            eprintln!("wrote `{}` ({} bytes)", meta.example_file_name, body.len());
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("error: failed to write `{}`: {err}", meta.example_file_name);
+            ExitCode::from(EXIT_USAGE)
+        }
     }
 }
 
@@ -548,11 +605,15 @@ fn dispatch_output<N: NormalizerPort>(
         Command::Stats { .. } => emit_stats(config, normalizer, report, view),
         // `Check` is exit-code-only — no stdout. The gate verdict drives
         // the exit code in `run_with_args` after `dispatch_output`
-        // returns. `Ignore` / `Ignored` / `Cleanup` short-circuit
-        // BEFORE the analyzer pipeline runs (see [`run_with_args`]);
-        // their inclusion here is a defensive fallback for the
-        // exhaustive match.
-        Command::Check { .. } | Command::Ignore { .. } | Command::Ignored | Command::Cleanup => {}
+        // returns. `Ignore` / `Ignored` / `Cleanup` / `Init`
+        // short-circuit BEFORE the analyzer pipeline runs (see
+        // [`run_with_args`]); their inclusion here is a defensive
+        // fallback for the exhaustive match.
+        Command::Check { .. }
+        | Command::Ignore { .. }
+        | Command::Ignored
+        | Command::Cleanup
+        | Command::Init { .. } => {}
     }
 }
 
@@ -1075,5 +1136,73 @@ mod tests {
         };
         let restored = view_as_report(Some(view), &report);
         assert_eq!(restored.matches.len(), 1);
+    }
+
+    /// Synthetic adapter meta for `handle_init_in_dir` tests. Mirrors
+    /// the production `DRY4RS_META` shape but uses fixture-only file
+    /// names so the layer-4 ast-purity gate doesn't trip.
+    const HANDLE_INIT_META: AdapterMeta = AdapterMeta {
+        tool_name: "test-adapter",
+        display_name: "TestLang",
+        tool_version: "0.0.0",
+        long_version: "0.0.0",
+        about: "test about",
+        long_about: "test long about",
+        after_help: "",
+        config_file_name: "test-adapter.toml",
+        example_file_name: "test-adapter.example.toml",
+        extensions: &["rs"],
+        tool_info_uri: "https://example.test/info",
+        rule_help_uri: "https://example.test/rules",
+        default_excludes: &[],
+        forced_excludes: &[],
+    };
+
+    #[test]
+    fn handle_init_in_dir_writes_example_when_target_missing() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let _ = handle_init_in_dir(&HANDLE_INIT_META, false, dir.path());
+        let target = dir.path().join(HANDLE_INIT_META.example_file_name);
+        let contents = fs::read_to_string(&target).expect("init writes the example file");
+        assert!(
+            contents.starts_with("# test-adapter.example.toml"),
+            "emitted file should begin with the header naming the tool; got:\n{}",
+            contents.lines().next().unwrap_or("(empty)")
+        );
+        assert!(
+            contents.contains("[gate]"),
+            "emitted file should carry the full schema (got len={})",
+            contents.len()
+        );
+    }
+
+    #[test]
+    fn handle_init_in_dir_refuses_to_overwrite_without_force() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let target = dir.path().join(HANDLE_INIT_META.example_file_name);
+        fs::write(&target, b"pre-existing user content").expect("pre-seed file");
+        let _ = handle_init_in_dir(&HANDLE_INIT_META, false, dir.path());
+        let after = fs::read_to_string(&target).expect("file still readable");
+        assert_eq!(
+            after, "pre-existing user content",
+            "file must NOT be overwritten without --force"
+        );
+    }
+
+    #[test]
+    fn handle_init_in_dir_overwrites_with_force() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let target = dir.path().join(HANDLE_INIT_META.example_file_name);
+        fs::write(&target, b"stale content").expect("pre-seed file");
+        let _ = handle_init_in_dir(&HANDLE_INIT_META, true, dir.path());
+        let after = fs::read_to_string(&target).expect("file still readable");
+        assert!(
+            after.starts_with("# test-adapter.example.toml"),
+            "file should be replaced with fresh emitter output under --force"
+        );
+        assert!(
+            !after.contains("stale content"),
+            "stale content should be gone after --force overwrite"
+        );
     }
 }

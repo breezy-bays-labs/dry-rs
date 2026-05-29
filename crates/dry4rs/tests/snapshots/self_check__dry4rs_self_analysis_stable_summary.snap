@@ -1,6 +1,5 @@
 ---
 source: crates/dry4rs/tests/self_check.rs
-assertion_line: 143
 expression: projection
 ---
 {
@@ -9,5 +8,5 @@ expression: projection
     "review_first": 46
   },
   "matches_count": 52,
-  "total_forms": 651
+  "total_forms": 674
 }

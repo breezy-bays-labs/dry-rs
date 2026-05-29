@@ -160,6 +160,21 @@ pub fn build_command(meta: &AdapterMeta) -> Command {
         )
         .subcommand(Command::new("ignored").about("List current allowlist entries (v0.1: stub)"))
         .subcommand(Command::new("cleanup").about("Remove stale allowlist entries (v0.1: stub)"))
+        .subcommand(
+            Command::new("init")
+                .about(
+                    "Write the fully-annotated `<tool>.example.toml` reference into the current directory (Starship-pattern doc-gen)",
+                )
+                .arg(
+                    Arg::new("force")
+                        .long("force")
+                        .short('f')
+                        .action(ArgAction::SetTrue)
+                        .help(
+                            "Overwrite the example file if it already exists",
+                        ),
+                ),
+        )
 }
 
 /// Build a `report` / `stats` / `check` subcommand carrying an

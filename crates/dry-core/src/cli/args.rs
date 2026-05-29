@@ -109,6 +109,16 @@ pub enum Command {
     Ignored,
     /// Remove stale allowlist entries (v0.1: stub).
     Cleanup,
+    /// Write the fully-annotated `<tool>.example.toml` reference into
+    /// the current directory (Starship-pattern doc-gen, dry-rs#77).
+    ///
+    /// Emits [`crate::adapters::config_doc_gen::render_example_config`]
+    /// to `<cwd>/<AdapterMeta::example_file_name>`. Errors if the file
+    /// exists unless `force` is true.
+    Init {
+        /// Overwrite the example file if it already exists.
+        force: bool,
+    },
 }
 
 impl Command {
@@ -116,23 +126,24 @@ impl Command {
     /// variant, when applicable.
     ///
     /// `Report` / `Stats` / `Check` carry an analysis path list;
-    /// `Ignore` / `Ignored` / `Cleanup` do not (they don't trigger
-    /// the analyzer pipeline at v0.1). Returns an empty slice for
-    /// the non-analysis variants so callers can treat the absence of
-    /// paths as "no walk required."
+    /// `Ignore` / `Ignored` / `Cleanup` / `Init` do not (they don't
+    /// trigger the analyzer pipeline at v0.1). Returns an empty slice
+    /// for the non-analysis variants so callers can treat the absence
+    /// of paths as "no walk required."
     #[must_use]
     pub fn paths(&self) -> &[PathBuf] {
         match self {
             Self::Report { paths } | Self::Stats { paths } | Self::Check { paths } => paths,
-            Self::Ignore { .. } | Self::Ignored | Self::Cleanup => &[],
+            Self::Ignore { .. } | Self::Ignored | Self::Cleanup | Self::Init { .. } => &[],
         }
     }
 
     /// Whether this subcommand triggers the analyzer pipeline.
     ///
     /// `Report` / `Stats` / `Check` are analysis commands; `Ignore` /
-    /// `Ignored` / `Cleanup` manage the allowlist surface and short-
-    /// circuit before the file walker runs.
+    /// `Ignored` / `Cleanup` manage the allowlist surface; `Init`
+    /// emits the example config — all four short-circuit before the
+    /// file walker runs.
     #[must_use]
     pub const fn is_analysis(&self) -> bool {
         matches!(
@@ -338,6 +349,9 @@ impl Args {
             }),
             Some(("ignored", _)) => Some(Command::Ignored),
             Some(("cleanup", _)) => Some(Command::Cleanup),
+            Some(("init", sub)) => Some(Command::Init {
+                force: sub.get_flag("force"),
+            }),
             Some((other, _)) => {
                 return Err(clap::Error::raw(
                     clap::error::ErrorKind::InvalidSubcommand,
@@ -455,6 +469,7 @@ mod tests {
             long_about: "test long about",
             after_help: "",
             config_file_name: "test-adapter.toml",
+            example_file_name: "test-adapter.example.toml",
             extensions: &["x"],
             tool_info_uri: "https://example.test/info",
             rule_help_uri: "https://example.test/rules",

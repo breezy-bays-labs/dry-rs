@@ -75,6 +75,36 @@ touching code. The hexagonal layering rule is **strict**:
 - Never import inward. The dep graph runs `dry-core <- dry4rs` (and
   `dry-core <- dry4ts` once it lands).
 
+## Config schema discipline
+
+The `dry-core` config schema (`crates/dry-core/src/domain/config.rs`)
+is the **single source of truth** for both the loader (`dry.toml`)
+and the annotated reference (`dry.example.toml`). When changing the
+schema:
+
+1. Add or rename the field on the appropriate POD struct in
+   `domain/config.rs` with a `///` doc comment — that doc comment
+   becomes the annotation in the example output (Starship-style
+   doc-gen, dry-rs#77).
+2. Wire the new field into the doc-gen emitter at
+   `crates/dry-core/src/adapters/config_doc_gen.rs`. The exhaustive
+   destructure in `build_exhaustive_example_config` enforces this at
+   compile time — `cargo check` fails until you add the field.
+3. Regenerate the example from the workspace root:
+
+   ```bash
+   cargo run -p dry4rs --release -- init --force
+   ```
+
+4. Commit the updated `dry.example.toml`. The sync test
+   (`crates/dry4rs/tests/dry_example_sync.rs`) asserts the committed
+   file is byte-identical to the emitter's output; it fails loud
+   until step 3 lands.
+
+If you find yourself running step 3 multiple times during
+development, that's expected — the test is the rot guard, not
+ergonomic friction. Memory: `feedback_documentation-rots-ci-doesnt`.
+
 ## Comparison-engine authoring checklist
 
 When extending the comparison engine:

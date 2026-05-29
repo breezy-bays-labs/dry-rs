@@ -65,3 +65,9 @@ tempfile = "3"
 # predictably. Confined to dev-deps; the analyzer itself never depends
 # on insta. The `json` feature enables `assert_json_snapshot!`.
 insta = { workspace = true }
+# TOML parser for the doc-gen sync test (`tests/dry_example_sync.rs`).
+# The round-trip parse asserts the committed `dry.example.toml` is
+# exhaustive (every `Option<T>` = `Some`, every collection non-
+# empty). Confined to dev-deps; production runtime stays on
+# `dry_core::adapters::config`'s loader. dry-rs#77.
+toml = { workspace = true }
