@@ -239,6 +239,44 @@ root `Cargo.toml`. Two non-obvious consequences:
   hashes. See `adr-rust-normalization-rules.md` § "Hashing" and
   `adr-hexagonal-layout.md` per-crate dep table footnote [²].
 
+### Config file pattern (cross-tool canonical shape)
+
+dry4rs ships a `dry4rs.toml` auto-discovery + parsing path per the
+cross-tool ADR (`ops/decisions/org/adr-config-file-pattern.md`).
+Per-tool variances live in
+`ops/decisions/dry-rs/adr-dry4rs-config-file.md`. Key invariants
+automated code reviewers should NOT challenge:
+
+- **`discover_config(start, file_name)` is adapter-name-agnostic**.
+  The loader source + tests contain ZERO double-quoted `"dry4rs.toml"`
+  / `"dry4rs"` string literals (layer-4 ast-purity gate enforces
+  this via `scripts/check-config-ast-purity.sh`). Do NOT suggest
+  inlining the literal "for clarity" — adapter-name plumbing flows
+  exclusively through `meta.config_file_name`.
+- **`ConfigError` is a typed `thiserror::Error` enum with
+  `#[non_exhaustive]`**. Do NOT suggest replacing with
+  `anyhow::Result`; `dry-core` stays `anyhow`-free per the
+  hexagonal layering ADR.
+- **`Config` POD types live in `dry-core::domain::config`**, NOT in
+  `adapters/`. The loader (`load_config`, `parse_config`) lives in
+  `adapters/`. Do NOT suggest moving the schema types into the
+  adapters layer; the domain/adapter split is the load-bearing
+  layering invariant.
+- **Strict-on-unknown-keys is INTENTIONAL**
+  (`#[serde(deny_unknown_fields)]`). Typos surface at parse time
+  with a `path:line:key` message; do NOT suggest relaxing this for
+  "forward-compat" — additive forward-compat comes from
+  `#[serde(default)]` on every field, not from silent fallback.
+- **Precedence chain is CLI > config > `AdapterMeta` default >
+  compiled-in fallback**. Do NOT suggest reordering. The merger
+  (`dry_core::cli::run::merge_effective_inputs`) is the single
+  authoritative source; the `Args::config` field is `Option<PathBuf>`
+  (None = auto-discovery; Some(p) = explicit-path, missing-is-error).
+- **`AdapterMeta` is a struct value passed by `&AdapterMeta`**, NOT
+  a trait with associated consts. See memory
+  `feedback_rust_trait_vs_struct_for_data`. crap-rs/scrap-rs both
+  use struct value; the pattern is correct.
+
 ### How to engage substantively
 
 If a suggestion contradicts one of the rules above, the contradiction

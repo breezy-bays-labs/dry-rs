@@ -194,6 +194,56 @@ jobs:
 
 > **Getting started**: start with `fail-on-findings: 'false'` to observe signal. Promote to `'true'` once you're happy with the baseline.
 
+## Configuration
+
+dry4rs auto-discovers a `dry4rs.toml` config file at the workspace
+root (walks upward from the analysis path via `Path::ancestors`).
+A reference example is committed at this repo's root.
+
+### Schema
+
+```toml
+[gate]
+threshold = 0.85          # Jaccard similarity threshold (0.0–1.0]
+threshold_mode = "default" # strict | default | lenient
+
+[output]
+format = "text"           # text | json
+
+[walk]
+include_ignored = false   # walk .gitignore'd directories?
+extensions = ["rs"]       # file extensions to analyze (optional)
+```
+
+### Precedence
+
+CLI flag values ALWAYS override config; missing values fall back to
+compiled-in defaults:
+
+```text
+CLI flag > [config] section value > compiled-in default
+```
+
+For example, `dry4rs report --threshold 0.95 crates/foo/` uses `0.95`
+regardless of what `dry4rs.toml` says.
+
+### Discovery
+
+- **Auto-discovery**: walks up from the first positional analysis
+  path (or CWD if none) to filesystem root, looking for
+  `dry4rs.toml`.
+- **Explicit override**: `dry4rs report --config /custom/path.toml`
+  bypasses auto-discovery. Missing explicit path is an error.
+- **Missing file is OK**: with no config file present, defaults
+  apply.
+- **Unknown keys are errors**: typos surface with clear messages
+  (path + line + key name).
+
+See [`ops/decisions/org/adr-config-file-pattern.md`](https://github.com/breezy-bays-labs/ops/blob/main/decisions/org/adr-config-file-pattern.md)
+for the cross-tool canonical shape and
+[`ops/decisions/dry-rs/adr-dry4rs-config-file.md`](https://github.com/breezy-bays-labs/ops/blob/main/decisions/dry-rs/adr-dry4rs-config-file.md)
+for dry-rs-specific decisions.
+
 ## Usage (v0.x — internal only)
 
 ```bash
