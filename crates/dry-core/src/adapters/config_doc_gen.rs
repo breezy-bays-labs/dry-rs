@@ -28,7 +28,7 @@ use documented::DocumentedFields;
 use toml_edit::{DocumentMut, Table};
 
 use crate::cli::{AdapterMeta, Format, ThresholdMode};
-use crate::domain::config::{Config, GateConfig, OutputConfig, WalkConfig};
+use crate::domain::config::{Config, GateConfig, LanguageConfig, OutputConfig, WalkConfig};
 
 /// Renders the exhaustive annotated `<adapter>.example.toml` reference.
 ///
@@ -76,6 +76,8 @@ pub fn render_example_config(meta: &AdapterMeta) -> String {
     annotate_gate_table(&mut doc);
     annotate_output_table(&mut doc);
     annotate_walk_table(&mut doc);
+    annotate_rust_table(&mut doc);
+    annotate_typescript_table(&mut doc);
 
     doc.to_string()
 }
@@ -84,10 +86,10 @@ pub fn render_example_config(meta: &AdapterMeta) -> String {
 /// every collection non-empty.
 ///
 /// The struct construction below is **exhaustive** (no `..`) — adding
-/// a field to [`Config`], [`GateConfig`], [`OutputConfig`], or
-/// [`WalkConfig`] breaks this fn's compile until the new field is
-/// wired in with a concrete example value. That's the load-bearing
-/// rot-prevention guard.
+/// a field to [`Config`], [`GateConfig`], [`OutputConfig`],
+/// [`WalkConfig`], or [`LanguageConfig`] breaks this fn's compile
+/// until the new field is wired in with a concrete example value.
+/// That's the load-bearing rot-prevention guard from dry-rs#77+#78.
 fn build_exhaustive_example_config(meta: &AdapterMeta) -> Config {
     let gate = GateConfig {
         threshold: Some(0.85),
@@ -95,12 +97,38 @@ fn build_exhaustive_example_config(meta: &AdapterMeta) -> Config {
     };
     let output = OutputConfig {
         format: Some(Format::Text),
+        title: Some("dry-rs scorecard".to_string()),
+        subtitle: Some("Structural duplication detector".to_string()),
     };
     let walk = WalkConfig {
         include_ignored: Some(false),
         extensions: Some(meta.extensions_owned()),
     };
-    Config { gate, output, walk }
+    let rust = LanguageConfig {
+        threshold: Some(0.90),
+        threshold_mode: Some(ThresholdMode::Default),
+        format: Some(Format::Json),
+        title: Some("dry-rs (Rust)".to_string()),
+        subtitle: Some("Per-language override example".to_string()),
+        include_ignored: Some(false),
+        extensions: Some(meta.extensions_owned()),
+    };
+    let typescript = LanguageConfig {
+        threshold: Some(0.85),
+        threshold_mode: Some(ThresholdMode::Lenient),
+        format: Some(Format::Json),
+        title: Some("dry-rs (TypeScript)".to_string()),
+        subtitle: Some("Reserved for v0.6+ dry4ts adapter".to_string()),
+        include_ignored: Some(false),
+        extensions: Some(vec!["ts".to_string(), "tsx".to_string()]),
+    };
+    Config {
+        gate,
+        output,
+        walk,
+        rust,
+        typescript,
+    }
 }
 
 /// File-level header comment with regen instructions.
@@ -119,6 +147,10 @@ fn header_comment(meta: &AdapterMeta) -> String {
          # (compile-time exhaustive destructure) until both the emitter\n\
          # is updated and this file is regenerated.\n\
          #\n\
+         # `{tool} init` also writes `{schema}` — the JSON schema for\n\
+         # `$schema`-aware editors (VS Code, etc.) to autocomplete and\n\
+         # inline-validate `{config}`.\n\
+         #\n\
          # Distinct from the minimal `{config}` that {tool} actually\n\
          # loads: this file is the canonical option reference, NOT\n\
          # user config.\n\
@@ -126,6 +158,7 @@ fn header_comment(meta: &AdapterMeta) -> String {
         file = meta.example_file_name,
         tool = meta.tool_name,
         config = meta.config_file_name,
+        schema = meta.schema_file_name,
     )
 }
 
@@ -155,7 +188,11 @@ fn annotate_gate_table(doc: &mut DocumentMut) {
 ///
 /// Compile-time guard mirrors [`annotate_gate_table`].
 fn annotate_output_table(doc: &mut DocumentMut) {
-    let OutputConfig { format: _ } = OutputConfig::default();
+    let OutputConfig {
+        format: _,
+        title: _,
+        subtitle: _,
+    } = OutputConfig::default();
 
     let prefix = section_prefix::<Config>("output");
     let table = doc["output"]
@@ -164,6 +201,8 @@ fn annotate_output_table(doc: &mut DocumentMut) {
     table.decor_mut().set_prefix(prefix);
 
     attach_field_doc::<OutputConfig>(table, "format");
+    attach_field_doc::<OutputConfig>(table, "title");
+    attach_field_doc::<OutputConfig>(table, "subtitle");
 }
 
 /// Attaches doc-comment prefixes to `[walk]` and its fields.
@@ -183,6 +222,66 @@ fn annotate_walk_table(doc: &mut DocumentMut) {
 
     attach_field_doc::<WalkConfig>(table, "include_ignored");
     attach_field_doc::<WalkConfig>(table, "extensions");
+}
+
+/// Attaches doc-comment prefixes to `[rust]` and its fields.
+///
+/// Compile-time guard mirrors [`annotate_gate_table`] — the exhaustive
+/// destructure of a default [`LanguageConfig`] fails if a new
+/// per-language knob lands without wiring its annotation.
+fn annotate_rust_table(doc: &mut DocumentMut) {
+    let LanguageConfig {
+        threshold: _,
+        threshold_mode: _,
+        format: _,
+        title: _,
+        subtitle: _,
+        include_ignored: _,
+        extensions: _,
+    } = LanguageConfig::default();
+
+    let prefix = section_prefix::<Config>("rust");
+    let table = doc["rust"]
+        .as_table_mut()
+        .expect("toml_edit emits [rust] as a table");
+    table.decor_mut().set_prefix(prefix);
+
+    attach_field_doc::<LanguageConfig>(table, "threshold");
+    attach_field_doc::<LanguageConfig>(table, "threshold_mode");
+    attach_field_doc::<LanguageConfig>(table, "format");
+    attach_field_doc::<LanguageConfig>(table, "title");
+    attach_field_doc::<LanguageConfig>(table, "subtitle");
+    attach_field_doc::<LanguageConfig>(table, "include_ignored");
+    attach_field_doc::<LanguageConfig>(table, "extensions");
+}
+
+/// Attaches doc-comment prefixes to `[typescript]` and its fields.
+///
+/// Compile-time guard mirrors [`annotate_rust_table`].
+fn annotate_typescript_table(doc: &mut DocumentMut) {
+    let LanguageConfig {
+        threshold: _,
+        threshold_mode: _,
+        format: _,
+        title: _,
+        subtitle: _,
+        include_ignored: _,
+        extensions: _,
+    } = LanguageConfig::default();
+
+    let prefix = section_prefix::<Config>("typescript");
+    let table = doc["typescript"]
+        .as_table_mut()
+        .expect("toml_edit emits [typescript] as a table");
+    table.decor_mut().set_prefix(prefix);
+
+    attach_field_doc::<LanguageConfig>(table, "threshold");
+    attach_field_doc::<LanguageConfig>(table, "threshold_mode");
+    attach_field_doc::<LanguageConfig>(table, "format");
+    attach_field_doc::<LanguageConfig>(table, "title");
+    attach_field_doc::<LanguageConfig>(table, "subtitle");
+    attach_field_doc::<LanguageConfig>(table, "include_ignored");
+    attach_field_doc::<LanguageConfig>(table, "extensions");
 }
 
 /// Builds the leading comment block for a top-level table section,
@@ -234,7 +333,9 @@ mod tests {
         after_help: "",
         config_file_name: "test-adapter.toml",
         example_file_name: "test-adapter.example.toml",
+        schema_file_name: "test-adapter.schema.json",
         extensions: &["rs"],
+        language: crate::cli::Language::Rust,
         tool_info_uri: "https://example.test/info",
         rule_help_uri: "https://example.test/rules",
         default_excludes: &[],
@@ -247,6 +348,8 @@ mod tests {
         assert!(out.contains("[gate]"), "missing [gate] section");
         assert!(out.contains("[output]"), "missing [output] section");
         assert!(out.contains("[walk]"), "missing [walk] section");
+        assert!(out.contains("[rust]"), "missing [rust] section");
+        assert!(out.contains("[typescript]"), "missing [typescript] section");
     }
 
     #[test]
@@ -256,6 +359,8 @@ mod tests {
             "threshold",
             "threshold_mode",
             "format",
+            "title",
+            "subtitle",
             "include_ignored",
             "extensions",
         ] {
@@ -288,6 +393,10 @@ mod tests {
             out.contains("test-adapter init"),
             "regen instructions don't name the tool"
         );
+        assert!(
+            out.contains("test-adapter.schema.json"),
+            "header should reference the JSON schema file"
+        );
     }
 
     #[test]
@@ -304,6 +413,11 @@ mod tests {
             "gate.threshold_mode must be Some"
         );
         assert!(parsed.output.format.is_some(), "output.format must be Some");
+        assert!(parsed.output.title.is_some(), "output.title must be Some");
+        assert!(
+            parsed.output.subtitle.is_some(),
+            "output.subtitle must be Some"
+        );
         assert!(
             parsed.walk.include_ignored.is_some(),
             "walk.include_ignored must be Some"
@@ -314,6 +428,30 @@ mod tests {
             .as_ref()
             .expect("walk.extensions must be Some");
         assert!(!exts.is_empty(), "walk.extensions must be non-empty");
+
+        // Per-language tables must be exhaustively populated too.
+        for (label, lang) in [("rust", &parsed.rust), ("typescript", &parsed.typescript)] {
+            assert!(
+                lang.threshold.is_some(),
+                "{label}.threshold must be Some in exhaustive example"
+            );
+            assert!(
+                lang.threshold_mode.is_some(),
+                "{label}.threshold_mode must be Some"
+            );
+            assert!(lang.format.is_some(), "{label}.format must be Some");
+            assert!(lang.title.is_some(), "{label}.title must be Some");
+            assert!(lang.subtitle.is_some(), "{label}.subtitle must be Some");
+            assert!(
+                lang.include_ignored.is_some(),
+                "{label}.include_ignored must be Some"
+            );
+            let exts = lang
+                .extensions
+                .as_ref()
+                .unwrap_or_else(|| panic!("{label}.extensions must be Some"));
+            assert!(!exts.is_empty(), "{label}.extensions must be non-empty");
+        }
     }
 
     #[test]

@@ -37,7 +37,7 @@ mod score;
 mod span;
 mod summary;
 
-pub use config::{Config, GateConfig, OutputConfig, WalkConfig};
+pub use config::{Config, GateConfig, LanguageConfig, OutputConfig, WalkConfig};
 pub use enums::{FormKind, Severity, Tier};
 pub use form::{FormRef, NormalizedForm};
 pub use identity::{FilePath, Fingerprint};

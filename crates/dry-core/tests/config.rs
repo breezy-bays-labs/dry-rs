@@ -40,8 +40,25 @@ fn n60_round_trip_through_serde_with_explicit_values() {
     c.gate.threshold = Some(0.9);
     c.gate.threshold_mode = Some(ThresholdMode::Strict);
     c.output.format = Some(Format::Json);
+    c.output.title = Some("Test scorecard".to_string());
+    c.output.subtitle = Some("Test subtitle".to_string());
     c.walk.include_ignored = Some(true);
     c.walk.extensions = Some(vec!["rs".to_string(), "rsi".to_string()]);
+    // Per-language override values (dry-rs#78).
+    c.rust.threshold = Some(0.95);
+    c.rust.threshold_mode = Some(ThresholdMode::Strict);
+    c.rust.format = Some(Format::Text);
+    c.rust.title = Some("Rust title".to_string());
+    c.rust.subtitle = Some("Rust subtitle".to_string());
+    c.rust.include_ignored = Some(false);
+    c.rust.extensions = Some(vec!["rs".to_string()]);
+    c.typescript.threshold = Some(0.80);
+    c.typescript.threshold_mode = Some(ThresholdMode::Lenient);
+    c.typescript.format = Some(Format::Json);
+    c.typescript.title = Some("TS title".to_string());
+    c.typescript.subtitle = Some("TS subtitle".to_string());
+    c.typescript.include_ignored = Some(false);
+    c.typescript.extensions = Some(vec!["ts".to_string(), "tsx".to_string()]);
 
     let serialized = toml::to_string_pretty(&c).expect("serialize");
     let parsed: Config = toml::from_str(&serialized).expect("deserialize");

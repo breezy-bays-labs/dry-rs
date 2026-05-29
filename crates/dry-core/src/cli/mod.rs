@@ -33,11 +33,13 @@
 mod adapter_meta;
 mod args;
 mod build_command;
+mod effective;
 mod run;
 
-pub use adapter_meta::AdapterMeta;
+pub use adapter_meta::{AdapterMeta, Language};
 pub use args::{Args, Command, Format, ThresholdMode};
 pub use build_command::build_command;
+pub use effective::EffectiveConfig;
 pub use run::{
     compute_analysis_root, merge_effective_inputs, render_config_error, resolve_config_path, run,
 };
@@ -126,6 +128,17 @@ pub struct AnalysisConfig {
     /// wire envelope's `threshold_mode` field; the numeric `threshold`
     /// is the truthful gate.
     pub threshold_mode: ThresholdMode,
+    /// Scorecard title rendered by external consumers (e.g., the
+    /// dry-scorecard GitHub Action's sticky PR comment header).
+    /// Sourced from `[output].title` / `[rust].title` /
+    /// `[typescript].title` in the cascade (dry-rs#78). `None` at v0.1
+    /// when the config does not supply it; consumers default to the
+    /// tool name.
+    pub title: Option<String>,
+    /// Scorecard subtitle (second header line). Same intent as
+    /// [`title`](Self::title); sourced from `[output].subtitle` or a
+    /// per-language override.
+    pub subtitle: Option<String>,
 }
 
 impl Default for AnalysisConfig {
@@ -138,6 +151,8 @@ impl Default for AnalysisConfig {
             extensions: Vec::new(),
             include_ignored: false,
             threshold_mode: ThresholdMode::Default,
+            title: None,
+            subtitle: None,
         }
     }
 }
@@ -208,6 +223,23 @@ impl AnalysisConfig {
         self.threshold_mode = threshold_mode;
         self
     }
+
+    /// Set the scorecard title; returns `self` for chaining. Pass via
+    /// `into()` so callers can supply `&str` or `String` ergonomically.
+    /// Sourced from cascade-resolved `[output].title` (dry-rs#78).
+    #[must_use]
+    pub fn with_title<S: Into<String>>(mut self, title: S) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set the scorecard subtitle; returns `self` for chaining.
+    /// Sourced from cascade-resolved `[output].subtitle` (dry-rs#78).
+    #[must_use]
+    pub fn with_subtitle<S: Into<String>>(mut self, subtitle: S) -> Self {
+        self.subtitle = Some(subtitle.into());
+        self
+    }
 }
 
 #[cfg(test)]
@@ -224,6 +256,8 @@ mod tests {
         assert_eq!(config.format, Format::Text);
         assert_eq!(config.output, OutputDestination::Stdout);
         assert_eq!(config.threshold_mode, ThresholdMode::Default);
+        assert!(config.title.is_none());
+        assert!(config.subtitle.is_none());
     }
 
     #[test]
@@ -248,6 +282,8 @@ mod tests {
         assert_eq!(config.format, Format::Text);
         assert_eq!(config.output, OutputDestination::Stdout);
         assert_eq!(config.threshold_mode, ThresholdMode::Default);
+        assert!(config.title.is_none());
+        assert!(config.subtitle.is_none());
     }
 
     #[test]
@@ -261,6 +297,18 @@ mod tests {
         assert_eq!(config.format, Format::Json);
         assert_eq!(config.threshold_mode, ThresholdMode::Strict);
         assert_eq!(config.output, OutputDestination::Stdout);
+    }
+
+    #[test]
+    fn analysis_config_with_title_subtitle_set_fields() {
+        let config = AnalysisConfig::default()
+            .with_title("dry-rs scorecard")
+            .with_subtitle("Structural duplication detector");
+        assert_eq!(config.title.as_deref(), Some("dry-rs scorecard"));
+        assert_eq!(
+            config.subtitle.as_deref(),
+            Some("Structural duplication detector")
+        );
     }
 
     #[test]

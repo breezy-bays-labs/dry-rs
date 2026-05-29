@@ -26,6 +26,7 @@
 //!   key order, byte-stable round-trip per ADR D9).
 
 use documented::DocumentedFields;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{Format, ThresholdMode};
@@ -40,18 +41,45 @@ use crate::cli::{Format, ThresholdMode};
 /// `#[serde(deny_unknown_fields)]` per ADR D4 — typos in TOML surface
 /// at parse time with a clear `path:line:key` message. NO silent
 /// default fallback.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, DocumentedFields)]
+///
+/// ## Cascade model (dry-rs#78)
+///
+/// `[gate]`, `[output]`, `[walk]` carry SHARED knobs every adapter
+/// honors. `[rust]` and `[typescript]` carry per-language overrides
+/// that replace the shared value for one adapter only. The cascade
+/// resolver ([`crate::cli::EffectiveConfig::resolve`]) collapses
+/// per-language `Some(v)` over shared `Some(v)`; both `None` produces
+/// resolved `None`.
+#[derive(
+    Debug, Clone, Default, PartialEq, Serialize, Deserialize, DocumentedFields, JsonSchema,
+)]
 #[serde(deny_unknown_fields, default)]
 pub struct Config {
     /// `[gate]` table — threshold + threshold-mode preset.
     #[serde(skip_serializing_if = "GateConfig::is_default")]
     pub gate: GateConfig,
-    /// `[output]` table — format selector.
+    /// `[output]` table — format selector + scorecard labels.
     #[serde(skip_serializing_if = "OutputConfig::is_default")]
     pub output: OutputConfig,
     /// `[walk]` table — file-walker tuning.
     #[serde(skip_serializing_if = "WalkConfig::is_default")]
     pub walk: WalkConfig,
+    /// `[rust]` table — per-language overrides for the `dry4rs` adapter.
+    /// Every knob in this table cascades: when set, it replaces the
+    /// corresponding shared `[gate]`/`[output]`/`[walk]` value for the
+    /// rust adapter ONLY; when unset, the adapter falls back to the
+    /// shared value, then the [`crate::cli::AdapterMeta`] default,
+    /// then the compiled-in fallback. Other adapters (dry4ts) are
+    /// unaffected by anything in this table.
+    #[serde(skip_serializing_if = "LanguageConfig::is_default")]
+    pub rust: LanguageConfig,
+    /// `[typescript]` table — per-language overrides for the future
+    /// `dry4ts` adapter (v0.6+). Reserved at v0.1 so the cross-tool
+    /// schema stays stable across the dry4rs / dry4ts cadence. Every
+    /// knob cascades on top of `[gate]` / `[output]` / `[walk]` the
+    /// same way `[rust]` does, for the typescript adapter ONLY.
+    #[serde(skip_serializing_if = "LanguageConfig::is_default")]
+    pub typescript: LanguageConfig,
 }
 
 /// `[gate]` table — Jaccard threshold + threshold-mode preset.
@@ -62,7 +90,9 @@ pub struct Config {
 /// fallback).
 ///
 /// [`AdapterMeta`]: crate::cli::AdapterMeta
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, DocumentedFields)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Serialize, Deserialize, DocumentedFields, JsonSchema,
+)]
 #[serde(deny_unknown_fields, default)]
 pub struct GateConfig {
     /// Jaccard similarity threshold. CLI `--threshold` overrides this
@@ -86,24 +116,37 @@ impl GateConfig {
     }
 }
 
-/// `[output]` table — format selector.
+/// `[output]` table — format selector + scorecard labels.
 ///
-/// At v0.1 the `format` field is the only knob; `[output]` exists as
-/// a table for forward-compat with v0.2+ `--output <path>` (file
-/// destination) + reporter-specific knobs.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, DocumentedFields)]
+/// At v0.1 the table carries the format selector + the title /
+/// subtitle pair external consumers (e.g., the `dry-scorecard` GitHub
+/// Action's sticky PR-comment header) render verbatim. `[output]`
+/// exists as a table for forward-compat with v0.2+ `--output <path>`
+/// (file destination) + reporter-specific knobs.
+#[derive(
+    Debug, Clone, Default, PartialEq, Serialize, Deserialize, DocumentedFields, JsonSchema,
+)]
 #[serde(deny_unknown_fields, default)]
 pub struct OutputConfig {
     /// Output format (`text` / `json`). CLI `--format` overrides this.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<Format>,
+    /// Scorecard title displayed by external consumers (e.g., the
+    /// dry-scorecard GitHub Action's sticky PR comment header).
+    /// Replaces the consumer-side `comment-preamble` action input
+    /// stopgap. When unset, consumers may default to the tool name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Scorecard subtitle (second header line). Same intent as title.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<String>,
 }
 
 impl OutputConfig {
     /// True when every field is its serde default.
     #[must_use]
     pub const fn is_default(&self) -> bool {
-        self.format.is_none()
+        self.format.is_none() && self.title.is_none() && self.subtitle.is_none()
     }
 }
 
@@ -114,7 +157,9 @@ impl OutputConfig {
 /// default (`AdapterMeta::extensions`). An explicit empty list
 /// (`extensions = []`) is a user-supplied override that disables the
 /// extension filter — the loader preserves that semantic difference.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, DocumentedFields)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Serialize, Deserialize, DocumentedFields, JsonSchema,
+)]
 #[serde(deny_unknown_fields, default)]
 pub struct WalkConfig {
     /// Walk files normally excluded by `.gitignore` / `.ignore`. CLI
@@ -136,6 +181,64 @@ impl WalkConfig {
     }
 }
 
+/// Per-language override table — `[rust]` for the `dry4rs` adapter,
+/// `[typescript]` for the future `dry4ts` adapter (v0.6+).
+///
+/// Every knob mirrors one in `[gate]` / `[output]` / `[walk]` as
+/// `Option<T>`. A `Some(v)` here REPLACES the corresponding shared
+/// value when the adapter resolves its effective config via
+/// [`crate::cli::EffectiveConfig::resolve`] (dry-rs#78); a `None`
+/// here falls back to the shared value. When BOTH are unset, the
+/// resolved field stays `None` and the next precedence tier
+/// ([`crate::cli::AdapterMeta`] default → compiled-in fallback) applies.
+///
+/// Adding a knob requires extending BOTH this struct AND the shared
+/// section struct that owns the matching shared knob; the cascade
+/// resolver's exhaustive destructure is the compile-time guard.
+#[derive(
+    Debug, Clone, Default, PartialEq, Serialize, Deserialize, DocumentedFields, JsonSchema,
+)]
+#[serde(deny_unknown_fields, default)]
+pub struct LanguageConfig {
+    /// Per-language override for `[gate].threshold`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<f64>,
+    /// Per-language override for `[gate].threshold_mode`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold_mode: Option<ThresholdMode>,
+    /// Per-language override for `[output].format`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<Format>,
+    /// Per-language override for `[output].title`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Per-language override for `[output].subtitle`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<String>,
+    /// Per-language override for `[walk].include_ignored`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_ignored: Option<bool>,
+    /// Per-language override for `[walk].extensions`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Vec<String>>,
+}
+
+impl LanguageConfig {
+    /// True when every field is `None` — used by the top-level
+    /// `#[serde(skip_serializing_if = ...)]` to omit empty tables
+    /// from re-serialized TOML output.
+    #[must_use]
+    pub const fn is_default(&self) -> bool {
+        self.threshold.is_none()
+            && self.threshold_mode.is_none()
+            && self.format.is_none()
+            && self.title.is_none()
+            && self.subtitle.is_none()
+            && self.include_ignored.is_none()
+            && self.extensions.is_none()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +249,8 @@ mod tests {
         assert!(c.gate.is_default());
         assert!(c.output.is_default());
         assert!(c.walk.is_default());
+        assert!(c.rust.is_default());
+        assert!(c.typescript.is_default());
     }
 
     #[test]
@@ -160,13 +265,54 @@ mod tests {
     }
 
     #[test]
-    fn output_config_is_default_when_format_is_none() {
+    fn output_config_is_default_when_every_field_is_none() {
         let c = OutputConfig::default();
         assert!(c.is_default());
-        let c2 = OutputConfig {
+        let with_format = OutputConfig {
             format: Some(Format::Json),
+            title: None,
+            subtitle: None,
         };
-        assert!(!c2.is_default());
+        assert!(!with_format.is_default());
+        let with_title = OutputConfig {
+            format: None,
+            title: Some("hello".to_string()),
+            subtitle: None,
+        };
+        assert!(!with_title.is_default());
+        let with_subtitle = OutputConfig {
+            format: None,
+            title: None,
+            subtitle: Some("world".to_string()),
+        };
+        assert!(!with_subtitle.is_default());
+    }
+
+    #[test]
+    fn language_config_default_is_all_none() {
+        let c = LanguageConfig::default();
+        assert!(c.is_default());
+    }
+
+    #[test]
+    fn language_config_any_field_some_unsets_default() {
+        let with_threshold = LanguageConfig {
+            threshold: Some(0.9),
+            ..LanguageConfig::default()
+        };
+        assert!(!with_threshold.is_default());
+
+        let with_title = LanguageConfig {
+            title: Some("rust override".to_string()),
+            ..LanguageConfig::default()
+        };
+        assert!(!with_title.is_default());
+
+        let with_extensions = LanguageConfig {
+            extensions: Some(vec!["rs".to_string()]),
+            ..LanguageConfig::default()
+        };
+        assert!(!with_extensions.is_default());
     }
 
     #[test]

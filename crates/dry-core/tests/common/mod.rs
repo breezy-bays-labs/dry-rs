@@ -20,7 +20,7 @@
 
 #![allow(dead_code)]
 
-use dry_core::cli::{AdapterMeta, Args, build_command};
+use dry_core::cli::{AdapterMeta, Args, Language, build_command};
 
 /// Build a [`clap::Command`] over [`TEST_META`] and parse the
 /// supplied argv into an [`Args`] instance.
@@ -82,7 +82,9 @@ pub const TEST_META: AdapterMeta = AdapterMeta {
     after_help: "",
     config_file_name: "test-adapter.toml",
     example_file_name: "test-adapter.example.toml",
+    schema_file_name: "test-adapter.schema.json",
     extensions: &["rs"],
+    language: Language::Rust,
     tool_info_uri: "https://github.com/breezy-bays-labs/dry-rs",
     rule_help_uri: "https://github.com/breezy-bays-labs/dry-rs#thresholds",
     default_excludes: &[],

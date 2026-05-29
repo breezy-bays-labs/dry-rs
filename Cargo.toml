@@ -48,6 +48,16 @@ toml_edit = "0.22"
 # 1.70 (under workspace 1.85). Restricted to `dry-core` — the
 # doc-gen emitter lives there per the hexagonal layout.
 documented = "0.9"
+# JSON Schema derivation for the schema emitter (`dry.schema.json`,
+# dry-rs#78). `#[derive(JsonSchema)]` on the POD config types
+# produces a JSON Schema document that VS Code (and any other
+# `$schema`-aware editor) consumes for autocomplete + inline
+# validation against `dry.toml`. Single source of truth = the
+# annotated Config struct; one edit propagates to docs.rs, the
+# annotated `dry.example.toml`, AND the JSON schema. MSRV 1.74
+# (under workspace 1.85). Restricted to `dry-core` — the schema
+# emitter lives alongside `config_doc_gen` per the hexagonal layout.
+schemars = "1.2"
 insta = { version = "1", features = ["json"] }
 proptest = "1"
 thiserror = "2"

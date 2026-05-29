@@ -12,23 +12,46 @@
 //! that multiple consumers read freely. See memory
 //! `feedback_rust_trait_vs_struct_for_data`.
 //!
-//! All fields are `&'static` so the type is `Copy` and a
+//! All `&'static`-typed fields keep the type `Copy` /
 //! `const`-friendly. Adapter binaries declare a `const DRY4RS_META:
 //! AdapterMeta = AdapterMeta { ... };` and pass `&DRY4RS_META` into
 //! [`crate::cli::run()`].
 //!
 //! Per ADR D8 — result structs do NOT carry `#[non_exhaustive]`; they
 //! evolve via constructors + serde versioning + additive field
-//! additions. [`AdapterMeta`] consumers can construct via the struct
-//! literal (the 13 fields are public).
+//! additions. [`AdapterMeta`] consumers construct via the struct
+//! literal (fields are public).
+
+/// Adapter language identity — selects which `[rust]` / `[typescript]`
+/// section of the unified config the adapter reads via
+/// [`EffectiveConfig::resolve`].
+///
+/// `#[non_exhaustive]` per the AGENTS.md `#[non_exhaustive]` discipline
+/// — enums YES, result structs NO. New language variants (e.g.,
+/// `Go` for a future `dry4go` adapter) land additively without
+/// breaking exhaustive matches at consumer sites.
+///
+/// Runtime-only — NOT serialized on the wire envelope (the envelope
+/// already carries a `language: String` field threaded from
+/// [`crate::ports::NormalizerPort::language`]); not a clap value enum.
+///
+/// [`EffectiveConfig::resolve`]: crate::cli::EffectiveConfig::resolve
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Language {
+    /// Rust source — dry4rs reads `[rust]` overrides.
+    Rust,
+    /// TypeScript source — future dry4ts reads `[typescript]` overrides.
+    TypeScript,
+}
 
 /// Identity/data struct supplied by each adapter binary at startup.
 ///
-/// The shared minimum spans 14 `&'static`-typed fields (the original
-/// 13 per cross-tool ADR D1, plus `example_file_name` for the
-/// Starship-pattern `init` emitter — dry-rs#77). Tools MAY extend
-/// with tool-specific fields (e.g., crap-rs's `default_metric`);
-/// dry-rs has no tool-specific fields at v0.1.
+/// The shared minimum spans `&'static`-typed identity fields plus the
+/// per-language section selector (`language`, dry-rs#78) and the JSON
+/// schema artifact name (`schema_file_name`, dry-rs#78). Tools MAY
+/// extend with tool-specific fields (e.g., crap-rs's
+/// `default_metric`); dry-rs has no tool-specific fields at v0.1.
 ///
 /// # Field semantics
 ///
@@ -52,15 +75,27 @@
 ///   file; `<tool>.example.toml` is the exhaustive committed
 ///   reference produced by `dry4rs init` (Starship doc-gen
 ///   pattern, dry-rs#77).
+/// - `schema_file_name` — the JSON-schema artifact file name (e.g.,
+///   `"dry.schema.json"`). Adapter-name-agnostic plumbing — mirrors
+///   `example_file_name` in shape. Written alongside the example
+///   by `init` (dry-rs#78) and consumed by `$schema`-aware editors
+///   for autocomplete / inline validation against `dry.toml`.
 /// - `extensions` — file extensions to walk by default (without the
 ///   leading dot). Overridable by `[walk] extensions = [...]` in
 ///   TOML or future CLI flag.
+/// - `language` — selects which `[rust]` / `[typescript]` section
+///   of the unified config the adapter consults via
+///   [`EffectiveConfig::resolve`]. Decoupled from `display_name`
+///   (which is human-readable text) — `language` is a typed enum so
+///   the cascade resolver can match on it without string compares.
 /// - `tool_info_uri` — URL to the tool's home (README / docs).
 /// - `rule_help_uri` — URL to threshold / rule documentation.
 /// - `default_excludes` — glob patterns merged with user excludes
 ///   (additive, never displaces user input). Empty at v0.1.
 /// - `forced_excludes` — glob patterns the user cannot override
 ///   (e.g., `target/**`). Empty at v0.1.
+///
+/// [`EffectiveConfig::resolve`]: crate::cli::EffectiveConfig::resolve
 #[derive(Debug, Clone, Copy)]
 pub struct AdapterMeta {
     /// clap binary name used at startup. Drives `--help` / `--version`
@@ -98,11 +133,26 @@ pub struct AdapterMeta {
     /// config is the minimal user-loaded file (dry-rs#71). MUST be
     /// non-empty.
     pub example_file_name: &'static str,
+    /// The JSON-schema artifact file name (e.g., `"dry.schema.json"`).
+    /// Adapter-name-agnostic plumbing — mirrors `example_file_name`
+    /// in shape. Written alongside the example by `init` (dry-rs#78);
+    /// `$schema`-aware editors (VS Code, etc.) consume it for
+    /// inline validation against `dry.toml`. MUST be non-empty.
+    pub schema_file_name: &'static str,
     /// File extensions to walk by default (without the leading dot).
     /// Consumers may convert to `Vec<String>` via
     /// [`AdapterMeta::extensions_owned`]. MUST be non-empty (every
     /// adapter has at least one language extension).
     pub extensions: &'static [&'static str],
+    /// Adapter language identity — selects which `[rust]` /
+    /// `[typescript]` section of the unified config the adapter reads
+    /// via [`EffectiveConfig::resolve`] (dry-rs#78). Decoupled from
+    /// `display_name` (which is human-readable text) — `language`
+    /// is a typed enum so the cascade resolver matches on it without
+    /// string compares.
+    ///
+    /// [`EffectiveConfig::resolve`]: crate::cli::EffectiveConfig::resolve
+    pub language: Language,
     /// URL to the tool's home (README / docs). MUST be non-empty.
     pub tool_info_uri: &'static str,
     /// URL to threshold / rule documentation. MUST be non-empty.
@@ -164,6 +214,10 @@ impl AdapterMeta {
             "AdapterMeta::example_file_name must be non-empty"
         );
         assert!(
+            !self.schema_file_name.is_empty(),
+            "AdapterMeta::schema_file_name must be non-empty"
+        );
+        assert!(
             !self.extensions.is_empty(),
             "AdapterMeta::extensions must contain at least one entry"
         );
@@ -206,7 +260,9 @@ mod tests {
         after_help: "",
         config_file_name: "test-adapter.toml",
         example_file_name: "test-adapter.example.toml",
+        schema_file_name: "test-adapter.schema.json",
         extensions: &["x"],
+        language: Language::Rust,
         tool_info_uri: "https://example.test/info",
         rule_help_uri: "https://example.test/rules",
         default_excludes: &[],
@@ -253,6 +309,16 @@ mod tests {
     fn validate_or_panic_rejects_empty_example_file_name() {
         let bad = AdapterMeta {
             example_file_name: "",
+            ..TEST_META
+        };
+        bad.validate_or_panic();
+    }
+
+    #[test]
+    #[should_panic(expected = "schema_file_name")]
+    fn validate_or_panic_rejects_empty_schema_file_name() {
+        let bad = AdapterMeta {
+            schema_file_name: "",
             ..TEST_META
         };
         bad.validate_or_panic();
