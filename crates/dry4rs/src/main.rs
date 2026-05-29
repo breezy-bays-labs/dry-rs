@@ -13,7 +13,7 @@ use dry4rs::parser::SynNormalizer;
 
 /// dry4rs's [`AdapterMeta`] — supplies binary identity (`tool_name`,
 /// version, help text), the config-file name the loader walks for
-/// (`dry4rs.toml`), the default extension allowlist (`["rs"]`), and
+/// (`dry.toml`), the default extension allowlist (`["rs"]`), and
 /// the documentation URIs.
 ///
 /// `long_about` text matches the previous clap-derive
@@ -32,7 +32,7 @@ const DRY4RS_META: AdapterMeta = AdapterMeta {
                   `--top`/`--only-failing` reshape the displayed `view.*` projection; \
                   `result.*` stays unaffected per the truthful-gate ADR.",
     after_help: "",
-    config_file_name: "dry4rs.toml",
+    config_file_name: "dry.toml",
     extensions: &["rs"],
     tool_info_uri: "https://github.com/breezy-bays-labs/dry-rs",
     rule_help_uri: "https://github.com/breezy-bays-labs/dry-rs#thresholds",

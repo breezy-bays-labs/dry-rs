@@ -1,7 +1,7 @@
 //! Integration tests for the config-file loader.
 //!
 //! Per ADR D7, this file MUST NOT contain double-quoted
-//! adapter-binary-name literals (`"dry4rs.toml"`, `"dry4rs"`, etc.).
+//! adapter-binary-name literals (`"dry.toml"`, `"dry4rs"`, etc.).
 //! All adapter-name plumbing flows through `TEST_META`'s synthetic
 //! `"test-adapter.toml"` literal. The layer-4 ast-purity gate
 //! (`scripts/check-config-ast-purity.sh`, landing Stage 3) enforces

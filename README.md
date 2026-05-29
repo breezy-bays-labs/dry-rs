@@ -196,7 +196,7 @@ jobs:
 
 ## Configuration
 
-dry4rs auto-discovers a `dry4rs.toml` config file by walking
+dry4rs auto-discovers a `dry.toml` config file by walking
 upward from the analysis path via `Path::ancestors` — the first
 matching file found wins. A reference example is committed at this
 repo's root.
@@ -225,8 +225,8 @@ CLI flag > [config] section value > AdapterMeta default > compiled-in fallback
 ```
 
 For example, `dry4rs report --threshold 0.95 crates/foo/` uses `0.95`
-regardless of what `dry4rs.toml` says. With no `--threshold` flag,
-`[gate] threshold = 0.9` from `dry4rs.toml` applies; if neither
+regardless of what `dry.toml` says. With no `--threshold` flag,
+`[gate] threshold = 0.9` from `dry.toml` applies; if neither
 supplies a value, the `AdapterMeta`-supplied default kicks in (e.g.,
 the `extensions` field defaults to `&["rs"]` for `dry4rs`); the
 compiled-in fallback (`REVIEW_FIRST_FLOOR = 0.85` for `threshold`)
@@ -236,7 +236,7 @@ applies last.
 
 - **Auto-discovery**: walks up from the first positional analysis
   path (or CWD if none) to filesystem root, looking for
-  `dry4rs.toml`.
+  `dry.toml`.
 - **Explicit override**: `dry4rs report --config /custom/path.toml`
   bypasses auto-discovery. Missing explicit path is an error.
 - **Missing file is OK**: with no config file present, defaults

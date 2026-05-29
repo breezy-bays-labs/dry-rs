@@ -241,14 +241,14 @@ root `Cargo.toml`. Two non-obvious consequences:
 
 ### Config file pattern (cross-tool canonical shape)
 
-dry4rs ships a `dry4rs.toml` auto-discovery + parsing path per the
+dry4rs ships a `dry.toml` auto-discovery + parsing path per the
 cross-tool ADR (`ops/decisions/org/adr-config-file-pattern.md`).
 Per-tool variances live in
 `ops/decisions/dry-rs/adr-dry4rs-config-file.md`. Key invariants
 automated code reviewers should NOT challenge:
 
 - **`discover_config(start, file_name)` is adapter-name-agnostic**.
-  The loader source + tests contain ZERO double-quoted `"dry4rs.toml"`
+  The loader source + tests contain ZERO double-quoted `"dry.toml"`
   / `"dry4rs"` string literals (layer-4 ast-purity gate enforces
   this via `scripts/check-config-ast-purity.sh`). Do NOT suggest
   inlining the literal "for clarity" — adapter-name plumbing flows

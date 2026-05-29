@@ -175,7 +175,7 @@ pub struct Args {
     ///
     /// `None` when the user did NOT pass `--threshold` (the
     /// precedence merger then consults `[gate] threshold` from
-    /// `dry4rs.toml`, falling back to the compiled-in default
+    /// `dry.toml`, falling back to the compiled-in default
     /// [`crate::comparison::REVIEW_FIRST_FLOOR`] = 0.85). `Some(t)`
     /// is the user-supplied value; CLI > config > meta default.
     ///
@@ -188,7 +188,7 @@ pub struct Args {
     /// html / sarif land in later waves.
     ///
     /// `None` when the user did NOT pass `--format` (the precedence
-    /// merger then consults `[output] format` from `dry4rs.toml`,
+    /// merger then consults `[output] format` from `dry.toml`,
     /// falling back to `Format::Text`).
     pub format: Option<Format>,
 
@@ -230,10 +230,10 @@ pub struct Args {
     /// bash)`).
     pub completions: Option<Shell>,
 
-    /// Path to an explicit `dry4rs.toml` config file (bypasses auto-
+    /// Path to an explicit `dry.toml` config file (bypasses auto-
     /// discovery). When set, the path MUST exist — missing path
     /// produces `ConfigError::Io` at startup. When unset, the loader
-    /// auto-discovers a `dry4rs.toml` by walking upward from the
+    /// auto-discovers a `dry.toml` by walking upward from the
     /// analysis-root (per `org/adr-config-file-pattern.md` D2).
     pub config: Option<PathBuf>,
 }
@@ -292,7 +292,7 @@ impl Args {
     pub fn from_matches(matches: &clap::ArgMatches) -> Result<Self, clap::Error> {
         // `--threshold` / `--format` / `--threshold-mode` produce
         // `Option<T>` — absence means "let the precedence merger
-        // consult [gate]/[output] from dry4rs.toml" (per ADR D3).
+        // consult [gate]/[output] from dry.toml" (per ADR D3).
         // The compiled-in defaults (0.85 / Format::Text /
         // ThresholdMode::Default) apply ONLY when neither CLI nor
         // config supplied a value.

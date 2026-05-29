@@ -44,7 +44,7 @@ pre-push:
     config-ast-purity:
       # Mirror the `dry-core::adapters::config ast-purity check` CI
       # job. Rejects double-quoted adapter-binary-name string literals
-      # ("dry4rs.toml", "dry4rs", "dry4ts.toml", "dry4ts") in
+      # ("dry.toml", "dry4rs", "dry4ts.toml", "dry4ts") in
       # crates/dry-core/src/adapters/config.rs +
       # crates/dry-core/tests/config.rs per the cross-tool config-file
       # ADR (ops/decisions/org/adr-config-file-pattern.md D7).
