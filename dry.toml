@@ -1,21 +1,42 @@
-# dry-rs dogfood — reference dry.toml at workspace root.
+# dry.toml — dry-rs's own dogfood config and worked reference.
 #
-# Auto-discovered by dry4rs when running from any directory in the
-# workspace (rustfmt-style walk-upward via Path::ancestors per ADR
-# `org/adr-config-file-pattern.md` D2). Values mirror compiled-in
-# defaults; this file's PRIMARY purpose at v0.1 is dogfood
-# verification (see crates/dry4rs/tests/dogfood_discovery.rs).
+# Auto-discovered by dry4rs (rustfmt-style walk-upward via
+# `Path::ancestors`). Exercised end-to-end on every CI run by the
+# `dry-self-scorecard` and `dry-corpus-scorecard` jobs in
+# `.github/workflows/self-test.yml` (bare-binary invocation; no
+# `--config` / `--threshold` / `--format` flags pass through).
 #
-# Schema: ops/decisions/org/adr-config-file-pattern.md (cross-tool)
-#       + ops/decisions/dry-rs/adr-dry4rs-config-file.md (per-tool)
+# At v0.1 every value below mirrors a compiled-in dry4rs default — the
+# dogfood verifies the discovery + parsing contract on the production
+# CI surface; config-application is unit-tested in
+# `dry-core::tests::config`. The file's secondary role is as a worked
+# reference for external consumers (see README "Configuration").
+#
+# Schema references:
+#   ops/decisions/org/adr-config-file-pattern.md     (cross-tool)
+#   ops/decisions/org/adr-unified-config-naming.md   (file name = `<tool>.toml`)
+#   ops/decisions/dry-rs/adr-dry4rs-config-file.md   (per-tool)
 
 [gate]
+# Jaccard similarity threshold. 0.85 = comparison-engine `REVIEW_FIRST_FLOOR`.
+# Findings at 0.95+ surface as `auto_refactor`, 0.85+ as `review_first`,
+# threshold..0.85 as `advisory`.
 threshold = 0.85
+
+# Threshold-mode preset (`strict` / `default` / `lenient`).
 threshold_mode = "default"
 
 [output]
+# Output format. `text` for step-summary-friendly CI rendering;
+# `json` for downstream tooling consuming the v0.1 wire envelope.
 format = "text"
 
 [walk]
+# Walk `.gitignore`'d paths? `false` keeps `target/`, `node_modules/`,
+# generated artifacts out of analysis.
 include_ignored = false
-# extensions = ["rs"] — defers to AdapterMeta default
+
+# File extensions to analyze. Omitted = adapter default
+# (`AdapterMeta::extensions = ["rs"]` for dry4rs). Future dry4ts
+# (v0.6+) defaults to `["ts", "tsx"]`.
+# extensions = ["rs"]
