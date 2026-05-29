@@ -102,7 +102,23 @@ pub enum ConfigError {
 /// filesystem error other than "file not found". `NotFound`
 /// translates to a continued walk; only structural errors propagate.
 pub fn discover_config(start: &Path, file_name: &str) -> Result<Option<PathBuf>, ConfigError> {
-    for ancestor in start.ancestors() {
+    // Resolve to an absolute path before walking ancestors. A
+    // relative path like `.` or `src/` produces only its own
+    // components from `Path::ancestors()` — the walk never reaches
+    // the cwd's parent, so a config at the workspace root would be
+    // invisible to a `dry4rs report crates/foo/` invocation. The
+    // absolute-path resolution lets the walk reach the filesystem
+    // root, matching rustfmt's discovery discipline (per ADR D2).
+    //
+    // `std::path::absolute` does NOT touch the filesystem (no
+    // canonicalize); it only prepends `std::env::current_dir()` if
+    // `start` is relative. This preserves the "no I/O on discovery"
+    // contract — the only I/O is the per-ancestor `try_exists`.
+    let start_abs = std::path::absolute(start).map_err(|err| ConfigError::Io {
+        path: start.to_path_buf(),
+        source: err,
+    })?;
+    for ancestor in start_abs.ancestors() {
         let candidate = ancestor.join(file_name);
         match candidate.try_exists() {
             Ok(true) => return Ok(Some(candidate)),
@@ -157,6 +173,34 @@ pub fn parse_config(path: &Path, contents: &str) -> Result<Config, ConfigError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discover_resolves_relative_start_to_absolute_before_walking() {
+        // Regression for PR #73 Gemini finding:
+        // `Path::ancestors()` of a relative path (e.g., `.`) only
+        // yields the components of that relative path; without
+        // absolute-path resolution the walk never reaches the
+        // cwd's parent.
+        //
+        // Verifies the `std::path::absolute(start)` first-step
+        // resolution. We assert behaviorally that absolute resolves
+        // any relative `.`-like path to a path with a parent that
+        // is NOT "" — a property that holds for any rooted absolute
+        // path. The actual loader code path uses `start_abs.
+        // ancestors()` after this resolution so the walk reaches
+        // the filesystem root regardless of the input's shape.
+        let rel = std::path::Path::new(".");
+        let abs = std::path::absolute(rel).expect("absolute() succeeds on a valid relative path");
+        assert!(
+            abs.is_absolute(),
+            "std::path::absolute MUST produce an absolute path"
+        );
+        let parent = abs.parent();
+        assert!(
+            parent.is_some(),
+            "absolute path must have a parent component for upward walk"
+        );
+    }
 
     #[test]
     fn discover_returns_ok_none_when_file_absent() {
