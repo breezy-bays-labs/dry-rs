@@ -22,19 +22,6 @@
 
 use dry_core::cli::{AdapterMeta, Args, build_command};
 
-/// Synthetic adapter meta used across `dry-core` integration tests.
-///
-/// MUST MATCH `dry4rs::main::DRY4RS_META` in every field that affects
-/// clap behavior or downstream consumer semantics, with the sole
-/// exception of `config_file_name = "test-adapter.toml"` (chosen so
-/// the layer-4 ast-purity gate landing in Stage 3 doesn't trip on
-/// `"dry4rs.toml"` literals appearing in `tests/config.rs`).
-///
-/// `tool_name = "dry4rs"` is fine here — the ast-purity gate covers
-/// `tests/config*.rs` only (see [`crates/dry-core/tests/common/
-/// mod.rs`] is allowed to use the literal; the gate explicitly
-/// excludes this file's directory by listing only the loader-specific
-/// test file).
 /// Build a [`clap::Command`] over [`TEST_META`] and parse the
 /// supplied argv into an [`Args`] instance.
 ///
@@ -45,9 +32,9 @@ use dry_core::cli::{AdapterMeta, Args, build_command};
 /// `TEST_META.tool_name` so clap sees a well-formed argv0.
 ///
 /// Routes through the SAME `build_command + from_matches` pipeline
-/// the production binary will use (Stage 5+6 of dry-rs#71), so
-/// these tests accurately exercise the production CLI machinery —
-/// no `#[cfg(test)] pub` shim on `Args` (per CEng H1).
+/// the production binary uses (Stage 5+6 of dry-rs#71), so these
+/// tests accurately exercise the production CLI machinery — no
+/// `#[cfg(test)] pub` shim on `Args` (per CEng H1).
 ///
 /// # Errors
 ///
@@ -66,6 +53,20 @@ pub fn parse_test_args(args: &[&str]) -> Result<Args, clap::Error> {
     Args::from_matches(&matches)
 }
 
+/// Synthetic adapter meta used across `dry-core` integration tests.
+///
+/// MUST MATCH `dry4rs::main::DRY4RS_META` in every field that
+/// affects clap behavior or downstream consumer semantics, with the
+/// sole exception of `config_file_name = "test-adapter.toml"`
+/// (chosen so the layer-4 ast-purity gate landing in Stage 3 doesn't
+/// trip on `"dry4rs.toml"` literals appearing in `tests/config.rs`).
+///
+/// `tool_name = "dry4rs"` is fine here — the ast-purity gate covers
+/// `crates/dry-core/src/adapters/config.rs` +
+/// `crates/dry-core/tests/config.rs` only. This module's path
+/// (`crates/dry-core/tests/common/mod.rs`) is excluded by the gate's
+/// hardcoded FILES allowlist; the gate also excludes any line whose
+/// first non-whitespace chars are `//` (doc comments, line comments).
 pub const TEST_META: AdapterMeta = AdapterMeta {
     tool_name: "dry4rs",
     display_name: "Rust",

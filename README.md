@@ -196,9 +196,10 @@ jobs:
 
 ## Configuration
 
-dry4rs auto-discovers a `dry4rs.toml` config file at the workspace
-root (walks upward from the analysis path via `Path::ancestors`).
-A reference example is committed at this repo's root.
+dry4rs auto-discovers a `dry4rs.toml` config file by walking
+upward from the analysis path via `Path::ancestors` — the first
+matching file found wins. A reference example is committed at this
+repo's root.
 
 ### Schema
 
@@ -217,15 +218,19 @@ extensions = ["rs"]       # file extensions to analyze (optional)
 
 ### Precedence
 
-CLI flag values ALWAYS override config; missing values fall back to
-compiled-in defaults:
+CLI flag values ALWAYS override config. Missing values resolve via:
 
 ```text
-CLI flag > [config] section value > compiled-in default
+CLI flag > [config] section value > AdapterMeta default > compiled-in fallback
 ```
 
 For example, `dry4rs report --threshold 0.95 crates/foo/` uses `0.95`
-regardless of what `dry4rs.toml` says.
+regardless of what `dry4rs.toml` says. With no `--threshold` flag,
+`[gate] threshold = 0.9` from `dry4rs.toml` applies; if neither
+supplies a value, the `AdapterMeta`-supplied default kicks in (e.g.,
+the `extensions` field defaults to `&["rs"]` for `dry4rs`); the
+compiled-in fallback (`REVIEW_FIRST_FLOOR = 0.85` for `threshold`)
+applies last.
 
 ### Discovery
 

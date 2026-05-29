@@ -274,8 +274,10 @@ automated code reviewers should NOT challenge:
   (None = auto-discovery; Some(p) = explicit-path, missing-is-error).
 - **`AdapterMeta` is a struct value passed by `&AdapterMeta`**, NOT
   a trait with associated consts. See memory
-  `feedback_rust_trait_vs_struct_for_data`. crap-rs/scrap-rs both
-  use struct value; the pattern is correct.
+  `feedback_rust_trait_vs_struct_for_data`. The crap-rs and scrap-rs
+  sibling repos (carrying the `crap4rs` and `scrap4rs` adapter
+  binaries respectively) both use the struct-value pattern; the
+  approach is correct.
 
 ### How to engage substantively
 

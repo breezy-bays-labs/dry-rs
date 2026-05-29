@@ -322,24 +322,20 @@ pub fn render_config_error(err: &ConfigError) {
 /// the [`AnalysisConfig`] consumed by the analyzer (N40 in the
 /// breadboard). Precedence (per ADR D3):
 ///
-/// 1. CLI flag (truthful gate: clap supplies a default when the user
-///    did NOT pass the flag, so any non-default CLI value implicitly
-///    wins; the precedence is encoded by reading from `args` first
-///    only when the field has a "user supplied" semantic distinct
-///    from its default — for `threshold`/`format`/`threshold_mode`,
-///    Stage 5 keeps CLI authoritative because clap always supplies
-///    a parsed value).
-/// 2. File config field (when present)
+/// 1. CLI flag (`Some(v)` on `Args` for `--threshold` / `--format` /
+///    `--threshold-mode`; `Args.include_ignored == true`)
+/// 2. File config field (when present): `[gate]` / `[output]` /
+///    `[walk]` tables
 /// 3. [`AdapterMeta`] default (e.g., `extensions`)
-/// 4. Compiled-in fallback (already baked into the CLI parser
-///    defaults)
+/// 4. Compiled-in fallback (`REVIEW_FIRST_FLOOR` = 0.85,
+///    `Format::Text`, `ThresholdMode::Default`)
 ///
-/// CLI-vs-config-overrides for `threshold` / `format` / `threshold_
-/// mode` are resolved entirely by the CLI's default-value parsing at
-/// v0.1: the parser always supplies a value, so the precedence
-/// degrades to "CLI overrides config" when the user explicitly
-/// passes a flag. v0.2 may upgrade to `Option<T>` on `Args` if
-/// per-field user-vs-default distinction becomes important.
+/// `threshold` / `format` / `threshold_mode` are `Option<T>` on
+/// `Args` — `build_command` deliberately does NOT register a clap
+/// default for these flags so absence at the CLI semantically means
+/// "let the merger consult the next tier". This is what makes
+/// `[gate] threshold = 0.9` actually take effect when the user
+/// invokes `dry4rs report` without `--threshold`.
 #[must_use]
 pub fn merge_effective_inputs(
     meta: &AdapterMeta,
