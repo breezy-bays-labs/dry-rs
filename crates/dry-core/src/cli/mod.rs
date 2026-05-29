@@ -32,10 +32,12 @@
 
 mod adapter_meta;
 mod args;
+mod build_command;
 mod run;
 
 pub use adapter_meta::AdapterMeta;
 pub use args::{Args, Command, Format, ThresholdMode};
+pub use build_command::build_command;
 pub use run::run;
 
 use std::path::PathBuf;

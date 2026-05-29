@@ -20,7 +20,7 @@
 
 #![allow(dead_code)]
 
-use dry_core::cli::AdapterMeta;
+use dry_core::cli::{AdapterMeta, Args, build_command};
 
 /// Synthetic adapter meta used across `dry-core` integration tests.
 ///
@@ -35,6 +35,37 @@ use dry_core::cli::AdapterMeta;
 /// mod.rs`] is allowed to use the literal; the gate explicitly
 /// excludes this file's directory by listing only the loader-specific
 /// test file).
+/// Build a [`clap::Command`] over [`TEST_META`] and parse the
+/// supplied argv into an [`Args`] instance.
+///
+/// The argv slice does NOT include a leading binary name —
+/// `parse_test_args(&["report", "src/"])` is sufficient, mirroring
+/// the ergonomics of the old `Args::try_parse_from(["dry4rs",
+/// "report", "src/"])` sites. Internally prepends
+/// `TEST_META.tool_name` so clap sees a well-formed argv0.
+///
+/// Routes through the SAME `build_command + from_matches` pipeline
+/// the production binary will use (Stage 5+6 of dry-rs#71), so
+/// these tests accurately exercise the production CLI machinery —
+/// no `#[cfg(test)] pub` shim on `Args` (per CEng H1).
+///
+/// # Errors
+///
+/// Returns the underlying clap error (unparseable flag, missing
+/// required arg, unknown subcommand, help/version short-circuit).
+pub fn parse_test_args(args: &[&str]) -> Result<Args, clap::Error> {
+    // Prepend the synthetic binary name so clap sees a well-formed
+    // argv0. The mechanical rewrite of cli_args.rs from
+    // `Args::try_parse_from(["dry4rs", ...])` → `parse_test_args
+    // ([...])` drops the "dry4rs" literal at the call site; this
+    // helper supplies it from `TEST_META`.
+    let argv: Vec<&str> = std::iter::once(TEST_META.tool_name)
+        .chain(args.iter().copied())
+        .collect();
+    let matches = build_command(&TEST_META).try_get_matches_from(argv)?;
+    Args::from_matches(&matches)
+}
+
 pub const TEST_META: AdapterMeta = AdapterMeta {
     tool_name: "dry4rs",
     display_name: "Rust",

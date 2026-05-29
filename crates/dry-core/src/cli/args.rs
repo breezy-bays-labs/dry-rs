@@ -223,6 +223,17 @@ pub struct Args {
     /// shell init files (`source <(dry4rs --completions bash)`).
     #[arg(long, global = true, value_name = "SHELL")]
     pub completions: Option<Shell>,
+
+    /// Path to an explicit `dry4rs.toml` config file (bypasses auto-
+    /// discovery). When set, the path MUST exist — missing path
+    /// produces `ConfigError::Io` at startup. When unset, the loader
+    /// auto-discovers a `dry4rs.toml` by walking upward from the
+    /// analysis-root (per `org/adr-config-file-pattern.md` D2).
+    ///
+    /// Lands as an additive field at Stage 4 of dry-rs#71; Stage 5
+    /// wires it into `dry_core::cli::run`'s precedence chain.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub config: Option<PathBuf>,
 }
 
 impl Args {
@@ -252,6 +263,112 @@ impl Args {
         }
         vec![PathBuf::from(".")]
     }
+
+    /// Construct an [`Args`] from an already-parsed [`clap::ArgMatches`].
+    ///
+    /// The companion to [`super::build_command`] — together they form
+    /// the imperative pipeline `build_command(meta) ->
+    /// get_matches() -> from_matches() -> Args`. The production
+    /// binary (`dry4rs::main` at Stage 6) and the test fixture
+    /// (`crates/dry-core/tests/common/mod.rs::parse_test_args`) both
+    /// route through this pair.
+    ///
+    /// Stage 4 lands this method additively; the existing
+    /// `#[derive(Parser)]` keeps working until Stage 5's atomic
+    /// rip-out. Field extraction below MUST stay in lockstep with the
+    /// `Arg::new(...)` declarations in `build_command`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the clap error verbatim when subcommand-arg extraction
+    /// fails. Top-level flag extraction uses `get_one::<T>` /
+    /// `get_flag` which cannot fail on a well-formed
+    /// [`build_command`][bc] output (the value-parser machinery already
+    /// validated types at `get_matches` time).
+    ///
+    /// [bc]: super::build_command
+    pub fn from_matches(matches: &clap::ArgMatches) -> Result<Self, clap::Error> {
+        let threshold = *matches.get_one::<f64>("threshold").ok_or_else(|| {
+            clap::Error::raw(
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "--threshold missing (build_command must default to 0.85)",
+            )
+        })?;
+        let format = *matches.get_one::<Format>("format").ok_or_else(|| {
+            clap::Error::raw(
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "--format missing (build_command must default to text)",
+            )
+        })?;
+        let threshold_mode = *matches
+            .get_one::<ThresholdMode>("threshold_mode")
+            .ok_or_else(|| {
+                clap::Error::raw(
+                    clap::error::ErrorKind::MissingRequiredArgument,
+                    "--threshold-mode missing (build_command must default to default)",
+                )
+            })?;
+        let top = matches.get_one::<u32>("top").copied();
+        let only_failing = matches.get_flag("only_failing");
+        let no_fail = matches.get_flag("no_fail");
+        let include_ignored = matches.get_flag("include_ignored");
+        let completions = matches.get_one::<Shell>("completions").copied();
+        let config = matches.get_one::<PathBuf>("config").cloned();
+
+        let command = match matches.subcommand() {
+            Some(("report", sub)) => Some(Command::Report {
+                paths: sub
+                    .get_many::<PathBuf>("paths")
+                    .map(|vals| vals.cloned().collect())
+                    .unwrap_or_default(),
+            }),
+            Some(("stats", sub)) => Some(Command::Stats {
+                paths: sub
+                    .get_many::<PathBuf>("paths")
+                    .map(|vals| vals.cloned().collect())
+                    .unwrap_or_default(),
+            }),
+            Some(("check", sub)) => Some(Command::Check {
+                paths: sub
+                    .get_many::<PathBuf>("paths")
+                    .map(|vals| vals.cloned().collect())
+                    .unwrap_or_default(),
+            }),
+            Some(("ignore", sub)) => Some(Command::Ignore {
+                fingerprint: sub
+                    .get_one::<String>("fingerprint")
+                    .ok_or_else(|| {
+                        clap::Error::raw(
+                            clap::error::ErrorKind::MissingRequiredArgument,
+                            "ignore: missing fingerprint argument",
+                        )
+                    })?
+                    .clone(),
+            }),
+            Some(("ignored", _)) => Some(Command::Ignored),
+            Some(("cleanup", _)) => Some(Command::Cleanup),
+            Some((other, _)) => {
+                return Err(clap::Error::raw(
+                    clap::error::ErrorKind::InvalidSubcommand,
+                    format!("unknown subcommand: {other}"),
+                ));
+            }
+            None => None,
+        };
+
+        Ok(Self {
+            command,
+            threshold,
+            format,
+            threshold_mode,
+            top,
+            only_failing,
+            no_fail,
+            include_ignored,
+            completions,
+            config,
+        })
+    }
 }
 
 /// Custom clap value parser for `--threshold`.
@@ -259,7 +376,10 @@ impl Args {
 /// Accepts any `f64` in the half-open interval `(0.0, 1.0]` (the
 /// comparison engine's domain). Out-of-range values reject at parse
 /// time so the comparison engine never receives a degenerate threshold.
-fn parse_threshold(s: &str) -> Result<f64, String> {
+///
+/// `pub(crate)` so `build_command` can reuse the parser when
+/// constructing the imperative `clap::Command`.
+pub(crate) fn parse_threshold(s: &str) -> Result<f64, String> {
     let value: f64 = s
         .parse()
         .map_err(|err| format!("threshold must be a decimal number: {err}"))?;
