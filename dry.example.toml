@@ -1,0 +1,43 @@
+# dry.example.toml — exhaustive annotated reference for the dry4rs config schema.
+#
+# Generated deterministically by `dry4rs init` from the schema's
+# `///` doc comments. To regenerate after a schema change:
+#
+#     dry4rs init --force
+#
+# A sync test keeps this file byte-identical to the emitter's
+# output. Adding a config field breaks the build at
+# `dry_core::adapters::config_doc_gen::build_exhaustive_example_config`
+# (compile-time exhaustive destructure) until both the emitter
+# is updated and this file is regenerated.
+#
+# Distinct from the minimal `dry.toml` that dry4rs actually
+# loads: this file is the canonical option reference, NOT
+# user config.
+#
+
+
+# `[gate]` table — threshold + threshold-mode preset.
+[gate]
+# Jaccard similarity threshold. CLI `--threshold` overrides this
+# when both are set; compiled-in default `0.85` applies when
+# neither is set.
+threshold = 0.85
+# Threshold-mode preset (`strict` / `default` / `lenient`).
+# CLI `--threshold-mode` overrides this when both are set.
+threshold_mode = "default"
+
+# `[output]` table — format selector.
+[output]
+# Output format (`text` / `json`). CLI `--format` overrides this.
+format = "text"
+
+# `[walk]` table — file-walker tuning.
+[walk]
+# Walk files normally excluded by `.gitignore` / `.ignore`. CLI
+# `--include-ignored` overrides this when both are set.
+include_ignored = false
+# File extensions to analyze (without the leading dot). When
+# `None`, the adapter default applies; when `Some(vec)`, the
+# supplied list overrides (an empty vec disables the filter).
+extensions = ["rs"]
