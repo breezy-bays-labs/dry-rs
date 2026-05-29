@@ -136,6 +136,12 @@ jobs:
           # compiled-in `rs` allowlist in charge — functionally identical
           # for this smoke's purpose.
           threshold: '0.85'
+          # Exercise the third deferring input's non-empty pass-through
+          # alongside `paths` and `threshold`. The action passes
+          # `--format text` to the text-render invocation when this is
+          # non-empty (artifact run hardcodes `--format json`
+          # regardless — contract-bound).
+          format: 'text'
           fail-on-findings: 'false'
 
       # ---- Defer path -------------------------------------------------
@@ -242,21 +248,22 @@ jobs:
             fi
             echo "[$label] (c) JSON envelope parses ok"
 
-            # (d) at least one of `schema_version` / `result` / `view`
-            #     is a top-level key. Locks the nested-envelope
-            #     contract per adr-nested-json-envelope.md without
-            #     freezing the exact shape — if the schema bumps and
-            #     `result` rearranges into `result.summary` only, the
-            #     `view` and `schema_version` slots remain. Catches a
-            #     regression where the binary emits a
-            #     structurally-valid JSON object that is NOT the
-            #     dry-rs envelope (e.g., a clap error rendered as JSON
-            #     instead of the report).
-            if ! jq -e 'has("schema_version") or has("result") or has("view")' "$report_path" >/dev/null; then
-              echo "::error::[$label] JSON envelope at '$report_path' is missing all of schema_version, result, view — does not match the dry-rs v0.1 wire envelope"
+            # (d) all three of `schema_version` / `result` / `view`
+            #     are top-level keys. Locks the nested-envelope
+            #     contract per adr-nested-json-envelope.md — every
+            #     v0.1 envelope MUST carry all three slots; a
+            #     regression that drops one or two slots is a wire-
+            #     contract regression even though the remaining
+            #     slot(s) parse cleanly. AND-of-three catches a wider
+            #     regression class than OR-of-three, and the v0.1
+            #     schema is fixed (forward-compat for schema bumps
+            #     lives in `schema_version` itself, not in selectively
+            #     dropping siblings).
+            if ! jq -e 'has("schema_version") and has("result") and has("view")' "$report_path" >/dev/null; then
+              echo "::error::[$label] JSON envelope at '$report_path' is missing one or more of schema_version, result, view — does not match the dry-rs v0.1 wire envelope"
               return 1
             fi
-            echo "[$label] (d) envelope has at least one of schema_version|result|view ok"
+            echo "[$label] (d) envelope has schema_version + result + view ok"
           }
 
           assert_contract "override" "$OVERRIDE_OUTCOME" "$OVERRIDE_REPORT_PATH"

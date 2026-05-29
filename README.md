@@ -145,7 +145,7 @@ others without changing shape).
 
 ## Quick start
 
-Commit a `dry.toml` at your repo root ([schema](#schema) below) and drop the workflow snippet into `.github/workflows/dry-scorecard.yml`. dry-rs runs structural-duplication analysis on every PR + push to `main`. The action checks out, builds dry4rs from a pinned source ref, auto-discovers your `dry.toml`, and writes a JSON envelope + text summary to the step summary.
+Commit a `dry.toml` at your repo root ([schema](#schema) below) and drop the workflow snippet into `.github/workflows/dry-scorecard.yml`. dry-rs runs structural-duplication analysis on every PR + push to `main`. The action checks out, builds dry4rs from a pinned source ref, auto-discovers your `dry.toml`, writes a JSON envelope to `output-path` (always JSON — the artifact contract is fixed for downstream tooling), and renders a step-summary block whose format follows `[output].format` (falling back to text).
 
 The recommended invocation is **minimal** — pass only `fail-on-findings`; let `dry.toml` drive the analysis knobs. Add `threshold` / `paths` / `format` inputs only when a specific workflow needs to override config.
 
