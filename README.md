@@ -217,6 +217,25 @@ include_ignored = false   # walk .gitignore'd directories?
 extensions = ["rs"]       # file extensions to analyze (optional)
 ```
 
+The exhaustive annotated reference lives at
+[`dry.example.toml`](dry.example.toml). It is **deterministically
+generated** from the schema's `///` doc comments by `dry4rs init`
+(Starship-style doc-gen pattern, dry-rs#77) — a sync test in
+[`crates/dry4rs/tests/dry_example_sync.rs`](crates/dry4rs/tests/dry_example_sync.rs)
+keeps the committed file byte-identical to the emitter's output so
+the canonical option reference never rots behind the schema. To
+regenerate after a schema change:
+
+```bash
+cargo run -p dry4rs --release -- init --force
+```
+
+The `init` subcommand writes `dry.example.toml` to the current
+directory; `--force` is required when the file already exists. The
+example is distinct from `dry.toml` (the minimal loaded config) —
+it documents every option with inline annotations sourced from the
+field-level Rust docs.
+
 ### Precedence
 
 CLI flag values ALWAYS override config. Missing values resolve via:
