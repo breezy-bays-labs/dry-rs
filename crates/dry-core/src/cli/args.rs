@@ -146,7 +146,7 @@ impl Command {
 /// other adapter binaries).
 ///
 /// Adapter binaries call [`super::run()`] with their `&AdapterMeta`
-/// const; `run()` invokes [`super::build_command`] to construct the
+/// const; `run()` invokes [`super::build_command()`] to construct the
 /// `clap::Command`, parses argv, and hydrates this struct via
 /// [`Args::from_matches`]. Tests parse via `common::parse_test_args`
 /// (in `crates/dry-core/tests/common/mod.rs`), which routes through
@@ -259,7 +259,7 @@ impl Args {
 
     /// Construct an [`Args`] from an already-parsed [`clap::ArgMatches`].
     ///
-    /// The companion to [`super::build_command`] — together they form
+    /// The companion to [`super::build_command()`] — together they form
     /// the imperative pipeline `build_command(meta) ->
     /// get_matches() -> from_matches() -> Args`. The production
     /// binary (`dry4rs::main` at Stage 6) and the test fixture
@@ -279,7 +279,7 @@ impl Args {
     /// [`build_command`][bc] output (the value-parser machinery already
     /// validated types at `get_matches` time).
     ///
-    /// [bc]: super::build_command
+    /// [bc]: super::build_command()
     pub fn from_matches(matches: &clap::ArgMatches) -> Result<Self, clap::Error> {
         let threshold = *matches.get_one::<f64>("threshold").ok_or_else(|| {
             clap::Error::raw(

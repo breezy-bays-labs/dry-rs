@@ -4,7 +4,7 @@
 //! Per the cross-tool config-file ADR (`ops/decisions/org/adr-config-
 //! file-pattern.md`, D1), each adapter binary (`dry4rs`, future
 //! `dry4ts`) supplies an [`AdapterMeta`] struct value at startup;
-//! [`crate::cli::run`] and downstream consumers (parsers, reporters,
+//! [`crate::cli::run()`] and downstream consumers (parsers, reporters,
 //! error renderers) receive `&AdapterMeta` through the call chain.
 //!
 //! **NOT a trait with associated consts**. Trait+consts is for
@@ -15,7 +15,7 @@
 //! All fields are `&'static` so the type is `Copy` and a
 //! `const`-friendly. Adapter binaries declare a `const DRY4RS_META:
 //! AdapterMeta = AdapterMeta { ... };` and pass `&DRY4RS_META` into
-//! [`crate::cli::run`].
+//! [`crate::cli::run()`].
 //!
 //! Per ADR D8 — result structs do NOT carry `#[non_exhaustive]`; they
 //! evolve via constructors + serde versioning + additive field
