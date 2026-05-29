@@ -1,0 +1,21 @@
+# dry-rs dogfood — reference dry4rs.toml at workspace root.
+#
+# Auto-discovered by dry4rs when running from any directory in the
+# workspace (rustfmt-style walk-upward via Path::ancestors per ADR
+# `org/adr-config-file-pattern.md` D2). Values mirror compiled-in
+# defaults; this file's PRIMARY purpose at v0.1 is dogfood
+# verification (see crates/dry4rs/tests/dogfood_discovery.rs).
+#
+# Schema: ops/decisions/org/adr-config-file-pattern.md (cross-tool)
+#       + ops/decisions/dry-rs/adr-dry4rs-config-file.md (per-tool)
+
+[gate]
+threshold = 0.85
+threshold_mode = "default"
+
+[output]
+format = "text"
+
+[walk]
+include_ignored = false
+# extensions = ["rs"] — defers to AdapterMeta default
