@@ -31,7 +31,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// Serde uses lowercase tags so TOML config files can use `format =
 /// "text"` / `format = "json"` symmetrically with the CLI flag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum Format {
@@ -49,7 +51,9 @@ pub enum Format {
 ///
 /// Serde uses lowercase tags so TOML config files can use
 /// `threshold_mode = "strict"` symmetrically with the CLI flag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum ThresholdMode {
@@ -459,7 +463,7 @@ mod tests {
         // production builder + a synthetic AdapterMeta from the
         // common test fixture (inline here to avoid pulling
         // tests/common/mod.rs into the unit-test scope).
-        use crate::cli::{AdapterMeta, build_command};
+        use crate::cli::{AdapterMeta, Language, build_command};
         const FIXTURE_META: AdapterMeta = AdapterMeta {
             tool_name: "test-adapter",
             display_name: "TestLang",
@@ -470,7 +474,9 @@ mod tests {
             after_help: "",
             config_file_name: "test-adapter.toml",
             example_file_name: "test-adapter.example.toml",
+            schema_file_name: "test-adapter.schema.json",
             extensions: &["x"],
+            language: Language::Rust,
             tool_info_uri: "https://example.test/info",
             rule_help_uri: "https://example.test/rules",
             default_excludes: &[],

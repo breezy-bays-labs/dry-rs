@@ -18,5 +18,6 @@
 
 pub mod config;
 pub mod config_doc_gen;
+pub mod config_schema_gen;
 pub mod reporters;
 pub mod source;

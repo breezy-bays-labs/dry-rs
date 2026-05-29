@@ -33,6 +33,7 @@ use super::AnalysisConfig;
 use super::adapter_meta::AdapterMeta;
 use super::args::{Args, Command, Format, ThresholdMode};
 use super::build_command::build_command;
+use super::effective::EffectiveConfig;
 use crate::adapters::config::{ConfigError, discover_config, load_config};
 use crate::adapters::reporters::json::{Envelope, EnvelopeMeta, ViewProjection};
 use crate::adapters::reporters::text;
@@ -254,37 +255,76 @@ fn handle_init(meta: &AdapterMeta, force: bool) -> ExitCode {
     handle_init_in_dir(meta, force, &cwd)
 }
 
-/// Inner `init` handler — writes `render_example_config(meta)` to
-/// `<base>/<meta.example_file_name>`. Splits the CWD lookup out of
-/// the production [`handle_init`] so unit tests can drive the
-/// happy path / `--force` overwrite path / file-exists-error path
-/// against an isolated tempdir.
+/// Inner `init` handler — writes BOTH the annotated example reference
+/// AND the JSON schema artifact to `<base>` (dry-rs#78).
 ///
-/// Errors loud if the target file already exists unless `force` is
-/// true; this mirrors the `cargo deny init` convention.
+/// Targets:
+/// - `<base>/<meta.example_file_name>` (`render_example_config`)
+/// - `<base>/<meta.schema_file_name>` (`render_json_schema`)
 ///
-/// Returns `EXIT_USAGE` on file-exists-without-force and on
-/// `fs::write` failures; `ExitCode::SUCCESS` on a clean write.
+/// Atomicity: BOTH targets must be writable. When `force` is `false`,
+/// the handler refuses if EITHER target exists (no partial write).
+/// When `force` is `true`, both files are overwritten unconditionally.
+/// This mirrors the `cargo deny init` convention extended to two
+/// artifacts; the all-or-nothing semantic keeps `dry.example.toml`
+/// and `dry.schema.json` in lockstep — both are generated from the
+/// same annotated [`Config`] type, and a single-file half-update
+/// would silently desync `$schema`-aware editors from the schema
+/// they validate against.
+///
+/// Splits the CWD lookup out of the production [`handle_init`] so
+/// unit tests can drive the happy path / `--force` overwrite path /
+/// file-exists-error path against an isolated tempdir.
+///
+/// Returns `EXIT_USAGE` on existing-without-force, on `fs::write`
+/// failures, and on filesystem errors; `ExitCode::SUCCESS` on a
+/// clean dual write.
 fn handle_init_in_dir(meta: &AdapterMeta, force: bool, base: &Path) -> ExitCode {
-    let path = base.join(meta.example_file_name);
-    if path.exists() && !force {
-        eprintln!(
-            "error: `{}` already exists; pass `--force` to overwrite",
-            meta.example_file_name
-        );
+    let example_path = base.join(meta.example_file_name);
+    let schema_path = base.join(meta.schema_file_name);
+
+    if !force {
+        // Refuse atomically — name the first existing file so the user
+        // doesn't run --force only to discover a second collision.
+        if example_path.exists() {
+            eprintln!(
+                "error: `{}` already exists; pass `--force` to overwrite",
+                meta.example_file_name
+            );
+            return ExitCode::from(EXIT_USAGE);
+        }
+        if schema_path.exists() {
+            eprintln!(
+                "error: `{}` already exists; pass `--force` to overwrite",
+                meta.schema_file_name
+            );
+            return ExitCode::from(EXIT_USAGE);
+        }
+    }
+
+    let example_body = crate::adapters::config_doc_gen::render_example_config(meta);
+    let schema_body = crate::adapters::config_schema_gen::render_json_schema(meta);
+
+    if let Err(err) = fs::write(&example_path, &example_body) {
+        eprintln!("error: failed to write `{}`: {err}", meta.example_file_name);
         return ExitCode::from(EXIT_USAGE);
     }
-    let body = crate::adapters::config_doc_gen::render_example_config(meta);
-    match fs::write(&path, &body) {
-        Ok(()) => {
-            eprintln!("wrote `{}` ({} bytes)", meta.example_file_name, body.len());
-            ExitCode::SUCCESS
-        }
-        Err(err) => {
-            eprintln!("error: failed to write `{}`: {err}", meta.example_file_name);
-            ExitCode::from(EXIT_USAGE)
-        }
+    if let Err(err) = fs::write(&schema_path, &schema_body) {
+        eprintln!("error: failed to write `{}`: {err}", meta.schema_file_name);
+        return ExitCode::from(EXIT_USAGE);
     }
+
+    eprintln!(
+        "wrote `{}` ({} bytes)",
+        meta.example_file_name,
+        example_body.len()
+    );
+    eprintln!(
+        "wrote `{}` ({} bytes)",
+        meta.schema_file_name,
+        schema_body.len()
+    );
+    ExitCode::SUCCESS
 }
 
 /// Emit a shell-completion script for `shell` to stdout. Uses
@@ -377,21 +417,22 @@ pub fn render_config_error(err: &ConfigError) {
 
 /// Merge CLI args, optional file config, and adapter defaults into
 /// the [`AnalysisConfig`] consumed by the analyzer (N40 in the
-/// breadboard). Precedence (per ADR D3):
+/// breadboard). Precedence (per ADR D3 + dry-rs#78 cascade):
 ///
 /// 1. CLI flag (`Some(v)` on `Args` for `--threshold` / `--format` /
 ///    `--threshold-mode`; `Args.include_ignored == true`)
-/// 2. File config field (when present): `[gate]` / `[output]` /
-///    `[walk]` tables
-/// 3. [`AdapterMeta`] default (e.g., `extensions`)
-/// 4. Compiled-in fallback (`REVIEW_FIRST_FLOOR` = 0.85,
+/// 2. Per-language override (`[rust]` / `[typescript]`) — selected
+///    by [`AdapterMeta::language`] via [`EffectiveConfig::resolve`]
+/// 3. Shared file-config field (`[gate]` / `[output]` / `[walk]`)
+/// 4. [`AdapterMeta`] default (e.g., `extensions`)
+/// 5. Compiled-in fallback (`REVIEW_FIRST_FLOOR` = 0.85,
 ///    `Format::Text`, `ThresholdMode::Default`)
 ///
 /// `threshold` / `format` / `threshold_mode` are `Option<T>` on
 /// `Args` — `build_command` deliberately does NOT register a clap
 /// default for these flags so absence at the CLI semantically means
 /// "let the merger consult the next tier". This is what makes
-/// `[gate] threshold = 0.9` actually take effect when the user
+/// `[rust] threshold = 0.9` actually take effect when the user
 /// invokes `dry4rs report` without `--threshold`.
 #[must_use]
 pub fn merge_effective_inputs(
@@ -399,44 +440,65 @@ pub fn merge_effective_inputs(
     config: Option<&Config>,
     args: &Args,
 ) -> AnalysisConfig {
-    // Extensions: config > AdapterMeta default. CLI override lands
+    // Cascade-resolve the per-language overrides on top of shared
+    // [gate]/[output]/[walk]. An absent config file (None) collapses
+    // to the empty resolved tier — every knob None, every CLI flag
+    // wins over None, every AdapterMeta default applies.
+    let resolved = config
+        .map(|c| EffectiveConfig::resolve(c, meta))
+        .unwrap_or_default();
+
+    // Extensions: resolved > AdapterMeta default. CLI override lands
     // in a future PR (no `--extensions` flag at v0.1).
-    let extensions = config
-        .and_then(|c| c.walk.extensions.clone())
+    let extensions = resolved
+        .walk
+        .extensions
+        .clone()
         .unwrap_or_else(|| meta.extensions_owned());
 
-    // include_ignored: CLI > config > false. The CLI default is
+    // include_ignored: CLI > resolved > false. The CLI default is
     // `false`; if the user explicitly set `--include-ignored`, that
-    // wins. Otherwise the file config can flip the default.
+    // wins. Otherwise the resolved value applies.
     let include_ignored = if args.include_ignored {
         true
     } else {
-        config.and_then(|c| c.walk.include_ignored).unwrap_or(false)
+        resolved.walk.include_ignored.unwrap_or(false)
     };
 
     // threshold / format / threshold_mode now produce Option<T>
     // from clap (no built-in default; per dry-rs#71 the precedence
     // merger owns the compiled-in fallback). Precedence chain per
-    // ADR D3: CLI > config > compiled-in default.
+    // ADR D3 + dry-rs#78 cascade: CLI > resolved > compiled-in default.
     let threshold = args
         .threshold
-        .or_else(|| config.and_then(|c| c.gate.threshold))
+        .or(resolved.gate.threshold)
         .unwrap_or(crate::comparison::REVIEW_FIRST_FLOOR);
     let format = args
         .format
-        .or_else(|| config.and_then(|c| c.output.format))
+        .or(resolved.output.format)
         .unwrap_or(Format::Text);
     let threshold_mode = args
         .threshold_mode
-        .or_else(|| config.and_then(|c| c.gate.threshold_mode))
+        .or(resolved.gate.threshold_mode)
         .unwrap_or(ThresholdMode::Default);
 
-    AnalysisConfig::new(args.analysis_paths())
+    let mut analysis = AnalysisConfig::new(args.analysis_paths())
         .with_extensions(extensions)
         .with_include_ignored(include_ignored)
         .with_threshold(threshold)
         .with_format(format)
-        .with_threshold_mode(threshold_mode)
+        .with_threshold_mode(threshold_mode);
+
+    // Scorecard labels — Option<String> on AnalysisConfig + the
+    // wire envelope. Resolved-tier only at v0.1 (no CLI flag).
+    if let Some(title) = resolved.output.title.clone() {
+        analysis = analysis.with_title(title);
+    }
+    if let Some(subtitle) = resolved.output.subtitle.clone() {
+        analysis = analysis.with_subtitle(subtitle);
+    }
+
+    analysis
 }
 
 /// Emit any walker warnings to stderr. The walker accumulates these
@@ -723,6 +785,12 @@ fn print_json_envelope<N: NormalizerPort>(
         view,
         delta: None,
         diagnostics: None,
+        // Scorecard labels — populated when the cascade resolved a
+        // `[output].title` / `[output].subtitle` (or per-language
+        // override). Stay `None` (and serialize-omitted) otherwise,
+        // preserving the v0.1 wire-envelope snapshot.
+        title: config.title.clone(),
+        subtitle: config.subtitle.clone(),
     };
     match serde_json::to_string_pretty(&envelope) {
         Ok(json) => println!("{json}"),
@@ -1151,7 +1219,9 @@ mod tests {
         after_help: "",
         config_file_name: "test-adapter.toml",
         example_file_name: "test-adapter.example.toml",
+        schema_file_name: "test-adapter.schema.json",
         extensions: &["rs"],
+        language: crate::cli::Language::Rust,
         tool_info_uri: "https://example.test/info",
         rule_help_uri: "https://example.test/rules",
         default_excludes: &[],
@@ -1159,50 +1229,97 @@ mod tests {
     };
 
     #[test]
-    fn handle_init_in_dir_writes_example_when_target_missing() {
+    fn handle_init_in_dir_writes_example_and_schema_when_targets_missing() {
         let dir = tempfile::tempdir().expect("create tempdir");
         let _ = handle_init_in_dir(&HANDLE_INIT_META, false, dir.path());
-        let target = dir.path().join(HANDLE_INIT_META.example_file_name);
-        let contents = fs::read_to_string(&target).expect("init writes the example file");
+
+        let example = dir.path().join(HANDLE_INIT_META.example_file_name);
+        let example_body = fs::read_to_string(&example).expect("init writes the example file");
         assert!(
-            contents.starts_with("# test-adapter.example.toml"),
-            "emitted file should begin with the header naming the tool; got:\n{}",
-            contents.lines().next().unwrap_or("(empty)")
+            example_body.starts_with("# test-adapter.example.toml"),
+            "example file should begin with the header naming the tool; got:\n{}",
+            example_body.lines().next().unwrap_or("(empty)")
         );
         assert!(
-            contents.contains("[gate]"),
-            "emitted file should carry the full schema (got len={})",
-            contents.len()
+            example_body.contains("[gate]"),
+            "example file should carry the full schema (got len={})",
+            example_body.len()
+        );
+
+        let schema = dir.path().join(HANDLE_INIT_META.schema_file_name);
+        let schema_body = fs::read_to_string(&schema).expect("init writes the schema file");
+        assert!(
+            schema_body.contains("\"title\": \"Config\""),
+            "schema file should carry the Config root schema; first 200 chars:\n{}",
+            &schema_body.chars().take(200).collect::<String>()
         );
     }
 
     #[test]
-    fn handle_init_in_dir_refuses_to_overwrite_without_force() {
+    fn handle_init_in_dir_refuses_when_example_exists_without_force() {
         let dir = tempfile::tempdir().expect("create tempdir");
-        let target = dir.path().join(HANDLE_INIT_META.example_file_name);
-        fs::write(&target, b"pre-existing user content").expect("pre-seed file");
+        let example = dir.path().join(HANDLE_INIT_META.example_file_name);
+        fs::write(&example, b"pre-existing user content").expect("pre-seed file");
         let _ = handle_init_in_dir(&HANDLE_INIT_META, false, dir.path());
-        let after = fs::read_to_string(&target).expect("file still readable");
+        let after = fs::read_to_string(&example).expect("file still readable");
         assert_eq!(
             after, "pre-existing user content",
-            "file must NOT be overwritten without --force"
+            "example must NOT be overwritten without --force"
+        );
+        // Schema must NOT be partially written when refused.
+        let schema = dir.path().join(HANDLE_INIT_META.schema_file_name);
+        assert!(
+            !schema.exists(),
+            "schema must NOT be written when example collision refuses init"
         );
     }
 
     #[test]
-    fn handle_init_in_dir_overwrites_with_force() {
+    fn handle_init_in_dir_refuses_when_schema_exists_without_force() {
         let dir = tempfile::tempdir().expect("create tempdir");
-        let target = dir.path().join(HANDLE_INIT_META.example_file_name);
-        fs::write(&target, b"stale content").expect("pre-seed file");
-        let _ = handle_init_in_dir(&HANDLE_INIT_META, true, dir.path());
-        let after = fs::read_to_string(&target).expect("file still readable");
+        let schema = dir.path().join(HANDLE_INIT_META.schema_file_name);
+        fs::write(&schema, b"pre-existing schema content").expect("pre-seed file");
+        let _ = handle_init_in_dir(&HANDLE_INIT_META, false, dir.path());
+        let after = fs::read_to_string(&schema).expect("file still readable");
+        assert_eq!(
+            after, "pre-existing schema content",
+            "schema must NOT be overwritten without --force"
+        );
+        // Example must NOT have been written when refused on schema.
+        let example = dir.path().join(HANDLE_INIT_META.example_file_name);
         assert!(
-            after.starts_with("# test-adapter.example.toml"),
-            "file should be replaced with fresh emitter output under --force"
+            !example.exists(),
+            "example must NOT be written when schema collision refuses init"
+        );
+    }
+
+    #[test]
+    fn handle_init_in_dir_force_overwrites_both_files() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let example = dir.path().join(HANDLE_INIT_META.example_file_name);
+        let schema = dir.path().join(HANDLE_INIT_META.schema_file_name);
+        fs::write(&example, b"stale example").expect("pre-seed example");
+        fs::write(&schema, b"stale schema").expect("pre-seed schema");
+
+        let _ = handle_init_in_dir(&HANDLE_INIT_META, true, dir.path());
+
+        let example_after = fs::read_to_string(&example).expect("example readable");
+        let schema_after = fs::read_to_string(&schema).expect("schema readable");
+        assert!(
+            example_after.starts_with("# test-adapter.example.toml"),
+            "example should be replaced with fresh emitter output under --force"
         );
         assert!(
-            !after.contains("stale content"),
-            "stale content should be gone after --force overwrite"
+            !example_after.contains("stale example"),
+            "stale example content should be gone after --force overwrite"
+        );
+        assert!(
+            schema_after.contains("\"title\": \"Config\""),
+            "schema should be replaced with fresh schemars output under --force"
+        );
+        assert!(
+            !schema_after.contains("stale schema"),
+            "stale schema content should be gone after --force overwrite"
         );
     }
 }

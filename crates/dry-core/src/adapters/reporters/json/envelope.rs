@@ -176,15 +176,32 @@ pub struct Envelope {
     /// v0.1+ when the parser-error path needs structured surfacing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diagnostics: Option<serde_json::Value>,
+    /// Scorecard title supplied by `[output].title` (or a per-language
+    /// override via the dry-rs#78 cascade). Consumed by external
+    /// rendering surfaces (e.g., the dry-scorecard GitHub Action's
+    /// sticky PR comment header). Omitted from the wire output when
+    /// `None`; declared at the END of the struct to keep additive
+    /// snapshot stability (declaration order = serialization order).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Scorecard subtitle (second header line). Companion to
+    /// [`title`](Self::title); same cascade source, same omission
+    /// behavior.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<String>,
 }
 
 impl Envelope {
     /// Construct a v0.1 envelope wrapping `report`, with no view /
-    /// delta / diagnostics block.
+    /// delta / diagnostics / title / subtitle block.
     ///
     /// The adapter binary's wrapper supplies `meta` (timestamp included).
     /// `view` is always `None` at v0.1 because the CLI shaping flags
-    /// (`--top`, `--only-failing`) land in PR 8.
+    /// (`--top`, `--only-failing`) land in PR 8. `title` / `subtitle`
+    /// stay `None` when `[output].title` / `[output].subtitle` (or
+    /// per-language overrides per dry-rs#78) are unset; consumers
+    /// drive population through the run-loop wrapper, not this
+    /// constructor.
     #[must_use]
     pub fn new(report: Report, meta: EnvelopeMeta) -> Self {
         Self {
@@ -198,6 +215,8 @@ impl Envelope {
             view: None,
             delta: None,
             diagnostics: None,
+            title: None,
+            subtitle: None,
         }
     }
 }

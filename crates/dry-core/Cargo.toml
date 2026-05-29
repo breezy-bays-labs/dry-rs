@@ -86,6 +86,12 @@ toml_edit = { workspace = true }
 # accessible at runtime — the single source of truth that feeds
 # docs.rs, IDE hovers, AND the annotated example output.
 documented = { workspace = true }
+# JSON Schema derivation (`adapters::config::schema_gen`, dry-rs#78).
+# `#[derive(JsonSchema)]` on the POD config types produces a JSON
+# Schema document emitted at workspace root as `dry.schema.json`,
+# kept honest by a byte-identical sync test mirroring the
+# `dry.example.toml` discipline.
+schemars = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

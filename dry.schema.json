@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Config",
+  "description": "Top-level config tree deserialized from `dry.toml`.\n\nForward-compat surface: new tables (e.g., reserved `[delta]` /\n`[reporter]` from the per-tool ADR V2) land additively as\n`Option<NewConfig>` fields with `#[serde(default)]`. Existing\nconfigs continue to parse after the schema gains a field.\n\n`#[serde(deny_unknown_fields)]` per ADR D4 — typos in TOML surface\nat parse time with a clear `path:line:key` message. NO silent\ndefault fallback.\n\n## Cascade model (dry-rs#78)\n\n`[gate]`, `[output]`, `[walk]` carry SHARED knobs every adapter\nhonors. `[rust]` and `[typescript]` carry per-language overrides\nthat replace the shared value for one adapter only. The cascade\nresolver ([`crate::cli::EffectiveConfig::resolve`]) collapses\nper-language `Some(v)` over shared `Some(v)`; both `None` produces\nresolved `None`.",
+  "type": "object",
+  "properties": {
+    "gate": {
+      "description": "`[gate]` table — threshold + threshold-mode preset.",
+      "$ref": "#/$defs/GateConfig"
+    },
+    "output": {
+      "description": "`[output]` table — format selector + scorecard labels.",
+      "$ref": "#/$defs/OutputConfig"
+    },
+    "rust": {
+      "description": "`[rust]` table — per-language overrides for the `dry4rs` adapter.\nEvery knob in this table cascades: when set, it replaces the\ncorresponding shared `[gate]`/`[output]`/`[walk]` value for the\nrust adapter ONLY; when unset, the adapter falls back to the\nshared value, then the [`crate::cli::AdapterMeta`] default,\nthen the compiled-in fallback. Other adapters (dry4ts) are\nunaffected by anything in this table.",
+      "$ref": "#/$defs/LanguageConfig"
+    },
+    "typescript": {
+      "description": "`[typescript]` table — per-language overrides for the future\n`dry4ts` adapter (v0.6+). Reserved at v0.1 so the cross-tool\nschema stays stable across the dry4rs / dry4ts cadence. Every\nknob cascades on top of `[gate]` / `[output]` / `[walk]` the\nsame way `[rust]` does, for the typescript adapter ONLY.",
+      "$ref": "#/$defs/LanguageConfig"
+    },
+    "walk": {
+      "description": "`[walk]` table — file-walker tuning.",
+      "$ref": "#/$defs/WalkConfig"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Format": {
+      "description": "Output format selector. `--format` accepts the v0.1 subset; reporters\nfor `markdown`, `html`, and `sarif` land in later waves and are\ndeliberately omitted from the value enum so clap rejects them at\nparse time with an actionable message.\n\n`#[non_exhaustive]` per the AGENTS.md `#[non_exhaustive]` discipline\n— enums YES, result structs NO.\n\nSerde uses lowercase tags so TOML config files can use `format =\n\"text\"` / `format = \"json\"` symmetrically with the CLI flag.",
+      "oneOf": [
+        {
+          "description": "Human-friendly terminal output (default).",
+          "type": "string",
+          "const": "text"
+        },
+        {
+          "description": "Locked v0.1 nested wire envelope (`dry_core::adapters::reporters::json`).",
+          "type": "string",
+          "const": "json"
+        }
+      ]
+    },
+    "GateConfig": {
+      "description": "`[gate]` table — Jaccard threshold + threshold-mode preset.\n\nBoth fields are `Option<T>` so the precedence merger can\ndistinguish \"user set this in TOML\" from \"user left it at default\"\n(ADR D3 — CLI > config > [`AdapterMeta`] default > compiled-in\nfallback).\n\n[`AdapterMeta`]: crate::cli::AdapterMeta",
+      "type": "object",
+      "properties": {
+        "threshold": {
+          "description": "Jaccard similarity threshold. CLI `--threshold` overrides this\nwhen both are set; compiled-in default `0.85` applies when\nneither is set.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "threshold_mode": {
+          "description": "Threshold-mode preset (`strict` / `default` / `lenient`).\nCLI `--threshold-mode` overrides this when both are set.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThresholdMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "LanguageConfig": {
+      "description": "Per-language override table — `[rust]` for the `dry4rs` adapter,\n`[typescript]` for the future `dry4ts` adapter (v0.6+).\n\nEvery knob mirrors one in `[gate]` / `[output]` / `[walk]` as\n`Option<T>`. A `Some(v)` here REPLACES the corresponding shared\nvalue when the adapter resolves its effective config via\n[`crate::cli::EffectiveConfig::resolve`] (dry-rs#78); a `None`\nhere falls back to the shared value. When BOTH are unset, the\nresolved field stays `None` and the next precedence tier\n([`crate::cli::AdapterMeta`] default → compiled-in fallback) applies.\n\nAdding a knob requires extending BOTH this struct AND the shared\nsection struct that owns the matching shared knob; the cascade\nresolver's exhaustive destructure is the compile-time guard.",
+      "type": "object",
+      "properties": {
+        "extensions": {
+          "description": "Per-language override for `[walk].extensions`.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "format": {
+          "description": "Per-language override for `[output].format`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Format"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "include_ignored": {
+          "description": "Per-language override for `[walk].include_ignored`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "subtitle": {
+          "description": "Per-language override for `[output].subtitle`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threshold": {
+          "description": "Per-language override for `[gate].threshold`.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "threshold_mode": {
+          "description": "Per-language override for `[gate].threshold_mode`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThresholdMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "description": "Per-language override for `[output].title`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OutputConfig": {
+      "description": "`[output]` table — format selector + scorecard labels.\n\nAt v0.1 the table carries the format selector + the title /\nsubtitle pair external consumers (e.g., the `dry-scorecard` GitHub\nAction's sticky PR-comment header) render verbatim. `[output]`\nexists as a table for forward-compat with v0.2+ `--output <path>`\n(file destination) + reporter-specific knobs.",
+      "type": "object",
+      "properties": {
+        "format": {
+          "description": "Output format (`text` / `json`). CLI `--format` overrides this.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Format"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subtitle": {
+          "description": "Scorecard subtitle (second header line). Same intent as title.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Scorecard title displayed by external consumers (e.g., the\ndry-scorecard GitHub Action's sticky PR comment header).\nReplaces the consumer-side `comment-preamble` action input\nstopgap. When unset, consumers may default to the tool name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ThresholdMode": {
+      "description": "Threshold-mode preset selector. v0.1 accepts the three named\npresets (`strict` / `default` / `lenient`); v0.2+ may extend with\nuser-configurable labels.\n\n`#[non_exhaustive]` per the AGENTS.md `#[non_exhaustive]` discipline.\n\nSerde uses lowercase tags so TOML config files can use\n`threshold_mode = \"strict\"` symmetrically with the CLI flag.",
+      "oneOf": [
+        {
+          "description": "Higher threshold → fewer findings (high-confidence only).",
+          "type": "string",
+          "const": "strict"
+        },
+        {
+          "description": "v0.1 baseline. Aligns with the comparison engine's\n`REVIEW_FIRST_FLOOR = 0.85`.",
+          "type": "string",
+          "const": "default"
+        },
+        {
+          "description": "Lower threshold → more findings, including advisory tier.",
+          "type": "string",
+          "const": "lenient"
+        }
+      ]
+    },
+    "WalkConfig": {
+      "description": "`[walk]` table — file-walker tuning.\n\n`extensions` is `Option<Vec<String>>` so an unset value (no\n`extensions = [...]` in TOML) falls back to the adapter-supplied\ndefault (`AdapterMeta::extensions`). An explicit empty list\n(`extensions = []`) is a user-supplied override that disables the\nextension filter — the loader preserves that semantic difference.",
+      "type": "object",
+      "properties": {
+        "extensions": {
+          "description": "File extensions to analyze (without the leading dot). When\n`None`, the adapter default applies; when `Some(vec)`, the\nsupplied list overrides (an empty vec disables the filter).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "include_ignored": {
+          "description": "Walk files normally excluded by `.gitignore` / `.ignore`. CLI\n`--include-ignored` overrides this when both are set.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

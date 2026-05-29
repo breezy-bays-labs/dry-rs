@@ -32,7 +32,7 @@ dry4ts (depends on dry-core; adds swc_ecma_parser or oxc, napi-rs)  [v0.6+]
 
 | Crate | Purpose | Allowed deps |
 |-------|---------|--------------|
-| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters), config-file loader, `init`-time annotated example emitter | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `clap` (derive), `clap_complete`, `thiserror`, `toml`, `toml_edit`, `documented` |
+| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters), config-file loader, `init`-time annotated example + JSON schema emitter | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `clap` (derive), `clap_complete`, `thiserror`, `toml`, `toml_edit`, `documented`, `schemars` |
 | `dry4rs` | Rust-source parser adapter + binary | `dry-core`, `syn`, `proc-macro2` (with `span-locations` feature), `xxhash-rust` (with `xxh3` feature) |
 | `dry4ts` | TypeScript-source parser adapter + binary | `dry-core`, `swc_ecma_parser` *or* `oxc_parser`, `napi-rs`, `xxhash-rust` (with `xxh3` feature) |
 | `dry-examples` | Curated DRY-violation corpus + cross-tool benchmark harness (no library logic; fixtures under `examples/<tier>/<fixture>/main.rs` + snapshot harness in `tests/snapshots.rs`; `publish = false`, `autoexamples = false`) | (none) |
@@ -114,8 +114,8 @@ In particular:
   on grounds of "domain purity" are based on a misread of this
   project's rules. The "domain purity" rule scopes only to AST
   libraries (see below); `thiserror`, `serde`, `serde_json`, `clap`,
-  `walkdir`, `ignore`, `globset`, `comfy-table`, and `toml` are
-  explicitly permitted in `dry-core`.
+  `walkdir`, `ignore`, `globset`, `comfy-table`, `toml`, `toml_edit`,
+  `documented`, and `schemars` are explicitly permitted in `dry-core`.
 - **`toml` IS allowed in `dry-core::adapters::config`** (config-file
   loader landed in dry-rs#71 per
   `ops/decisions/org/adr-config-file-pattern.md` D6). Suggestions to
@@ -125,6 +125,16 @@ In particular:
   `serde` derives only; the loader uses `toml::from_str` +
   `toml::to_string_pretty` (the latter for the round-trip property
   test).
+- **`schemars` IS allowed in `dry-core`** (JSON schema emitter
+  landed in dry-rs#78). `#[derive(JsonSchema)]` lives on the same
+  POD config types in `dry-core::domain::config` alongside the
+  existing `Serialize` / `Deserialize` / `DocumentedFields` derives;
+  the schema emitter (`adapters::config_schema_gen`) consumes
+  `schema_for!(Config)`. Single source of truth = the annotated
+  `Config` struct; one edit propagates to docs.rs, `dry.example.toml`,
+  AND `dry.schema.json`. A byte-identical sync test
+  (`crates/dry4rs/tests/dry_schema_sync.rs`) keeps the committed
+  schema aligned with the live emitter output.
 
 ### AST-purity scope
 
@@ -192,17 +202,75 @@ pub struct Match {
     `PartialOrd` produces lexicographic ordering on `(line, column)`;
     `Span::try_new`'s inverted-range validation depends on it.
     Reordering or renaming silently breaks the validator.
+- **`LanguageConfig` (dry-rs#78) carries per-language overrides** for
+  `[rust]` / `[typescript]` in `dry.toml`:
+
+  ```rust
+  pub struct LanguageConfig {
+      #[serde(skip_serializing_if = "Option::is_none")]
+      pub threshold: Option<f64>,
+      #[serde(skip_serializing_if = "Option::is_none")]
+      pub threshold_mode: Option<ThresholdMode>,
+      #[serde(skip_serializing_if = "Option::is_none")]
+      pub format: Option<Format>,
+      #[serde(skip_serializing_if = "Option::is_none")]
+      pub title: Option<String>,
+      #[serde(skip_serializing_if = "Option::is_none")]
+      pub subtitle: Option<String>,
+      #[serde(skip_serializing_if = "Option::is_none")]
+      pub include_ignored: Option<bool>,
+      #[serde(skip_serializing_if = "Option::is_none")]
+      pub extensions: Option<Vec<String>>,
+  }
+  ```
+
+  Cascade rule (locked at v0.1): per-language `Some(v)` shadows
+  shared `[gate]`/`[output]`/`[walk]` `Some(v)`; per-language `None`
+  falls back to the shared value; both `None` resolves `None` and
+  the next precedence tier applies (`AdapterMeta` default →
+  compiled-in fallback). Resolved by
+  `dry_core::cli::EffectiveConfig::resolve(&Config, &AdapterMeta)`
+  — exhaustive destructure on BOTH `LanguageConfig` AND every shared
+  section struct is the compile-time guard against adding a knob to
+  one side and not the other.
+- **`Config.rust` / `Config.typescript`** use
+  `#[serde(skip_serializing_if = "LanguageConfig::is_default")]`
+  so empty tables omit from re-serialized TOML output. Do NOT
+  suggest replacing with `Option<LanguageConfig>` — the default-
+  struct pattern matches the shared sections (`[gate]`, `[output]`,
+  `[walk]`) for consistency.
+- **`OutputConfig.title` / `OutputConfig.subtitle`** (dry-rs#78)
+  are `Option<String>` with
+  `#[serde(default, skip_serializing_if = "Option::is_none")]`.
+  Scorecard labels rendered by external consumers (e.g., the
+  dry-scorecard GitHub Action's sticky PR-comment header); replaces
+  the consumer-side `comment-preamble` action input. The same
+  fields appear on the wire envelope as `Envelope.title` /
+  `Envelope.subtitle` (also `Option<String>`, skip_serializing_if
+  Option::is_none, declared at the END of the struct to keep the
+  v0.1 snapshot byte-identical when unset).
+- **`AdapterMeta.language: Language`** (dry-rs#78) is a typed
+  runtime enum that selects which `[rust]` / `[typescript]` section
+  of the unified config the adapter reads. `#[non_exhaustive]`,
+  not serialized on the wire, not a clap value enum. Decoupled from
+  `display_name` (human-readable text) — `language` is matched on
+  by `EffectiveConfig::resolve` without string compares.
 
 ### `#[non_exhaustive]` discipline — enums YES, structs NO
 
 - Every public **enum** in `dry-core::domain` carries `#[non_exhaustive]`
   (`Tier`, `Severity`, `FormKind`, `NormalizeError`, `SpanError`,
-  `ScoreError`, future `ThresholdMode`, `OutputFormat`).
+  `ScoreError`, `ThresholdMode`, `Format`). The `Language` enum on
+  `dry-core::cli::adapter_meta` (dry-rs#78) also carries
+  `#[non_exhaustive]` — new language variants land additively.
 - Public **result structs** (`Match`, `Score`, `Span`, `LineColumn`,
-  `Fingerprint`, `Report`, `Summary`, `NormalizedForm`, `FormRef`)
-  do NOT carry `#[non_exhaustive]`. They evolve via constructor pattern
-  (`Foo::new`, `Foo::try_new`, `Foo::default`) and serde versioning
-  (`#[serde(default)]`, `#[serde(rename = ...)]`,
+  `Fingerprint`, `Report`, `Summary`, `NormalizedForm`, `FormRef`,
+  `AdapterMeta`, `Config`, `GateConfig`, `OutputConfig`, `WalkConfig`,
+  `LanguageConfig`, `Envelope`, `AnalysisConfig`,
+  `EffectiveConfig`) do NOT carry `#[non_exhaustive]`. They evolve
+  via constructor pattern (`Foo::new`, `Foo::try_new`, `Foo::default`,
+  builder methods) and serde versioning (`#[serde(default)]`,
+  `#[serde(rename = ...)]`,
   `#[serde(skip_serializing_if = ...)]`).
 
 Do NOT suggest adding `#[non_exhaustive]` to a result struct, and do

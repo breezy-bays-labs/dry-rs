@@ -72,6 +72,14 @@ fn parsed_example_has_every_option_some_every_collection_non_empty() {
         "exhaustive example: output.format must be Some"
     );
     assert!(
+        parsed.output.title.is_some(),
+        "exhaustive example: output.title must be Some (dry-rs#78)"
+    );
+    assert!(
+        parsed.output.subtitle.is_some(),
+        "exhaustive example: output.subtitle must be Some (dry-rs#78)"
+    );
+    assert!(
         parsed.walk.include_ignored.is_some(),
         "exhaustive example: walk.include_ignored must be Some"
     );
@@ -83,5 +91,62 @@ fn parsed_example_has_every_option_some_every_collection_non_empty() {
     assert!(
         !exts.is_empty(),
         "exhaustive example: walk.extensions must be non-empty"
+    );
+
+    // Per-language sections — every knob must be Some, every
+    // collection non-empty (dry-rs#78 cascade model).
+    for (label, lang) in [("rust", &parsed.rust), ("typescript", &parsed.typescript)] {
+        assert!(
+            lang.threshold.is_some(),
+            "exhaustive example: {label}.threshold must be Some"
+        );
+        assert!(
+            lang.threshold_mode.is_some(),
+            "exhaustive example: {label}.threshold_mode must be Some"
+        );
+        assert!(
+            lang.format.is_some(),
+            "exhaustive example: {label}.format must be Some"
+        );
+        assert!(
+            lang.title.is_some(),
+            "exhaustive example: {label}.title must be Some"
+        );
+        assert!(
+            lang.subtitle.is_some(),
+            "exhaustive example: {label}.subtitle must be Some"
+        );
+        assert!(
+            lang.include_ignored.is_some(),
+            "exhaustive example: {label}.include_ignored must be Some"
+        );
+        let lang_exts = lang
+            .extensions
+            .as_ref()
+            .unwrap_or_else(|| panic!("exhaustive example: {label}.extensions must be Some"));
+        assert!(
+            !lang_exts.is_empty(),
+            "exhaustive example: {label}.extensions must be non-empty"
+        );
+    }
+}
+
+#[test]
+fn parsed_example_has_rust_typescript_sections_populated() {
+    // dry-rs#78 cascade model: the example MUST exercise both
+    // `[rust]` and `[typescript]` per-language sections — without
+    // this, a regression that drops one section from the emitter
+    // would silently produce a degenerate example that still passes
+    // round-trip but lacks the cascade demonstration.
+    let parsed: Config = toml::from_str(COMMITTED_EXAMPLE)
+        .expect("committed dry.example.toml must parse as a Config");
+
+    assert!(
+        !parsed.rust.is_default(),
+        "exhaustive example: [rust] section MUST carry non-default values"
+    );
+    assert!(
+        !parsed.typescript.is_default(),
+        "exhaustive example: [typescript] section MUST carry non-default values"
     );
 }

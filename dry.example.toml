@@ -11,6 +11,10 @@
 # (compile-time exhaustive destructure) until both the emitter
 # is updated and this file is regenerated.
 #
+# `dry4rs init` also writes `dry.schema.json` — the JSON schema for
+# `$schema`-aware editors (VS Code, etc.) to autocomplete and
+# inline-validate `dry.toml`.
+#
 # Distinct from the minimal `dry.toml` that dry4rs actually
 # loads: this file is the canonical option reference, NOT
 # user config.
@@ -27,10 +31,17 @@ threshold = 0.85
 # CLI `--threshold-mode` overrides this when both are set.
 threshold_mode = "default"
 
-# `[output]` table — format selector.
+# `[output]` table — format selector + scorecard labels.
 [output]
 # Output format (`text` / `json`). CLI `--format` overrides this.
 format = "text"
+# Scorecard title displayed by external consumers (e.g., the
+# dry-scorecard GitHub Action's sticky PR comment header).
+# Replaces the consumer-side `comment-preamble` action input
+# stopgap. When unset, consumers may default to the tool name.
+title = "dry-rs scorecard"
+# Scorecard subtitle (second header line). Same intent as title.
+subtitle = "Structural duplication detector"
 
 # `[walk]` table — file-walker tuning.
 [walk]
@@ -41,3 +52,50 @@ include_ignored = false
 # `None`, the adapter default applies; when `Some(vec)`, the
 # supplied list overrides (an empty vec disables the filter).
 extensions = ["rs"]
+
+# `[rust]` table — per-language overrides for the `dry4rs` adapter.
+# Every knob in this table cascades: when set, it replaces the
+# corresponding shared `[gate]`/`[output]`/`[walk]` value for the
+# rust adapter ONLY; when unset, the adapter falls back to the
+# shared value, then the [`crate::cli::AdapterMeta`] default,
+# then the compiled-in fallback. Other adapters (dry4ts) are
+# unaffected by anything in this table.
+[rust]
+# Per-language override for `[gate].threshold`.
+threshold = 0.9
+# Per-language override for `[gate].threshold_mode`.
+threshold_mode = "default"
+# Per-language override for `[output].format`.
+format = "json"
+# Per-language override for `[output].title`.
+title = "dry-rs (Rust)"
+# Per-language override for `[output].subtitle`.
+subtitle = "Per-language override example"
+# Per-language override for `[walk].include_ignored`.
+include_ignored = false
+# Per-language override for `[walk].extensions`.
+extensions = ["rs"]
+
+# `[typescript]` table — per-language overrides for the future
+# `dry4ts` adapter (v0.6+). Reserved at v0.1 so the cross-tool
+# schema stays stable across the dry4rs / dry4ts cadence. Every
+# knob cascades on top of `[gate]` / `[output]` / `[walk]` the
+# same way `[rust]` does, for the typescript adapter ONLY.
+[typescript]
+# Per-language override for `[gate].threshold`.
+threshold = 0.85
+# Per-language override for `[gate].threshold_mode`.
+threshold_mode = "lenient"
+# Per-language override for `[output].format`.
+format = "json"
+# Per-language override for `[output].title`.
+title = "dry-rs (TypeScript)"
+# Per-language override for `[output].subtitle`.
+subtitle = "Reserved for v0.6+ dry4ts adapter"
+# Per-language override for `[walk].include_ignored`.
+include_ignored = false
+# Per-language override for `[walk].extensions`.
+extensions = [
+    "ts",
+    "tsx",
+]
