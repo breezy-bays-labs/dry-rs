@@ -12,6 +12,11 @@
 # `dry-core::tests::config`. The file's secondary role is as a worked
 # reference for external consumers (see README "Configuration").
 #
+# Editor integration: VS Code (and other `$schema`-aware editors) load
+# the schema from `dry.schema.json` for autocomplete + inline
+# validation. The canonical option reference with annotations lives
+# in `dry.example.toml`.
+#
 # Schema references:
 #   ops/decisions/org/adr-config-file-pattern.md     (cross-tool)
 #   ops/decisions/org/adr-unified-config-naming.md   (file name = `<tool>.toml`)
@@ -40,3 +45,13 @@ include_ignored = false
 # (`AdapterMeta::extensions = ["rs"]` for dry4rs). Future dry4ts
 # (v0.6+) defaults to `["ts", "tsx"]`.
 # extensions = ["rs"]
+
+# Per-language overrides (dry-rs#78). dry4rs reads [rust] first and
+# falls back to the shared sections above for any unset knob; adding
+# [typescript] would override for the future dry4ts adapter without
+# affecting dry4rs. Every value below mirrors the compiled-in or
+# shared default so dry-self / dry-corpus scorecard behavior is
+# unchanged — the point is exercising the cascade parser on the
+# production CI surface.
+[rust]
+extensions = ["rs"]
