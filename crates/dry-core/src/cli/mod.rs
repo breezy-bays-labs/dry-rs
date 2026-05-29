@@ -38,7 +38,17 @@ mod run;
 pub use adapter_meta::AdapterMeta;
 pub use args::{Args, Command, Format, ThresholdMode};
 pub use build_command::build_command;
-pub use run::run;
+pub use run::{
+    compute_analysis_root, merge_effective_inputs, render_config_error, resolve_config_path, run,
+};
+
+// Test-shim alias — integration tests in
+// `crates/dry-core/tests/config.rs` call this name so the helper's
+// production name `merge_effective_inputs` stays clearly scoped to
+// production use (the test name signals "this is an internal
+// helper I'm exercising directly").
+#[doc(hidden)]
+pub use run::merge_effective_inputs as merge_effective_inputs_for_test;
 
 use std::path::PathBuf;
 

@@ -17,7 +17,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::ValueEnum;
 use clap_complete::Shell;
 use serde::{Deserialize, Serialize};
 
@@ -71,7 +71,12 @@ pub enum ThresholdMode {
 /// allowlist UX (`.dry-rs-ignore.toml`) lands at v0.2 per the roadmap.
 ///
 /// `#[non_exhaustive]` per the AGENTS.md discipline.
-#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+///
+/// `#[derive(Subcommand)]` was REMOVED at Stage 5 of dry-rs#71 —
+/// the imperative `build_command` constructs the subcommand
+/// structure directly. `Args::from_matches` produces this enum from
+/// parsed `clap::ArgMatches`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Command {
     /// Full duplication report (default — invokable without an explicit
@@ -140,88 +145,80 @@ impl Command {
 /// Top-level CLI argument struct for `dry4rs` (and future `dry4ts` /
 /// other adapter binaries).
 ///
-/// Adapter binaries call [`super::run()`] which constructs this via
-/// `Args::parse()` internally; tests parse explicitly via
-/// `Args::try_parse_from(["dry4rs", "--threshold", "0.9", ...])`.
+/// Adapter binaries call [`super::run()`] with their `&AdapterMeta`
+/// const; `run()` invokes [`super::build_command`] to construct the
+/// `clap::Command`, parses argv, and hydrates this struct via
+/// [`Args::from_matches`]. Tests parse via `common::parse_test_args`
+/// (in `crates/dry-core/tests/common/mod.rs`), which routes through
+/// the same pipeline.
 ///
 /// Per AGENTS.md, public result/config structs do NOT carry
-/// `#[non_exhaustive]` — `Args` evolves via additive `Default` fields
-/// and clap's own arg-discovery (added flags are non-breaking for
-/// existing call sites).
-#[derive(Debug, Clone, Parser)]
-#[command(
-    name = "dry4rs",
-    version,
-    about = "Structural duplication detector — finds Jaccard-similar subforms across Rust sources.",
-    long_about = "dry-rs detects structural duplication via per-subform fingerprinting + Jaccard \
-                  similarity. The default invocation analyzes the current directory and emits a \
-                  human-friendly report; subcommands `report`/`stats`/`check` drive output \
-                  shape, `ignore`/`ignored`/`cleanup` manage the allowlist. Universal flags \
-                  `--top`/`--only-failing` reshape the displayed `view.*` projection; \
-                  `result.*` stays unaffected per the truthful-gate ADR."
-)]
+/// `#[non_exhaustive]` — `Args` evolves via additive fields and
+/// `Args::from_matches`'s constructor pattern (added flags are
+/// non-breaking for existing call sites — `from_matches` reads any
+/// new field via `matches.get_one`).
+///
+/// `#[derive(Parser)]` was REMOVED at Stage 5 of dry-rs#71. The
+/// imperative `build_command(meta) -> clap::Command` is the only
+/// parser construction path; `Args` is now a pure POD struct.
+#[derive(Debug, Clone)]
 pub struct Args {
     /// Subcommand to run. Defaults to [`Command::Report`] (with paths
-    /// inferred from `--paths` or `.`) when no subcommand is supplied.
-    /// Paths go on the subcommand itself (`dry4rs report src/`,
-    /// `dry4rs check src/`).
-    #[command(subcommand)]
+    /// inferred from positional args or `.`) when no subcommand is
+    /// supplied. Paths go on the subcommand itself (`dry4rs report
+    /// src/`, `dry4rs check src/`).
     pub command: Option<Command>,
 
-    /// Jaccard similarity threshold in the half-open interval `(0.0, 1.0]`.
-    /// Matches at or above this value surface in the report.
+    /// Jaccard similarity threshold in the half-open interval
+    /// `(0.0, 1.0]`. Matches at or above this value surface in the
+    /// report.
     ///
     /// The default `0.85` matches the comparison engine's
     /// [`crate::comparison::REVIEW_FIRST_FLOOR`] — v0.1 surfaces
-    /// `review_first` / `auto_refactor` by default; users opt into the
-    /// advisory tier with a lower threshold.
+    /// `review_first` / `auto_refactor` by default; users opt into
+    /// the advisory tier with a lower threshold.
     ///
     /// Out-of-range values (`<= 0.0` or `> 1.0`) reject at parse time
-    /// with `ExitCode::from(2)` (clap's standard argument-error exit).
-    #[arg(long, global = true, default_value_t = 0.85, value_parser = parse_threshold)]
+    /// with `ExitCode::from(2)` (clap's standard argument-error
+    /// exit).
     pub threshold: f64,
 
-    /// Output format. v0.1: `text` (default) or `json`; markdown / html /
-    /// sarif land in later waves.
-    #[arg(long, global = true, value_enum, default_value_t = Format::Text)]
+    /// Output format. v0.1: `text` (default) or `json`; markdown /
+    /// html / sarif land in later waves.
     pub format: Format,
 
     /// Threshold-mode preset (`strict` / `default` / `lenient`).
-    /// Currently informational at v0.1 — the preset is recorded on the
-    /// wire envelope's `threshold_mode` field; numeric override stays
-    /// the truthful gate.
-    #[arg(long, global = true, value_enum, default_value_t = ThresholdMode::Default)]
+    /// Currently informational at v0.1 — the preset is recorded on
+    /// the wire envelope's `threshold_mode` field; numeric override
+    /// stays the truthful gate.
     pub threshold_mode: ThresholdMode,
 
     /// Limit `view.candidates` to the top N matches by descending
-    /// score. **View-shaping only** — `result.*` stays unaffected per
-    /// the truthful-gate ADR. CI parsers reading `result.passed` are
-    /// immune to this flag.
-    #[arg(long, global = true, value_name = "N")]
+    /// score. **View-shaping only** — `result.*` stays unaffected
+    /// per the truthful-gate ADR. CI parsers reading `result.passed`
+    /// are immune to this flag.
     pub top: Option<u32>,
 
     /// Filter `view.*` to matches that exceed the threshold gate.
     /// **View-shaping only** — `result.*` stays unaffected.
-    #[arg(long, global = true)]
     pub only_failing: bool,
 
-    /// Suppress non-zero exit code when findings exceed the threshold.
-    /// `result.passed` remains authoritative in JSON output; only the
-    /// process exit code changes. Useful for advisory CI integration.
-    #[arg(long, global = true)]
+    /// Suppress non-zero exit code when findings exceed the
+    /// threshold. `result.passed` remains authoritative in JSON
+    /// output; only the process exit code changes. Useful for
+    /// advisory CI integration.
     pub no_fail: bool,
 
     /// Walk files normally excluded by `.gitignore` / `.ignore`.
-    /// Intended for fixture corpora that live inside ignored directories;
-    /// production usage stays at the default (`false`).
-    #[arg(long, global = true)]
+    /// Intended for fixture corpora that live inside ignored
+    /// directories; production usage stays at the default (`false`).
     pub include_ignored: bool,
 
-    /// Generate a shell-completion script for the named shell and exit
-    /// 0. When set, the analyzer pipeline is NOT invoked; the script
-    /// goes to stdout and the process exits immediately. Useful for
-    /// shell init files (`source <(dry4rs --completions bash)`).
-    #[arg(long, global = true, value_name = "SHELL")]
+    /// Generate a shell-completion script for the named shell and
+    /// exit 0. When set, the analyzer pipeline is NOT invoked; the
+    /// script goes to stdout and the process exits immediately.
+    /// Useful for shell init files (`source <(dry4rs --completions
+    /// bash)`).
     pub completions: Option<Shell>,
 
     /// Path to an explicit `dry4rs.toml` config file (bypasses auto-
@@ -229,10 +226,6 @@ pub struct Args {
     /// produces `ConfigError::Io` at startup. When unset, the loader
     /// auto-discovers a `dry4rs.toml` by walking upward from the
     /// analysis-root (per `org/adr-config-file-pattern.md` D2).
-    ///
-    /// Lands as an additive field at Stage 4 of dry-rs#71; Stage 5
-    /// wires it into `dry_core::cli::run`'s precedence chain.
-    #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
 }
 
@@ -442,12 +435,34 @@ mod tests {
     }
 
     #[test]
-    fn args_verifies_clap_invariants() {
+    fn build_command_verifies_clap_invariants() {
         // clap's `debug_assert!` checks the command/arg invariants;
         // running it once at compile-test time surfaces any wiring
-        // mistakes (duplicate args, missing default_value_t types,
+        // mistakes (duplicate args, missing default_value parsing,
         // value-parser type mismatches) before they hit users.
-        use clap::CommandFactory;
-        Args::command().debug_assert();
+        //
+        // Stage 5 of dry-rs#71 replaced the clap-derive
+        // `Args::command()` entry point with an imperative
+        // `build_command(meta)` — this test now goes through the
+        // production builder + a synthetic AdapterMeta from the
+        // common test fixture (inline here to avoid pulling
+        // tests/common/mod.rs into the unit-test scope).
+        use crate::cli::{AdapterMeta, build_command};
+        const FIXTURE_META: AdapterMeta = AdapterMeta {
+            tool_name: "test-adapter",
+            display_name: "TestLang",
+            tool_version: "0.0.0",
+            long_version: "0.0.0",
+            about: "test about",
+            long_about: "test long about",
+            after_help: "",
+            config_file_name: "test-adapter.toml",
+            extensions: &["x"],
+            tool_info_uri: "https://example.test/info",
+            rule_help_uri: "https://example.test/rules",
+            default_excludes: &[],
+            forced_excludes: &[],
+        };
+        build_command(&FIXTURE_META).debug_assert();
     }
 }

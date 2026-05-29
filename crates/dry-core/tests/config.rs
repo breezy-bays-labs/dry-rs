@@ -156,3 +156,102 @@ fn n64_unknown_nested_key_produces_parse_error() {
     let msg = err.to_string();
     assert!(msg.contains("failed to parse"), "msg: {msg}");
 }
+
+// =============================================================================
+// N65 / N66 — precedence integration
+// =============================================================================
+//
+// These tests cover `dry-core::cli::run::merge_effective_inputs` —
+// the precedence chain CLI > config > AdapterMeta default applied
+// on every analysis. They construct synthetic Args + Config values
+// and verify the merged `AnalysisConfig` fields land in the
+// expected order.
+
+mod precedence {
+    use std::path::PathBuf;
+
+    use dry_core::adapters::config::load_config;
+    use dry_core::cli::merge_effective_inputs_for_test;
+
+    use super::TEST_META;
+    use super::common::parse_test_args;
+
+    #[test]
+    fn n65_config_extensions_override_adapter_meta_default() {
+        // TEST_META.extensions = &["rs"]. A config file that supplies
+        // `extensions = ["rs", "rsi"]` must override the meta default
+        // (no CLI extensions flag at v0.1).
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_path = tmp.path().join(TEST_META.config_file_name);
+        std::fs::write(&config_path, b"[walk]\nextensions = [\"rs\", \"rsi\"]\n").expect("write");
+
+        let cfg = load_config(&config_path).expect("parse");
+        let args = parse_test_args(&["report"]).expect("parse args");
+
+        let analysis = merge_effective_inputs_for_test(&TEST_META, Some(&cfg), &args);
+        assert_eq!(
+            analysis.extensions,
+            vec!["rs".to_string(), "rsi".to_string()],
+            "config-supplied extensions should override AdapterMeta default"
+        );
+    }
+
+    #[test]
+    fn n66_default_only_path_uses_adapter_meta_extensions() {
+        // No config, no CLI overrides → AnalysisConfig.extensions ==
+        // TEST_META.extensions_owned().
+        let args = parse_test_args(&["report"]).expect("parse args");
+        let analysis = merge_effective_inputs_for_test(&TEST_META, None, &args);
+        assert_eq!(
+            analysis.extensions,
+            TEST_META.extensions_owned(),
+            "default-only path should use AdapterMeta extensions"
+        );
+    }
+
+    #[test]
+    fn n65_cli_include_ignored_overrides_config() {
+        // Config sets include_ignored = false; CLI sets
+        // --include-ignored. CLI MUST win.
+        let mut cfg = dry_core::domain::Config::default();
+        cfg.walk.include_ignored = Some(false);
+
+        let args = parse_test_args(&["--include-ignored", "report"]).expect("parse args");
+        let analysis = merge_effective_inputs_for_test(&TEST_META, Some(&cfg), &args);
+        assert!(
+            analysis.include_ignored,
+            "CLI --include-ignored should override config"
+        );
+    }
+
+    #[test]
+    fn n65_config_include_ignored_applies_when_cli_unset() {
+        // No CLI override → config supplies the value.
+        let mut cfg = dry_core::domain::Config::default();
+        cfg.walk.include_ignored = Some(true);
+
+        let args = parse_test_args(&["report"]).expect("parse args");
+        let analysis = merge_effective_inputs_for_test(&TEST_META, Some(&cfg), &args);
+        assert!(
+            analysis.include_ignored,
+            "config include_ignored should apply when CLI is unset"
+        );
+    }
+
+    #[test]
+    fn n65_first_positional_path_drives_analysis_root_compute() {
+        // analysis_paths surfaces the first positional path; the
+        // merger threads it through into AnalysisConfig.roots.
+        let args = parse_test_args(&["report", "crates/dry-core/"]).expect("parse args");
+        let analysis = merge_effective_inputs_for_test(&TEST_META, None, &args);
+        assert_eq!(
+            analysis.roots.len(),
+            1,
+            "single positional path should produce one analysis root"
+        );
+        assert_eq!(
+            analysis.roots[0].to_string(),
+            PathBuf::from("crates/dry-core/").to_string_lossy()
+        );
+    }
+}
