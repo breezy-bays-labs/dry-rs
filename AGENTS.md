@@ -32,7 +32,7 @@ dry4ts (depends on dry-core; adds swc_ecma_parser or oxc, napi-rs)  [v0.6+]
 
 | Crate | Purpose | Allowed deps |
 |-------|---------|--------------|
-| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters) | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `clap` (derive), `clap_complete`, `thiserror` |
+| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters), config-file loader | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `clap` (derive), `clap_complete`, `thiserror`, `toml` |
 | `dry4rs` | Rust-source parser adapter + binary | `dry-core`, `syn`, `proc-macro2` (with `span-locations` feature), `xxhash-rust` (with `xxh3` feature) |
 | `dry4ts` | TypeScript-source parser adapter + binary | `dry-core`, `swc_ecma_parser` *or* `oxc_parser`, `napi-rs`, `xxhash-rust` (with `xxh3` feature) |
 | `dry-examples` | Curated DRY-violation corpus + cross-tool benchmark harness (no library logic; fixtures under `examples/<tier>/<fixture>/main.rs` + snapshot harness in `tests/snapshots.rs`; `publish = false`, `autoexamples = false`) | (none) |
@@ -114,8 +114,17 @@ In particular:
   on grounds of "domain purity" are based on a misread of this
   project's rules. The "domain purity" rule scopes only to AST
   libraries (see below); `thiserror`, `serde`, `serde_json`, `clap`,
-  `walkdir`, `ignore`, `globset`, and `comfy-table` are explicitly
-  permitted in `dry-core`.
+  `walkdir`, `ignore`, `globset`, `comfy-table`, and `toml` are
+  explicitly permitted in `dry-core`.
+- **`toml` IS allowed in `dry-core::adapters::config`** (config-file
+  loader landed in dry-rs#71 per
+  `ops/decisions/org/adr-config-file-pattern.md` D6). Suggestions to
+  move the loader out of `dry-core` or to drop `toml` for a
+  hand-rolled parser misread the cross-tool ADR. The
+  `dry-core::domain::config` POD types stay parser-agnostic and use
+  `serde` derives only; the loader uses `toml::from_str` +
+  `toml::to_string_pretty` (the latter for the round-trip property
+  test).
 
 ### AST-purity scope
 
