@@ -1,14 +1,33 @@
 # Templated dry-scorecard workflow — copy this file into your repo's
-# `.github/workflows/` directory, change `paths:` to point at your
-# crates, push, done.
+# `.github/workflows/` directory, commit a `dry.toml` at your repo
+# root, push, done.
 #
 # This file lives at `.github/workflows/examples/` (subdirectory) so
 # GitHub Actions does NOT auto-trigger it inside this repo. Workflow
 # triggers only fire for files DIRECTLY under `.github/workflows/` —
 # subdirectories are documentation. dry-rs's own dogfood smoke at
 # `.github/workflows/example-smoke.yml` (lands in dry-rs#59) invokes
-# the action with identical inputs to keep this file mechanically
-# honest.
+# the action with the same recommended minimal-input pattern shown
+# below (plus a sibling override-path invocation) to keep this file
+# mechanically honest.
+#
+# RECOMMENDED PATTERN (defer-to-config — dry-rs#81)
+# -------------------------------------------------
+# Commit a `dry.toml` at your repo root holding `[gate]`, `[output]`,
+# `[walk]` knobs and invoke the action with no override inputs (only
+# `fail-on-findings`). The action auto-discovers `dry.toml` via
+# walk-upward from the analysis path; CLI flags stay out of the
+# action invocation so config is the single source of truth for
+# analysis knobs. See https://github.com/breezy-bays-labs/dry-rs#configuration
+# for the schema.
+#
+# OVERRIDE PATTERN
+# ----------------
+# When a workflow needs to override a `dry.toml` value (e.g., a
+# stricter threshold on a release branch), pass the matching input
+# (`threshold` / `paths` / `format`). Any non-empty input wins over
+# the discovered config value (CLI > config > AdapterMeta default >
+# compiled-in fallback, per the cross-tool config-file ADR).
 name: dry Scorecard
 
 on:
@@ -28,10 +47,11 @@ jobs:
         with:
           persist-credentials: false
 
+      # Recommended minimal-input invocation — defers to `dry.toml`.
+      # Add `threshold` / `paths` / `format` here only when you need
+      # to override a config value for this specific workflow.
       - uses: breezy-bays-labs/dry-rs/.github/actions/scorecard@<sha>  # pin to a dry-rs release SHA
         with:
-          paths: crates/
-          threshold: '0.85'
           # Start with 'false' to observe signal. Promote to 'true' once a clean
           # baseline is established — see README "Getting started" note.
           fail-on-findings: 'false'

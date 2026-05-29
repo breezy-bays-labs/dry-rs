@@ -63,12 +63,13 @@
 # action against dry-rs's own source.
 #
 # Security note: every `${{ ... }}` expansion in `run:` blocks below
-# references trusted GitHub Actions context only — step outputs from a
-# sibling step in this same workflow (`steps.scorecard.outcome` /
-# `steps.scorecard.outputs.report-path`). Per the same
-# env-then-quote discipline used in `.github/actions/scorecard/action.yml`,
-# these values flow through `env:` before reaching `run:` so the
-# security boundary stays uniform with the action this smoke invokes.
+# references trusted GitHub Actions context only — step outputs from
+# sibling steps in this same workflow (`steps.scorecard.*` and
+# `steps.scorecard-defer.*` per the dual-canary structure). Per the
+# same env-then-quote discipline used in
+# `.github/actions/scorecard/action.yml`, these values flow through
+# `env:` before reaching `run:` so the security boundary stays
+# uniform with the action this smoke invokes.
 name: Example workflow smoke
 
 on:
@@ -90,16 +91,40 @@ jobs:
         with:
           persist-credentials: false
 
+      # ================================================================
+      # Dual canary — both invocation paths exercised on every CI run.
+      # ================================================================
+      #
+      # The composite action supports two equivalent invocation shapes
+      # post-dry-rs#81 (action defer-to-config = idiomatic default):
+      #
+      #   1. **Override path** — caller passes explicit `paths` /
+      #      `threshold` / `format` inputs. The action splices each
+      #      non-empty value as a CLI flag, overriding any
+      #      auto-discovered `dry.toml` values.
+      #   2. **Defer path** (recommended) — caller passes ONLY
+      #      `fail-on-findings`. The action OMITS the flags and lets
+      #      dry4rs consult the auto-discovered `dry.toml` (falling
+      #      back to compiled-in defaults). dry-rs's root `dry.toml`
+      #      (committed in dry-rs#76 / PR #80) supplies the values.
+      #
+      # Both invocations run on every smoke job to keep both paths
+      # mechanically honest. Each gets its own `output-path` so the
+      # JSON artifacts don't clobber each other.
+
+      # ---- Override path ----------------------------------------------
+      #
       # Invoke the local composite action with the SAME inputs as the
-      # templated example (`.github/workflows/examples/dry-scorecard.yml`).
-      # The action navigates from `$GITHUB_ACTION_PATH` up three levels
-      # to the dry-rs repo root (per the structural fix in PR #65 /
-      # commit `e7eca78`) and self-builds dry4rs via
-      # `cargo build --release -p dry4rs --locked` from there. `paths:`
-      # is interpreted relative to the caller's `$GITHUB_WORKSPACE`,
-      # which is dry-rs's own checkout here, so `crates/` resolves to
-      # dry-rs's own production source.
-      - name: Invoke dry-scorecard action (mirrors templated example inputs)
+      # templated example's override-path snippet
+      # (`.github/workflows/examples/dry-scorecard.yml`). The action
+      # navigates from `$GITHUB_ACTION_PATH` up three levels to the
+      # dry-rs repo root (per the structural fix in PR #65 / commit
+      # `e7eca78`) and self-builds dry4rs via
+      # `cargo build --release -p dry4rs --locked` from there.
+      # `paths:` is interpreted relative to the caller's
+      # `$GITHUB_WORKSPACE`, which is dry-rs's own checkout here, so
+      # `crates/` resolves to dry-rs's own production source.
+      - name: Invoke dry-scorecard action — override path (explicit inputs)
         id: scorecard
         uses: ./.github/actions/scorecard
         with:
@@ -113,81 +138,129 @@ jobs:
           threshold: '0.85'
           fail-on-findings: 'false'
 
+      # ---- Defer path -------------------------------------------------
+      #
+      # Invoke the same composite action with ZERO override inputs
+      # (only `fail-on-findings` + a non-default `output-path` so the
+      # artifact doesn't clobber the override-path run's artifact).
+      # The action omits `--threshold` / `--format` / positional paths
+      # from the dry4rs invocation; the binary auto-discovers dry-rs's
+      # root `dry.toml` (committed in dry-rs#76) and consumes
+      # `[gate].threshold` + `[output].format` from there. Paths
+      # defaults to dry4rs's compiled-in fallback (CWD =
+      # `$GITHUB_WORKSPACE`) until the `[walk].src = [...]` field
+      # lands per dry-rs#78.
+      #
+      # `cargo build --release -p dry4rs --locked` re-runs but hits the
+      # incremental cache from the override-path invocation above — the
+      # second build is a near-no-op.
+      - name: Invoke dry-scorecard action — defer path (auto-discover dry.toml)
+        id: scorecard-defer
+        uses: ./.github/actions/scorecard
+        with:
+          # Intentionally omit `paths` / `threshold` / `format` to
+          # exercise the defer-to-config code path. `dry.toml` at
+          # the workspace root supplies values; bare binary CLI
+          # defaults supply fallbacks. See `inputs:` in
+          # `.github/actions/scorecard/action.yml` for the per-input
+          # defer semantics.
+          output-path: 'dry-rs-report-defer.json'
+          fail-on-findings: 'false'
+
       # ================================================================
-      # Mechanical assertions on the action's contract.
+      # Mechanical assertions on the action's contract — both paths.
       # ================================================================
       #
       # Run with `if: always()` so the assertion step executes even when
-      # the action step regresses; this surfaces the most informative
+      # an action step regresses; this surfaces the most informative
       # failure mode (e.g., action exited non-zero on a no-fail
       # invocation — that's a contract regression worth reporting
       # distinctly from a missing-file failure).
       #
-      # All four assertions live in one shell step so a single regression
-      # surfaces a single failure with clear context, rather than a
-      # cascade of N consecutive step-level reds.
-      - name: Assertions — action contract holds
+      # All eight assertions (four × two paths) live in one shell step
+      # so a single regression surfaces a single failure with clear
+      # context, rather than a cascade of N consecutive step-level reds.
+      # The `assert_contract` shell function factors the four checks so
+      # both invocation paths get identical coverage; label argument
+      # distinguishes failure messages between the override and defer
+      # paths.
+      - name: Assertions — action contract holds (both invocation paths)
         if: always()
         env:
-          SCORECARD_OUTCOME: ${{ steps.scorecard.outcome }}
-          REPORT_PATH: ${{ steps.scorecard.outputs.report-path }}
+          OVERRIDE_OUTCOME: ${{ steps.scorecard.outcome }}
+          OVERRIDE_REPORT_PATH: ${{ steps.scorecard.outputs.report-path }}
+          DEFER_OUTCOME: ${{ steps.scorecard-defer.outcome }}
+          DEFER_REPORT_PATH: ${{ steps.scorecard-defer.outputs.report-path }}
         run: |
           set -euo pipefail
 
-          # (a) action step exit code matches expected.
-          #     With `fail-on-findings: 'false'`, the action MUST exit 0
-          #     regardless of whether matches surface — that is the
-          #     measurement-only contract. A non-success outcome here is
-          #     either a binary regression (dry4rs panicked / build
-          #     failed) or a contract regression (the gate-on-findings
-          #     posture broke).
-          if [ "$SCORECARD_OUTCOME" != "success" ]; then
-            echo "::error::action step outcome was '$SCORECARD_OUTCOME', expected 'success' (fail-on-findings: false should never gate)"
-            exit 1
-          fi
-          echo "(a) action exit code = success ok"
+          assert_contract() {
+            local label="$1"
+            local outcome="$2"
+            local report_path="$3"
 
-          # (b) `outputs.report-path` surfaces a path AND that path is a
-          #     file present on disk. An empty output or a missing file
-          #     means the action's output wiring regressed (e.g., the
-          #     `report_path=` line dropped from `$GITHUB_OUTPUT`) or
-          #     the artifact write itself failed silently.
-          if [ -z "$REPORT_PATH" ]; then
-            echo "::error::outputs.report-path is empty — action did not surface the report path"
-            exit 1
-          fi
-          if [ ! -f "$REPORT_PATH" ]; then
-            echo "::error::report-path '$REPORT_PATH' is not a file (action did not write the JSON envelope)"
-            exit 1
-          fi
-          REPORT_BYTES=$(wc -c <"$REPORT_PATH")
-          echo "(b) report-path '$REPORT_PATH' exists (${REPORT_BYTES} bytes) ok"
+            # (a) action step exit code matches expected.
+            #     With `fail-on-findings: 'false'`, the action MUST exit 0
+            #     regardless of whether matches surface — that is the
+            #     measurement-only contract. A non-success outcome here
+            #     is either a binary regression (dry4rs panicked / build
+            #     failed) or a contract regression (the gate-on-findings
+            #     posture broke).
+            if [ "$outcome" != "success" ]; then
+              echo "::error::[$label] action step outcome was '$outcome', expected 'success' (fail-on-findings: false should never gate)"
+              return 1
+            fi
+            echo "[$label] (a) action exit code = success ok"
 
-          # (c) the file parses as JSON. `jq .` exits non-zero on a parse
-          #     error; redirecting stdout discards the pretty-printed
-          #     output (the workflow log already shows the bytes above).
-          #     Catches the case where the binary writes a corrupted /
-          #     empty / partial envelope but exits 0.
-          if ! jq . "$REPORT_PATH" >/dev/null; then
-            echo "::error::JSON envelope at '$REPORT_PATH' did not parse as JSON"
-            exit 1
-          fi
-          echo "(c) JSON envelope parses ok"
+            # (b) `outputs.report-path` surfaces a path AND that path
+            #     is a file present on disk. An empty output or a
+            #     missing file means the action's output wiring
+            #     regressed (e.g., the `report_path=` line dropped
+            #     from `$GITHUB_OUTPUT`) or the artifact write itself
+            #     failed silently.
+            if [ -z "$report_path" ]; then
+              echo "::error::[$label] outputs.report-path is empty — action did not surface the report path"
+              return 1
+            fi
+            if [ ! -f "$report_path" ]; then
+              echo "::error::[$label] report-path '$report_path' is not a file (action did not write the JSON envelope)"
+              return 1
+            fi
+            local bytes
+            bytes=$(wc -c <"$report_path")
+            echo "[$label] (b) report-path '$report_path' exists (${bytes} bytes) ok"
 
-          # (d) at least one of `schema_version` / `result` / `view` is a
-          #     top-level key. Locks the nested-envelope contract per
-          #     adr-nested-json-envelope.md without freezing the exact
-          #     shape — if the schema bumps and `result` rearranges into
-          #     `result.summary` only, the `view` and `schema_version`
-          #     slots remain. Catches a regression where the binary
-          #     emits a structurally-valid JSON object that is NOT the
-          #     dry-rs envelope (e.g., a clap error rendered as JSON
-          #     instead of the report).
-          if ! jq -e 'has("schema_version") or has("result") or has("view")' "$REPORT_PATH" >/dev/null; then
-            echo "::error::JSON envelope at '$REPORT_PATH' is missing all of schema_version, result, view — does not match the dry-rs v0.1 wire envelope"
-            exit 1
-          fi
-          echo "(d) envelope has at least one of schema_version|result|view ok"
+            # (c) the file parses as JSON. `jq .` exits non-zero on a
+            #     parse error; redirecting stdout discards the
+            #     pretty-printed output (the workflow log already
+            #     shows the bytes above). Catches the case where the
+            #     binary writes a corrupted / empty / partial envelope
+            #     but exits 0.
+            if ! jq . "$report_path" >/dev/null; then
+              echo "::error::[$label] JSON envelope at '$report_path' did not parse as JSON"
+              return 1
+            fi
+            echo "[$label] (c) JSON envelope parses ok"
+
+            # (d) at least one of `schema_version` / `result` / `view`
+            #     is a top-level key. Locks the nested-envelope
+            #     contract per adr-nested-json-envelope.md without
+            #     freezing the exact shape — if the schema bumps and
+            #     `result` rearranges into `result.summary` only, the
+            #     `view` and `schema_version` slots remain. Catches a
+            #     regression where the binary emits a
+            #     structurally-valid JSON object that is NOT the
+            #     dry-rs envelope (e.g., a clap error rendered as JSON
+            #     instead of the report).
+            if ! jq -e 'has("schema_version") or has("result") or has("view")' "$report_path" >/dev/null; then
+              echo "::error::[$label] JSON envelope at '$report_path' is missing all of schema_version, result, view — does not match the dry-rs v0.1 wire envelope"
+              return 1
+            fi
+            echo "[$label] (d) envelope has at least one of schema_version|result|view ok"
+          }
+
+          assert_contract "override" "$OVERRIDE_OUTCOME" "$OVERRIDE_REPORT_PATH"
+          assert_contract "defer"    "$DEFER_OUTCOME"    "$DEFER_REPORT_PATH"
 
   # ================================================================
   # corpus-smoke — dry-examples regression gate (ADR-3)
