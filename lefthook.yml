@@ -41,6 +41,17 @@ pre-push:
           exit 1
         fi
       timeout: 30s
+    config-ast-purity:
+      # Mirror the `dry-core::adapters::config ast-purity check` CI
+      # job. Rejects double-quoted adapter-binary-name string literals
+      # ("dry4rs.toml", "dry4rs", "dry4ts.toml", "dry4ts") in
+      # crates/dry-core/src/adapters/config.rs +
+      # crates/dry-core/tests/config.rs per the cross-tool config-file
+      # ADR (ops/decisions/org/adr-config-file-pattern.md D7).
+      # Sibling-coherent with scrap-rs#37's layer-4 gate.
+      # Single source of truth in scripts/check-config-ast-purity.sh.
+      run: bash scripts/check-config-ast-purity.sh
+      timeout: 30s
     span-locations:
       # Mirror the `span-locations-check` CI job. Rejects any
       # `proc-macro2` dependency that doesn't enable the `span-locations`

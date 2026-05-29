@@ -1,20 +1,34 @@
 //! CLI argument-parsing tests for `dry_core::cli::Args`.
 //!
-//! These tests exercise clap's derive output via `Args::try_parse_from`,
-//! which is the canonical TDD entry point — it avoids spawning a real
-//! binary and lets us assert on parsed values. The full
-//! `run<N: NormalizerPort + Default>()` pipeline has its own
-//! integration test (`tests/cli_pipeline.rs`); these tests cover the
-//! parse layer only.
+//! These tests exercise the production CLI machinery via
+//! `common::parse_test_args` — which routes through
+//! `build_command(&TEST_META).try_get_matches_from(...)` +
+//! `Args::from_matches(&matches)`. That is the SAME pipeline the
+//! production binary uses (`dry4rs::main` at Stage 6 of dry-rs#71),
+//! so these tests accurately cover the production parser without
+//! spawning a real binary.
+//!
+//! The full `run<N: NormalizerPort + Default>()` pipeline has its
+//! own integration test (`tests/cli_pipeline.rs`); these tests
+//! cover the parse layer only.
+//!
+//! Per the per-tool ADR V3 (`ops/decisions/dry-rs/adr-dry4rs-config-
+//! file.md`), this file is INTENTIONALLY EXCLUDED from the layer-4
+//! ast-purity gate — `parse_test_args` internally prepends
+//! `TEST_META.tool_name` (== `"dry4rs"`) so clap sees a well-formed
+//! argv0. The literal lives in `tests/common/mod.rs` (also outside
+//! the gate's scope by virtue of being in a subdirectory).
+
+mod common;
 
 use std::path::PathBuf;
 
-use clap::Parser;
-use dry_core::cli::{Args, Command, Format, ThresholdMode};
+use common::parse_test_args;
+use dry_core::cli::{Command, Format, ThresholdMode};
 
 #[test]
 fn parses_with_no_subcommand_runs_default_report() {
-    let args = Args::try_parse_from(["dry4rs"]).expect("must parse with no subcommand");
+    let args = parse_test_args(&[]).expect("must parse with no subcommand");
     // Per the discovery decision (`report` is the implicit default
     // matching the prior-art convention from crap4rs/scrap-rs).
     assert!(
@@ -26,25 +40,25 @@ fn parses_with_no_subcommand_runs_default_report() {
 
 #[test]
 fn parses_with_explicit_report_subcommand() {
-    let args = Args::try_parse_from(["dry4rs", "report"]).expect("report subcommand must parse");
+    let args = parse_test_args(&["report"]).expect("report subcommand must parse");
     assert!(matches!(args.command, Some(Command::Report { .. })));
 }
 
 #[test]
 fn parses_with_stats_subcommand() {
-    let args = Args::try_parse_from(["dry4rs", "stats"]).expect("stats subcommand must parse");
+    let args = parse_test_args(&["stats"]).expect("stats subcommand must parse");
     assert!(matches!(args.command, Some(Command::Stats { .. })));
 }
 
 #[test]
 fn parses_with_check_subcommand() {
-    let args = Args::try_parse_from(["dry4rs", "check"]).expect("check subcommand must parse");
+    let args = parse_test_args(&["check"]).expect("check subcommand must parse");
     assert!(matches!(args.command, Some(Command::Check { .. })));
 }
 
 #[test]
 fn parses_with_ignore_subcommand_carrying_fingerprint() {
-    let args = Args::try_parse_from(["dry4rs", "ignore", "deadbeef"])
+    let args = parse_test_args(&["ignore", "deadbeef"])
         .expect("ignore subcommand must parse with fingerprint argument");
     match args.command {
         Some(Command::Ignore { fingerprint }) => assert_eq!(fingerprint, "deadbeef"),
@@ -54,34 +68,38 @@ fn parses_with_ignore_subcommand_carrying_fingerprint() {
 
 #[test]
 fn parses_with_ignored_subcommand() {
-    let args = Args::try_parse_from(["dry4rs", "ignored"]).expect("ignored subcommand must parse");
+    let args = parse_test_args(&["ignored"]).expect("ignored subcommand must parse");
     assert!(matches!(args.command, Some(Command::Ignored)));
 }
 
 #[test]
 fn parses_with_cleanup_subcommand() {
-    let args = Args::try_parse_from(["dry4rs", "cleanup"]).expect("cleanup subcommand must parse");
+    let args = parse_test_args(&["cleanup"]).expect("cleanup subcommand must parse");
     assert!(matches!(args.command, Some(Command::Cleanup)));
 }
 
 #[test]
-fn threshold_defaults_to_0_85() {
-    // 0.85 mirrors the comparison engine's `REVIEW_FIRST_FLOOR` —
-    // the v0.1 default surfaces review_first / auto_refactor by
-    // default; users opt into advisory tier with a lower threshold.
-    let args = Args::try_parse_from(["dry4rs"]).expect("must parse");
+fn threshold_defaults_to_none_when_cli_unset() {
+    // The compiled-in default (0.85, `REVIEW_FIRST_FLOOR`) is
+    // applied by `merge_effective_inputs` ONLY when neither CLI
+    // nor config supplies a value. At the Args layer, absence ==
+    // None — the precedence merger sees the None and consults the
+    // config / compiled-in fallback chain. See
+    // crates/dry-core/tests/config.rs precedence:: tests for the
+    // end-to-end behaviour.
+    let args = parse_test_args(&[]).expect("must parse");
     assert!(
-        (args.threshold - 0.85).abs() < f64::EPSILON,
-        "default threshold should be 0.85, got: {}",
+        args.threshold.is_none(),
+        "default invocation should produce threshold = None, got: {:?}",
         args.threshold
     );
 }
 
 #[test]
 fn threshold_flag_accepts_user_value() {
-    let args = Args::try_parse_from(["dry4rs", "--threshold", "0.75"])
-        .expect("--threshold accepts a decimal");
-    assert!((args.threshold - 0.75).abs() < f64::EPSILON);
+    let args = parse_test_args(&["--threshold", "0.75"]).expect("--threshold accepts a decimal");
+    let t = args.threshold.expect("--threshold sets the field");
+    assert!((t - 0.75).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -89,16 +107,14 @@ fn threshold_rejects_zero_and_above_one() {
     // The half-open interval (0.0, 1.0] is the comparison engine's
     // domain. clap value-parses to f64 and our value-parser rejects
     // out-of-band values with a non-zero exit.
-    let err = Args::try_parse_from(["dry4rs", "--threshold", "0.0"])
-        .expect_err("threshold = 0.0 must reject");
+    let err = parse_test_args(&["--threshold", "0.0"]).expect_err("threshold = 0.0 must reject");
     let msg = err.to_string();
     assert!(
         msg.contains("threshold") || msg.contains("0.0"),
         "rejection should mention threshold, got: {msg}"
     );
 
-    let err = Args::try_parse_from(["dry4rs", "--threshold", "1.5"])
-        .expect_err("threshold > 1.0 must reject");
+    let err = parse_test_args(&["--threshold", "1.5"]).expect_err("threshold > 1.0 must reject");
     let msg = err.to_string();
     assert!(
         msg.contains("threshold") || msg.contains("1.5"),
@@ -107,28 +123,31 @@ fn threshold_rejects_zero_and_above_one() {
 }
 
 #[test]
-fn format_defaults_to_text() {
-    let args = Args::try_parse_from(["dry4rs"]).expect("must parse");
-    assert_eq!(args.format, Format::Text);
+fn format_defaults_to_none_when_cli_unset() {
+    // Same Option-as-precedence-input pattern as --threshold:
+    // absence at the Args layer is None; the merger applies
+    // Format::Text when nothing else supplies it.
+    let args = parse_test_args(&[]).expect("must parse");
+    assert!(args.format.is_none());
 }
 
 #[test]
 fn format_flag_accepts_text() {
-    let args = Args::try_parse_from(["dry4rs", "--format", "text"]).expect("--format text parses");
-    assert_eq!(args.format, Format::Text);
+    let args = parse_test_args(&["--format", "text"]).expect("--format text parses");
+    assert_eq!(args.format, Some(Format::Text));
 }
 
 #[test]
 fn format_flag_accepts_json() {
-    let args = Args::try_parse_from(["dry4rs", "--format", "json"]).expect("--format json parses");
-    assert_eq!(args.format, Format::Json);
+    let args = parse_test_args(&["--format", "json"]).expect("--format json parses");
+    assert_eq!(args.format, Some(Format::Json));
 }
 
 #[test]
 fn format_flag_rejects_markdown_at_v0_1() {
     // markdown / html / sarif land in later waves; only text + json
     // are valid at v0.1 (per AC).
-    let err = Args::try_parse_from(["dry4rs", "--format", "markdown"])
+    let err = parse_test_args(&["--format", "markdown"])
         .expect_err("--format markdown must reject at v0.1");
     let msg = err.to_string();
     assert!(
@@ -139,86 +158,86 @@ fn format_flag_rejects_markdown_at_v0_1() {
 
 #[test]
 fn no_fail_flag_is_false_by_default() {
-    let args = Args::try_parse_from(["dry4rs"]).expect("must parse");
+    let args = parse_test_args(&[]).expect("must parse");
     assert!(!args.no_fail);
 }
 
 #[test]
 fn no_fail_flag_is_true_when_set() {
-    let args = Args::try_parse_from(["dry4rs", "--no-fail"]).expect("--no-fail parses");
+    let args = parse_test_args(&["--no-fail"]).expect("--no-fail parses");
     assert!(args.no_fail);
 }
 
 #[test]
 fn top_flag_defaults_to_none() {
-    let args = Args::try_parse_from(["dry4rs"]).expect("must parse");
+    let args = parse_test_args(&[]).expect("must parse");
     assert!(args.top.is_none());
 }
 
 #[test]
 fn top_flag_accepts_user_value() {
-    let args = Args::try_parse_from(["dry4rs", "--top", "5"]).expect("--top 5 parses");
+    let args = parse_test_args(&["--top", "5"]).expect("--top 5 parses");
     assert_eq!(args.top, Some(5));
 }
 
 #[test]
 fn only_failing_flag_is_false_by_default() {
-    let args = Args::try_parse_from(["dry4rs"]).expect("must parse");
+    let args = parse_test_args(&[]).expect("must parse");
     assert!(!args.only_failing);
 }
 
 #[test]
 fn only_failing_flag_is_true_when_set() {
-    let args = Args::try_parse_from(["dry4rs", "--only-failing"]).expect("--only-failing parses");
+    let args = parse_test_args(&["--only-failing"]).expect("--only-failing parses");
     assert!(args.only_failing);
 }
 
 #[test]
 fn include_ignored_flag_is_false_by_default() {
-    let args = Args::try_parse_from(["dry4rs"]).expect("must parse");
+    let args = parse_test_args(&[]).expect("must parse");
     assert!(!args.include_ignored);
 }
 
 #[test]
 fn include_ignored_flag_is_true_when_set() {
-    let args =
-        Args::try_parse_from(["dry4rs", "--include-ignored"]).expect("--include-ignored parses");
+    let args = parse_test_args(&["--include-ignored"]).expect("--include-ignored parses");
     assert!(args.include_ignored);
 }
 
 #[test]
-fn threshold_mode_defaults_to_default() {
-    let args = Args::try_parse_from(["dry4rs"]).expect("must parse");
-    assert_eq!(args.threshold_mode, ThresholdMode::Default);
+fn threshold_mode_defaults_to_none_when_cli_unset() {
+    // Same Option-as-precedence-input pattern: merger applies
+    // ThresholdMode::Default when CLI nor config supplies one.
+    let args = parse_test_args(&[]).expect("must parse");
+    assert!(args.threshold_mode.is_none());
 }
 
 #[test]
 fn threshold_mode_accepts_strict() {
-    let args = Args::try_parse_from(["dry4rs", "--threshold-mode", "strict"])
-        .expect("--threshold-mode strict parses");
-    assert_eq!(args.threshold_mode, ThresholdMode::Strict);
+    let args =
+        parse_test_args(&["--threshold-mode", "strict"]).expect("--threshold-mode strict parses");
+    assert_eq!(args.threshold_mode, Some(ThresholdMode::Strict));
 }
 
 #[test]
 fn threshold_mode_accepts_lenient() {
-    let args = Args::try_parse_from(["dry4rs", "--threshold-mode", "lenient"])
-        .expect("--threshold-mode lenient parses");
-    assert_eq!(args.threshold_mode, ThresholdMode::Lenient);
+    let args =
+        parse_test_args(&["--threshold-mode", "lenient"]).expect("--threshold-mode lenient parses");
+    assert_eq!(args.threshold_mode, Some(ThresholdMode::Lenient));
 }
 
 #[test]
 fn completions_flag_accepts_known_shells() {
     // `--completions <SHELL>` generates a completion script. Validate
     // that clap_complete's Shell enum is wired in by accepting `bash`.
-    let args =
-        Args::try_parse_from(["dry4rs", "--completions", "bash"]).expect("--completions parses");
+    let args = parse_test_args(&["--completions", "bash"]).expect("--completions parses");
     assert!(args.completions.is_some());
 }
 
 #[test]
 fn completions_flag_rejects_unknown_shell() {
-    let err = Args::try_parse_from(["dry4rs", "--completions", "tcl"])
-        .expect_err("--completions tcl must reject");
+    let err =
+        parse_test_args(&["--completions", "tcl"]).expect_err("--completions tcl must reject");
     let msg = err.to_string();
     assert!(
         msg.contains("invalid value") || msg.contains("possible"),
@@ -229,7 +248,7 @@ fn completions_flag_rejects_unknown_shell() {
 #[test]
 fn paths_default_to_current_directory() {
     // Empty paths default to "." so a no-arg run analyzes the cwd.
-    let args = Args::try_parse_from(["dry4rs"]).expect("must parse");
+    let args = parse_test_args(&[]).expect("must parse");
     assert_eq!(args.analysis_paths(), vec![PathBuf::from(".")]);
 }
 
@@ -240,7 +259,7 @@ fn paths_accept_multiple_positional_arguments_via_report_subcommand() {
     // can't accept positionals (clap routes them to subcommands), so
     // the explicit `report src/ tests/` form is the way to supply
     // multiple roots in v0.1.
-    let args = Args::try_parse_from(["dry4rs", "report", "src/", "tests/"])
+    let args = parse_test_args(&["report", "src/", "tests/"])
         .expect("multiple positional paths parse on `report`");
     match args.command {
         Some(Command::Report { paths }) => {
@@ -252,19 +271,19 @@ fn paths_accept_multiple_positional_arguments_via_report_subcommand() {
 
 #[test]
 fn analysis_paths_returns_subcommand_paths_when_set() {
-    let args = Args::try_parse_from(["dry4rs", "check", "src/"]).expect("must parse");
+    let args = parse_test_args(&["check", "src/"]).expect("must parse");
     assert_eq!(args.analysis_paths(), vec![PathBuf::from("src/")]);
 }
 
 #[test]
 fn analysis_paths_falls_back_to_current_dir_when_no_subcommand_or_paths() {
-    let args = Args::try_parse_from(["dry4rs"]).expect("must parse");
+    let args = parse_test_args(&[]).expect("must parse");
     assert_eq!(args.analysis_paths(), vec![PathBuf::from(".")]);
 }
 
 #[test]
 fn analysis_paths_falls_back_to_current_dir_on_subcommand_without_paths() {
-    let args = Args::try_parse_from(["dry4rs", "report"]).expect("must parse");
+    let args = parse_test_args(&["report"]).expect("must parse");
     assert_eq!(args.analysis_paths(), vec![PathBuf::from(".")]);
 }
 
@@ -275,12 +294,8 @@ fn analysis_paths_returns_empty_for_non_analysis_subcommands() {
     // `analysis_paths()` must NOT silently default to `.` for them —
     // a future caller that forgets the short-circuit would otherwise
     // start walking the cwd unexpectedly.
-    for argv in [
-        vec!["dry4rs", "ignore", "deadbeef"],
-        vec!["dry4rs", "ignored"],
-        vec!["dry4rs", "cleanup"],
-    ] {
-        let args = Args::try_parse_from(&argv).expect("must parse");
+    for argv in [vec!["ignore", "deadbeef"], vec!["ignored"], vec!["cleanup"]] {
+        let args = parse_test_args(&argv).expect("must parse");
         assert_eq!(
             args.analysis_paths(),
             Vec::<PathBuf>::new(),
@@ -291,8 +306,7 @@ fn analysis_paths_returns_empty_for_non_analysis_subcommands() {
 
 #[test]
 fn check_subcommand_accepts_path_argument() {
-    let args =
-        Args::try_parse_from(["dry4rs", "check", "src/"]).expect("check subcommand accepts a path");
+    let args = parse_test_args(&["check", "src/"]).expect("check subcommand accepts a path");
     match args.command {
         Some(Command::Check { paths }) => {
             assert_eq!(paths, vec![PathBuf::from("src/")]);
@@ -306,12 +320,12 @@ fn help_flag_does_not_panic() {
     // clap's auto-derived `--help` exits with kind=DisplayHelp; we
     // just need to verify that asking for help doesn't trigger a
     // panic and the resulting error is recognizable.
-    let err = Args::try_parse_from(["dry4rs", "--help"]).expect_err("--help short-circuits");
+    let err = parse_test_args(&["--help"]).expect_err("--help short-circuits");
     assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
 }
 
 #[test]
 fn version_flag_does_not_panic() {
-    let err = Args::try_parse_from(["dry4rs", "--version"]).expect_err("--version short-circuits");
+    let err = parse_test_args(&["--version"]).expect_err("--version short-circuits");
     assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
 }

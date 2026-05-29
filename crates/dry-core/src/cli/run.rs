@@ -23,19 +23,22 @@
 //! human-facing output shaping; the gate verdict is immune.
 
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use clap::{CommandFactory, Parser};
 use clap_complete::Shell;
 
 use super::AnalysisConfig;
+use super::adapter_meta::AdapterMeta;
 use super::args::{Args, Command, Format, ThresholdMode};
+use super::build_command::build_command;
+use crate::adapters::config::{ConfigError, discover_config, load_config};
 use crate::adapters::reporters::json::{Envelope, EnvelopeMeta, ViewProjection};
 use crate::adapters::reporters::text;
 use crate::adapters::source::{SourceError, SourceOutcome, SourceWarning, enumerate};
 use crate::comparison::compare_with_paths;
-use crate::domain::{FilePath, Match, Report, Summary};
+use crate::domain::{Config, FilePath, Match, Report, Summary};
 use crate::ports::NormalizerPort;
 
 /// Exit-code constant for catastrophic argument / setup failure.
@@ -47,48 +50,59 @@ const EXIT_USAGE: u8 = 2;
 /// `main()`.
 ///
 /// Generic over `N: NormalizerPort + Default`. The `Default` bound
-/// lets `dry_core::cli::run::<SynNormalizer>()` construct the adapter
-/// at the binary's call site without forcing the binary to hand-roll
-/// instance construction.
+/// lets `dry_core::cli::run::<SynNormalizer>(&DRY4RS_META)` construct
+/// the adapter at the binary's call site without forcing the binary
+/// to hand-roll instance construction.
+///
+/// `meta: &'static AdapterMeta` carries the binary's identity
+/// (`tool_name`, `tool_version`, `about` / `long_about` / `after_help`
+/// text, `config_file_name` for the loader, `extensions` default).
+/// Stage 6 of dry-rs#71 introduces `DRY4RS_META` in `dry4rs::main`
+/// and threads it through here.
 ///
 /// # Returns
 ///
 /// - `ExitCode::SUCCESS` when `report.passed == true` OR `--no-fail`
 ///   was set.
-/// - `ExitCode::FAILURE` when `report.passed == false` AND `--no-fail`
-///   was NOT set.
-/// - `ExitCode::from(2)` when the walker rejects with `NoRoots` (the
-///   CLI defaults paths to `.` so this is unreachable in practice; the
-///   variant exists for completeness). clap-side argument errors take
-///   the same code via `clap::Error::exit()`.
+/// - `ExitCode::FAILURE` when `report.passed == false` AND
+///   `--no-fail` was NOT set.
+/// - `ExitCode::from(2)` when the walker rejects with `NoRoots` or
+///   the config-file loader returns `ConfigError`. clap-side argument
+///   errors take the same code via `clap::Error::exit()`.
 ///
 /// # Side effects
 ///
 /// Prints the requested report shape to stdout; per-file parse
 /// warnings go to stderr. `--completions <SHELL>` emits the
-/// completion script to stdout and returns `ExitCode::SUCCESS` without
-/// running the analyzer pipeline.
+/// completion script to stdout and returns `ExitCode::SUCCESS`
+/// without running the analyzer pipeline.
 #[must_use]
-pub fn run<N: NormalizerPort + Default>() -> ExitCode {
+pub fn run<N: NormalizerPort + Default>(meta: &'static AdapterMeta) -> ExitCode {
+    meta.validate_or_panic();
     // clap auto-exits with code 2 on arg-parse errors, --help, and
-    // --version via `.exit()` inside `Args::parse()`. Using `parse()`
-    // (not `try_parse_from`) is the canonical entry point — tests use
-    // `try_parse_from` directly and bypass this branch.
-    let args = Args::parse();
-    run_with_args::<N>(&args)
+    // --version via `.exit()` inside `try_get_matches`. We use the
+    // production pipeline (`build_command(meta) +
+    // get_matches() + Args::from_matches`); the test fixture goes
+    // through the SAME pipeline via `parse_test_args`.
+    let matches = build_command(meta).get_matches();
+    let args = match Args::from_matches(&matches) {
+        Ok(a) => a,
+        Err(e) => e.exit(),
+    };
+    run_with_args::<N>(meta, &args)
 }
 
 /// Inner helper that takes a pre-parsed [`Args`] — separated for
-/// testability. Production calls go through [`run`], which calls
-/// `Args::parse()`; tests invoke this directly with a synthesized
-/// [`Args`].
-fn run_with_args<N: NormalizerPort + Default>(args: &Args) -> ExitCode {
+/// testability. Production calls go through [`run`], which uses
+/// `build_command(meta) + Args::from_matches`; tests invoke this
+/// directly with a synthesized [`Args`].
+fn run_with_args<N: NormalizerPort + Default>(meta: &AdapterMeta, args: &Args) -> ExitCode {
     let normalizer = N::default();
 
     // `--completions <SHELL>` short-circuits — emit the script and
     // exit 0 without running the analyzer pipeline.
     if let Some(shell) = args.completions {
-        emit_completions(shell);
+        emit_completions(meta, shell);
         return ExitCode::SUCCESS;
     }
 
@@ -103,22 +117,33 @@ fn run_with_args<N: NormalizerPort + Default>(args: &Args) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // Build the analysis config from CLI args + adapter extensions.
-    // `AnalysisConfig` carries the full v0.1 surface (paths /
-    // threshold / format / output / extensions / include_ignored /
-    // threshold_mode); the run loop routes each field to its consumer
-    // (walker, comparison engine, reporter, wire-envelope metadata).
-    let extensions: Vec<String> = normalizer
-        .extensions()
-        .iter()
-        .map(|e| e.trim_start_matches('.').to_string())
-        .collect();
-    let config = AnalysisConfig::new(args.analysis_paths())
-        .with_extensions(extensions)
-        .with_include_ignored(args.include_ignored)
-        .with_threshold(args.threshold)
-        .with_format(args.format)
-        .with_threshold_mode(args.threshold_mode);
+    // Resolve + load the config file (when present). Per cross-tool
+    // ADR D2: explicit `--config <path>` is missing-is-error; auto-
+    // discovery walks upward from the analysis root and missing is
+    // Ok(None) (no config file → AdapterMeta defaults apply).
+    let analysis_root = compute_analysis_root(args);
+    let config_path = match resolve_config_path(args, &analysis_root, meta) {
+        Ok(p) => p,
+        Err(err) => {
+            render_config_error(&err);
+            return ExitCode::from(EXIT_USAGE);
+        }
+    };
+    let file_config = match config_path {
+        Some(ref path) => match load_config(path) {
+            Ok(c) => Some(c),
+            Err(err) => {
+                render_config_error(&err);
+                return ExitCode::from(EXIT_USAGE);
+            }
+        },
+        None => None,
+    };
+
+    // Apply precedence: CLI > config > AdapterMeta default > compiled
+    // fallback (per ADR D3). The merger consumes args, the optional
+    // file config, AND the adapter meta.
+    let config = merge_effective_inputs(meta, file_config.as_ref(), args);
 
     // Enumerate the source tree. The walker rejects empty roots with
     // `NoRoots`; clap defaults `paths` to `.` so this is unreachable
@@ -205,11 +230,156 @@ fn emit_allowlist_stub_note(command: &Command) {
     }
 }
 
-/// Emit a shell-completion script for `shell` to stdout.
-fn emit_completions(shell: Shell) {
-    let mut cmd = Args::command();
+/// Emit a shell-completion script for `shell` to stdout. Uses
+/// `build_command(meta)` rather than the old `Args::command()` (which
+/// the clap-derive `CommandFactory` impl provided before Stage 5 of
+/// dry-rs#71 ripped out the derive).
+fn emit_completions(meta: &AdapterMeta, shell: Shell) {
+    let mut cmd = build_command(meta);
     let name = cmd.get_name().to_string();
     clap_complete::generate(shell, &mut cmd, name, &mut std::io::stdout());
+}
+
+/// Determine the analysis root used for upward config-file
+/// discovery (N5 in the breadboard / per-tool ADR V1).
+///
+/// Returns the first positional analysis path supplied on the
+/// active subcommand. When no subcommand is supplied (the implicit
+/// default `report` path) or when the active subcommand has no
+/// positional path, falls back to `std::env::current_dir()`. If even
+/// `current_dir()` fails, returns `PathBuf::from(".")` — that's a
+/// degraded but never-panicking fallback (relative ancestor walk
+/// still works against the process's cwd).
+///
+/// dry-rs has no `--src` flag; analysis roots are positional
+/// subcommand args (`dry4rs report crates/foo/`). This diverges
+/// from crap-rs / scrap-rs's `--src`-based discovery (see per-tool
+/// ADR V1).
+#[must_use]
+pub fn compute_analysis_root(args: &Args) -> PathBuf {
+    if let Some(cmd) = &args.command {
+        let paths = cmd.paths();
+        if let Some(first) = paths.first() {
+            return first.clone();
+        }
+    }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Resolve the config-file path to load (N19 in the breadboard).
+///
+/// Branches:
+/// 1. `args.config = Some(path)` (explicit `--config`) — validate
+///    the path exists (else `ConfigError::Io`). Auto-discovery is
+///    bypassed.
+/// 2. `args.config = None` — call [`discover_config`] from the
+///    analysis root with `meta.config_file_name`. `Ok(None)` here
+///    means "no config file found anywhere above the analysis
+///    root" — NOT an error per ADR D2.
+///
+/// # Errors
+///
+/// Returns [`ConfigError::Io`] when explicit `--config` is set but
+/// the path doesn't exist on disk. Auto-discovery's
+/// [`discover_config`] returns its own errors only on filesystem
+/// permission failures (never on missing-file).
+pub fn resolve_config_path(
+    args: &Args,
+    analysis_root: &Path,
+    meta: &AdapterMeta,
+) -> Result<Option<PathBuf>, ConfigError> {
+    if let Some(path) = &args.config {
+        if !path.exists() {
+            return Err(ConfigError::Io {
+                path: path.clone(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "explicit --config path does not exist",
+                ),
+            });
+        }
+        return Ok(Some(path.clone()));
+    }
+    discover_config(analysis_root, meta.config_file_name)
+}
+
+/// Format + emit a [`ConfigError`] to stderr (N6 in the breadboard).
+///
+/// Uses the typed error's `Display` impl (which surfaces the
+/// `path:line:key` form for parse errors via `thiserror`'s
+/// `#[source]` chaining). Returns void; the caller maps this to
+/// `ExitCode::from(2)` (matches the clap argument-error exit shape).
+pub fn render_config_error(err: &ConfigError) {
+    eprintln!("error: {err}");
+    let mut source = std::error::Error::source(err);
+    while let Some(s) = source {
+        eprintln!("  caused by: {s}");
+        source = s.source();
+    }
+}
+
+/// Merge CLI args, optional file config, and adapter defaults into
+/// the [`AnalysisConfig`] consumed by the analyzer (N40 in the
+/// breadboard). Precedence (per ADR D3):
+///
+/// 1. CLI flag (`Some(v)` on `Args` for `--threshold` / `--format` /
+///    `--threshold-mode`; `Args.include_ignored == true`)
+/// 2. File config field (when present): `[gate]` / `[output]` /
+///    `[walk]` tables
+/// 3. [`AdapterMeta`] default (e.g., `extensions`)
+/// 4. Compiled-in fallback (`REVIEW_FIRST_FLOOR` = 0.85,
+///    `Format::Text`, `ThresholdMode::Default`)
+///
+/// `threshold` / `format` / `threshold_mode` are `Option<T>` on
+/// `Args` — `build_command` deliberately does NOT register a clap
+/// default for these flags so absence at the CLI semantically means
+/// "let the merger consult the next tier". This is what makes
+/// `[gate] threshold = 0.9` actually take effect when the user
+/// invokes `dry4rs report` without `--threshold`.
+#[must_use]
+pub fn merge_effective_inputs(
+    meta: &AdapterMeta,
+    config: Option<&Config>,
+    args: &Args,
+) -> AnalysisConfig {
+    // Extensions: config > AdapterMeta default. CLI override lands
+    // in a future PR (no `--extensions` flag at v0.1).
+    let extensions = config
+        .and_then(|c| c.walk.extensions.clone())
+        .unwrap_or_else(|| meta.extensions_owned());
+
+    // include_ignored: CLI > config > false. The CLI default is
+    // `false`; if the user explicitly set `--include-ignored`, that
+    // wins. Otherwise the file config can flip the default.
+    let include_ignored = if args.include_ignored {
+        true
+    } else {
+        config.and_then(|c| c.walk.include_ignored).unwrap_or(false)
+    };
+
+    // threshold / format / threshold_mode now produce Option<T>
+    // from clap (no built-in default; per dry-rs#71 the precedence
+    // merger owns the compiled-in fallback). Precedence chain per
+    // ADR D3: CLI > config > compiled-in default.
+    let threshold = args
+        .threshold
+        .or_else(|| config.and_then(|c| c.gate.threshold))
+        .unwrap_or(crate::comparison::REVIEW_FIRST_FLOOR);
+    let format = args
+        .format
+        .or_else(|| config.and_then(|c| c.output.format))
+        .unwrap_or(Format::Text);
+    let threshold_mode = args
+        .threshold_mode
+        .or_else(|| config.and_then(|c| c.gate.threshold_mode))
+        .unwrap_or(ThresholdMode::Default);
+
+    AnalysisConfig::new(args.analysis_paths())
+        .with_extensions(extensions)
+        .with_include_ignored(include_ignored)
+        .with_threshold(threshold)
+        .with_format(format)
+        .with_threshold_mode(threshold_mode)
 }
 
 /// Emit any walker warnings to stderr. The walker accumulates these

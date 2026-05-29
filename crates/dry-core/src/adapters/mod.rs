@@ -16,5 +16,6 @@
 //! (the CLI flag lives in PR 8); call sites pick the reporter directly
 //! during the v0.1 walking-skeleton phase.
 
+pub mod config;
 pub mod reporters;
 pub mod source;

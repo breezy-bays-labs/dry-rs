@@ -17,8 +17,9 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::ValueEnum;
 use clap_complete::Shell;
+use serde::{Deserialize, Serialize};
 
 /// Output format selector. `--format` accepts the v0.1 subset; reporters
 /// for `markdown`, `html`, and `sarif` land in later waves and are
@@ -27,7 +28,11 @@ use clap_complete::Shell;
 ///
 /// `#[non_exhaustive]` per the AGENTS.md `#[non_exhaustive]` discipline
 /// — enums YES, result structs NO.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+///
+/// Serde uses lowercase tags so TOML config files can use `format =
+/// "text"` / `format = "json"` symmetrically with the CLI flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum Format {
     /// Human-friendly terminal output (default).
@@ -41,7 +46,11 @@ pub enum Format {
 /// user-configurable labels.
 ///
 /// `#[non_exhaustive]` per the AGENTS.md `#[non_exhaustive]` discipline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+///
+/// Serde uses lowercase tags so TOML config files can use
+/// `threshold_mode = "strict"` symmetrically with the CLI flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum ThresholdMode {
     /// Higher threshold → fewer findings (high-confidence only).
@@ -62,7 +71,12 @@ pub enum ThresholdMode {
 /// allowlist UX (`.dry-rs-ignore.toml`) lands at v0.2 per the roadmap.
 ///
 /// `#[non_exhaustive]` per the AGENTS.md discipline.
-#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+///
+/// `#[derive(Subcommand)]` was REMOVED at Stage 5 of dry-rs#71 —
+/// the imperative `build_command` constructs the subcommand
+/// structure directly. `Args::from_matches` produces this enum from
+/// parsed `clap::ArgMatches`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Command {
     /// Full duplication report (default — invokable without an explicit
@@ -131,89 +145,97 @@ impl Command {
 /// Top-level CLI argument struct for `dry4rs` (and future `dry4ts` /
 /// other adapter binaries).
 ///
-/// Adapter binaries call [`super::run()`] which constructs this via
-/// `Args::parse()` internally; tests parse explicitly via
-/// `Args::try_parse_from(["dry4rs", "--threshold", "0.9", ...])`.
+/// Adapter binaries call [`super::run()`] with their `&AdapterMeta`
+/// const; `run()` invokes [`super::build_command()`] to construct the
+/// `clap::Command`, parses argv, and hydrates this struct via
+/// [`Args::from_matches`]. Tests parse via `common::parse_test_args`
+/// (in `crates/dry-core/tests/common/mod.rs`), which routes through
+/// the same pipeline.
 ///
 /// Per AGENTS.md, public result/config structs do NOT carry
-/// `#[non_exhaustive]` — `Args` evolves via additive `Default` fields
-/// and clap's own arg-discovery (added flags are non-breaking for
-/// existing call sites).
-#[derive(Debug, Clone, Parser)]
-#[command(
-    name = "dry4rs",
-    version,
-    about = "Structural duplication detector — finds Jaccard-similar subforms across Rust sources.",
-    long_about = "dry-rs detects structural duplication via per-subform fingerprinting + Jaccard \
-                  similarity. The default invocation analyzes the current directory and emits a \
-                  human-friendly report; subcommands `report`/`stats`/`check` drive output \
-                  shape, `ignore`/`ignored`/`cleanup` manage the allowlist. Universal flags \
-                  `--top`/`--only-failing` reshape the displayed `view.*` projection; \
-                  `result.*` stays unaffected per the truthful-gate ADR."
-)]
+/// `#[non_exhaustive]` — `Args` evolves via additive fields and
+/// `Args::from_matches`'s constructor pattern (added flags are
+/// non-breaking for existing call sites — `from_matches` reads any
+/// new field via `matches.get_one`).
+///
+/// `#[derive(Parser)]` was REMOVED at Stage 5 of dry-rs#71. The
+/// imperative `build_command(meta) -> clap::Command` is the only
+/// parser construction path; `Args` is now a pure POD struct.
+#[derive(Debug, Clone)]
 pub struct Args {
     /// Subcommand to run. Defaults to [`Command::Report`] (with paths
-    /// inferred from `--paths` or `.`) when no subcommand is supplied.
-    /// Paths go on the subcommand itself (`dry4rs report src/`,
-    /// `dry4rs check src/`).
-    #[command(subcommand)]
+    /// inferred from positional args or `.`) when no subcommand is
+    /// supplied. Paths go on the subcommand itself (`dry4rs report
+    /// src/`, `dry4rs check src/`).
     pub command: Option<Command>,
 
-    /// Jaccard similarity threshold in the half-open interval `(0.0, 1.0]`.
-    /// Matches at or above this value surface in the report.
+    /// Jaccard similarity threshold in the half-open interval
+    /// `(0.0, 1.0]`. Matches at or above this value surface in the
+    /// report.
     ///
-    /// The default `0.85` matches the comparison engine's
-    /// [`crate::comparison::REVIEW_FIRST_FLOOR`] — v0.1 surfaces
-    /// `review_first` / `auto_refactor` by default; users opt into the
-    /// advisory tier with a lower threshold.
+    /// `None` when the user did NOT pass `--threshold` (the
+    /// precedence merger then consults `[gate] threshold` from
+    /// `dry4rs.toml`, falling back to the compiled-in default
+    /// [`crate::comparison::REVIEW_FIRST_FLOOR`] = 0.85). `Some(t)`
+    /// is the user-supplied value; CLI > config > meta default.
     ///
-    /// Out-of-range values (`<= 0.0` or `> 1.0`) reject at parse time
-    /// with `ExitCode::from(2)` (clap's standard argument-error exit).
-    #[arg(long, global = true, default_value_t = 0.85, value_parser = parse_threshold)]
-    pub threshold: f64,
+    /// Out-of-range values (`<= 0.0` or `> 1.0`) reject at parse
+    /// time with `ExitCode::from(2)` (clap's standard argument-error
+    /// exit).
+    pub threshold: Option<f64>,
 
-    /// Output format. v0.1: `text` (default) or `json`; markdown / html /
-    /// sarif land in later waves.
-    #[arg(long, global = true, value_enum, default_value_t = Format::Text)]
-    pub format: Format,
+    /// Output format. v0.1: `text` (default) or `json`; markdown /
+    /// html / sarif land in later waves.
+    ///
+    /// `None` when the user did NOT pass `--format` (the precedence
+    /// merger then consults `[output] format` from `dry4rs.toml`,
+    /// falling back to `Format::Text`).
+    pub format: Option<Format>,
 
     /// Threshold-mode preset (`strict` / `default` / `lenient`).
-    /// Currently informational at v0.1 — the preset is recorded on the
-    /// wire envelope's `threshold_mode` field; numeric override stays
-    /// the truthful gate.
-    #[arg(long, global = true, value_enum, default_value_t = ThresholdMode::Default)]
-    pub threshold_mode: ThresholdMode,
+    /// Currently informational at v0.1 — the preset is recorded on
+    /// the wire envelope's `threshold_mode` field; numeric override
+    /// stays the truthful gate.
+    ///
+    /// `None` when the user did NOT pass `--threshold-mode` (the
+    /// precedence merger then consults `[gate] threshold_mode`,
+    /// falling back to `ThresholdMode::Default`).
+    pub threshold_mode: Option<ThresholdMode>,
 
     /// Limit `view.candidates` to the top N matches by descending
-    /// score. **View-shaping only** — `result.*` stays unaffected per
-    /// the truthful-gate ADR. CI parsers reading `result.passed` are
-    /// immune to this flag.
-    #[arg(long, global = true, value_name = "N")]
+    /// score. **View-shaping only** — `result.*` stays unaffected
+    /// per the truthful-gate ADR. CI parsers reading `result.passed`
+    /// are immune to this flag.
     pub top: Option<u32>,
 
     /// Filter `view.*` to matches that exceed the threshold gate.
     /// **View-shaping only** — `result.*` stays unaffected.
-    #[arg(long, global = true)]
     pub only_failing: bool,
 
-    /// Suppress non-zero exit code when findings exceed the threshold.
-    /// `result.passed` remains authoritative in JSON output; only the
-    /// process exit code changes. Useful for advisory CI integration.
-    #[arg(long, global = true)]
+    /// Suppress non-zero exit code when findings exceed the
+    /// threshold. `result.passed` remains authoritative in JSON
+    /// output; only the process exit code changes. Useful for
+    /// advisory CI integration.
     pub no_fail: bool,
 
     /// Walk files normally excluded by `.gitignore` / `.ignore`.
-    /// Intended for fixture corpora that live inside ignored directories;
-    /// production usage stays at the default (`false`).
-    #[arg(long, global = true)]
+    /// Intended for fixture corpora that live inside ignored
+    /// directories; production usage stays at the default (`false`).
     pub include_ignored: bool,
 
-    /// Generate a shell-completion script for the named shell and exit
-    /// 0. When set, the analyzer pipeline is NOT invoked; the script
-    /// goes to stdout and the process exits immediately. Useful for
-    /// shell init files (`source <(dry4rs --completions bash)`).
-    #[arg(long, global = true, value_name = "SHELL")]
+    /// Generate a shell-completion script for the named shell and
+    /// exit 0. When set, the analyzer pipeline is NOT invoked; the
+    /// script goes to stdout and the process exits immediately.
+    /// Useful for shell init files (`source <(dry4rs --completions
+    /// bash)`).
     pub completions: Option<Shell>,
+
+    /// Path to an explicit `dry4rs.toml` config file (bypasses auto-
+    /// discovery). When set, the path MUST exist — missing path
+    /// produces `ConfigError::Io` at startup. When unset, the loader
+    /// auto-discovers a `dry4rs.toml` by walking upward from the
+    /// analysis-root (per `org/adr-config-file-pattern.md` D2).
+    pub config: Option<PathBuf>,
 }
 
 impl Args {
@@ -243,6 +265,101 @@ impl Args {
         }
         vec![PathBuf::from(".")]
     }
+
+    /// Construct an [`Args`] from an already-parsed [`clap::ArgMatches`].
+    ///
+    /// The companion to [`super::build_command()`] — together they form
+    /// the imperative pipeline `build_command(meta) ->
+    /// get_matches() -> from_matches() -> Args`. The production
+    /// binary (`dry4rs::main` at Stage 6) and the test fixture
+    /// (`crates/dry-core/tests/common/mod.rs::parse_test_args`) both
+    /// route through this pair.
+    ///
+    /// Stage 4 lands this method additively; the existing
+    /// `#[derive(Parser)]` keeps working until Stage 5's atomic
+    /// rip-out. Field extraction below MUST stay in lockstep with the
+    /// `Arg::new(...)` declarations in `build_command`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the clap error verbatim when subcommand-arg extraction
+    /// fails. Top-level flag extraction uses `get_one::<T>` /
+    /// `get_flag` which cannot fail on a well-formed
+    /// [`build_command`][bc] output (the value-parser machinery already
+    /// validated types at `get_matches` time).
+    ///
+    /// [bc]: super::build_command()
+    pub fn from_matches(matches: &clap::ArgMatches) -> Result<Self, clap::Error> {
+        // `--threshold` / `--format` / `--threshold-mode` produce
+        // `Option<T>` — absence means "let the precedence merger
+        // consult [gate]/[output] from dry4rs.toml" (per ADR D3).
+        // The compiled-in defaults (0.85 / Format::Text /
+        // ThresholdMode::Default) apply ONLY when neither CLI nor
+        // config supplied a value.
+        let threshold = matches.get_one::<f64>("threshold").copied();
+        let format = matches.get_one::<Format>("format").copied();
+        let threshold_mode = matches.get_one::<ThresholdMode>("threshold_mode").copied();
+        let top = matches.get_one::<u32>("top").copied();
+        let only_failing = matches.get_flag("only_failing");
+        let no_fail = matches.get_flag("no_fail");
+        let include_ignored = matches.get_flag("include_ignored");
+        let completions = matches.get_one::<Shell>("completions").copied();
+        let config = matches.get_one::<PathBuf>("config").cloned();
+
+        let command = match matches.subcommand() {
+            Some(("report", sub)) => Some(Command::Report {
+                paths: sub
+                    .get_many::<PathBuf>("paths")
+                    .map(|vals| vals.cloned().collect())
+                    .unwrap_or_default(),
+            }),
+            Some(("stats", sub)) => Some(Command::Stats {
+                paths: sub
+                    .get_many::<PathBuf>("paths")
+                    .map(|vals| vals.cloned().collect())
+                    .unwrap_or_default(),
+            }),
+            Some(("check", sub)) => Some(Command::Check {
+                paths: sub
+                    .get_many::<PathBuf>("paths")
+                    .map(|vals| vals.cloned().collect())
+                    .unwrap_or_default(),
+            }),
+            Some(("ignore", sub)) => Some(Command::Ignore {
+                fingerprint: sub
+                    .get_one::<String>("fingerprint")
+                    .ok_or_else(|| {
+                        clap::Error::raw(
+                            clap::error::ErrorKind::MissingRequiredArgument,
+                            "ignore: missing fingerprint argument",
+                        )
+                    })?
+                    .clone(),
+            }),
+            Some(("ignored", _)) => Some(Command::Ignored),
+            Some(("cleanup", _)) => Some(Command::Cleanup),
+            Some((other, _)) => {
+                return Err(clap::Error::raw(
+                    clap::error::ErrorKind::InvalidSubcommand,
+                    format!("unknown subcommand: {other}"),
+                ));
+            }
+            None => None,
+        };
+
+        Ok(Self {
+            command,
+            threshold,
+            format,
+            threshold_mode,
+            top,
+            only_failing,
+            no_fail,
+            include_ignored,
+            completions,
+            config,
+        })
+    }
 }
 
 /// Custom clap value parser for `--threshold`.
@@ -250,7 +367,10 @@ impl Args {
 /// Accepts any `f64` in the half-open interval `(0.0, 1.0]` (the
 /// comparison engine's domain). Out-of-range values reject at parse
 /// time so the comparison engine never receives a degenerate threshold.
-fn parse_threshold(s: &str) -> Result<f64, String> {
+///
+/// `pub(crate)` so `build_command` can reuse the parser when
+/// constructing the imperative `clap::Command`.
+pub(crate) fn parse_threshold(s: &str) -> Result<f64, String> {
     let value: f64 = s
         .parse()
         .map_err(|err| format!("threshold must be a decimal number: {err}"))?;
@@ -313,12 +433,34 @@ mod tests {
     }
 
     #[test]
-    fn args_verifies_clap_invariants() {
+    fn build_command_verifies_clap_invariants() {
         // clap's `debug_assert!` checks the command/arg invariants;
         // running it once at compile-test time surfaces any wiring
-        // mistakes (duplicate args, missing default_value_t types,
+        // mistakes (duplicate args, missing default_value parsing,
         // value-parser type mismatches) before they hit users.
-        use clap::CommandFactory;
-        Args::command().debug_assert();
+        //
+        // Stage 5 of dry-rs#71 replaced the clap-derive
+        // `Args::command()` entry point with an imperative
+        // `build_command(meta)` — this test now goes through the
+        // production builder + a synthetic AdapterMeta from the
+        // common test fixture (inline here to avoid pulling
+        // tests/common/mod.rs into the unit-test scope).
+        use crate::cli::{AdapterMeta, build_command};
+        const FIXTURE_META: AdapterMeta = AdapterMeta {
+            tool_name: "test-adapter",
+            display_name: "TestLang",
+            tool_version: "0.0.0",
+            long_version: "0.0.0",
+            about: "test about",
+            long_about: "test long about",
+            after_help: "",
+            config_file_name: "test-adapter.toml",
+            extensions: &["x"],
+            tool_info_uri: "https://example.test/info",
+            rule_help_uri: "https://example.test/rules",
+            default_excludes: &[],
+            forced_excludes: &[],
+        };
+        build_command(&FIXTURE_META).debug_assert();
     }
 }

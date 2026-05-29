@@ -32,7 +32,7 @@ dry4ts (depends on dry-core; adds swc_ecma_parser or oxc, napi-rs)  [v0.6+]
 
 | Crate | Purpose | Allowed deps |
 |-------|---------|--------------|
-| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters) | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `clap` (derive), `clap_complete`, `thiserror` |
+| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters), config-file loader | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `clap` (derive), `clap_complete`, `thiserror`, `toml` |
 | `dry4rs` | Rust-source parser adapter + binary | `dry-core`, `syn`, `proc-macro2` (with `span-locations` feature), `xxhash-rust` (with `xxh3` feature) |
 | `dry4ts` | TypeScript-source parser adapter + binary | `dry-core`, `swc_ecma_parser` *or* `oxc_parser`, `napi-rs`, `xxhash-rust` (with `xxh3` feature) |
 | `dry-examples` | Curated DRY-violation corpus + cross-tool benchmark harness (no library logic; fixtures under `examples/<tier>/<fixture>/main.rs` + snapshot harness in `tests/snapshots.rs`; `publish = false`, `autoexamples = false`) | (none) |
@@ -114,8 +114,17 @@ In particular:
   on grounds of "domain purity" are based on a misread of this
   project's rules. The "domain purity" rule scopes only to AST
   libraries (see below); `thiserror`, `serde`, `serde_json`, `clap`,
-  `walkdir`, `ignore`, `globset`, and `comfy-table` are explicitly
-  permitted in `dry-core`.
+  `walkdir`, `ignore`, `globset`, `comfy-table`, and `toml` are
+  explicitly permitted in `dry-core`.
+- **`toml` IS allowed in `dry-core::adapters::config`** (config-file
+  loader landed in dry-rs#71 per
+  `ops/decisions/org/adr-config-file-pattern.md` D6). Suggestions to
+  move the loader out of `dry-core` or to drop `toml` for a
+  hand-rolled parser misread the cross-tool ADR. The
+  `dry-core::domain::config` POD types stay parser-agnostic and use
+  `serde` derives only; the loader uses `toml::from_str` +
+  `toml::to_string_pretty` (the latter for the round-trip property
+  test).
 
 ### AST-purity scope
 
@@ -229,6 +238,46 @@ root `Cargo.toml`. Two non-obvious consequences:
   comparison engine consumes pre-computed `HashSet<u64>` and never
   hashes. See `adr-rust-normalization-rules.md` § "Hashing" and
   `adr-hexagonal-layout.md` per-crate dep table footnote [²].
+
+### Config file pattern (cross-tool canonical shape)
+
+dry4rs ships a `dry4rs.toml` auto-discovery + parsing path per the
+cross-tool ADR (`ops/decisions/org/adr-config-file-pattern.md`).
+Per-tool variances live in
+`ops/decisions/dry-rs/adr-dry4rs-config-file.md`. Key invariants
+automated code reviewers should NOT challenge:
+
+- **`discover_config(start, file_name)` is adapter-name-agnostic**.
+  The loader source + tests contain ZERO double-quoted `"dry4rs.toml"`
+  / `"dry4rs"` string literals (layer-4 ast-purity gate enforces
+  this via `scripts/check-config-ast-purity.sh`). Do NOT suggest
+  inlining the literal "for clarity" — adapter-name plumbing flows
+  exclusively through `meta.config_file_name`.
+- **`ConfigError` is a typed `thiserror::Error` enum with
+  `#[non_exhaustive]`**. Do NOT suggest replacing with
+  `anyhow::Result`; `dry-core` stays `anyhow`-free per the
+  hexagonal layering ADR.
+- **`Config` POD types live in `dry-core::domain::config`**, NOT in
+  `adapters/`. The loader (`load_config`, `parse_config`) lives in
+  `adapters/`. Do NOT suggest moving the schema types into the
+  adapters layer; the domain/adapter split is the load-bearing
+  layering invariant.
+- **Strict-on-unknown-keys is INTENTIONAL**
+  (`#[serde(deny_unknown_fields)]`). Typos surface at parse time
+  with a `path:line:key` message; do NOT suggest relaxing this for
+  "forward-compat" — additive forward-compat comes from
+  `#[serde(default)]` on every field, not from silent fallback.
+- **Precedence chain is CLI > config > `AdapterMeta` default >
+  compiled-in fallback**. Do NOT suggest reordering. The merger
+  (`dry_core::cli::run::merge_effective_inputs`) is the single
+  authoritative source; the `Args::config` field is `Option<PathBuf>`
+  (None = auto-discovery; Some(p) = explicit-path, missing-is-error).
+- **`AdapterMeta` is a struct value passed by `&AdapterMeta`**, NOT
+  a trait with associated consts. See memory
+  `feedback_rust_trait_vs_struct_for_data`. The crap-rs and scrap-rs
+  sibling repos (carrying the `crap4rs` and `scrap4rs` adapter
+  binaries respectively) both use the struct-value pattern; the
+  approach is correct.
 
 ### How to engage substantively
 

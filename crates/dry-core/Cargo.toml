@@ -65,6 +65,14 @@ comfy-table = { workspace = true }
 # hexagonal-layout ADR per-crate dep table.
 clap = { workspace = true }
 clap_complete = { workspace = true }
+# TOML parser for the `<adapter>.toml` config-file loader
+# (`dry-core::adapters::config`). Scoped here per the cross-tool
+# config-file ADR (`ops/decisions/org/adr-config-file-pattern.md` D6):
+# loader stays in `adapters/`; POD config types live in `domain/` and
+# derive only `serde`. `toml::from_str::<Config>` consumes the
+# strict-deny-unknown-fields schema; `toml::to_string_pretty(&Config)`
+# powers the round-trip property test.
+toml = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
