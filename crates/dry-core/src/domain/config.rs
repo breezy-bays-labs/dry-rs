@@ -1,4 +1,4 @@
-//! POD config types deserialized from `dry4rs.toml` (or any other
+//! POD config types deserialized from `dry-rs.toml` (or any other
 //! adapter's `<tool>.toml`).
 //!
 //! Per the cross-tool config-file ADR (`ops/decisions/org/adr-config-
@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cli::{Format, ThresholdMode};
 
-/// Top-level config tree deserialized from `dry4rs.toml`.
+/// Top-level config tree deserialized from `dry-rs.toml`.
 ///
 /// Forward-compat surface: new tables (e.g., reserved `[delta]` /
 /// `[reporter]` from the per-tool ADR V2) land additively as

@@ -17,7 +17,7 @@
 //!   [`OutputConfig`][oc], [`WalkConfig`][wc]) live in
 //!   `dry-core::domain::config`; this module is the loader only.
 //! - D7 — ZERO double-quoted adapter-binary-name string literals
-//!   (`"dry4rs.toml"`, `"dry4rs"`, `"dry4ts.toml"`, `"dry4ts"`) appear
+//!   (`"dry-rs.toml"`, `"dry4rs"`, `"dry4ts.toml"`, `"dry4ts"`) appear
 //!   in this file or its tests. Adapter-name plumbing flows
 //!   exclusively through `discover_config`'s `file_name: &str`
 //!   parameter (supplied by `&meta.config_file_name` at the binary

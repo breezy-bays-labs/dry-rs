@@ -92,7 +92,7 @@ When extending the comparison engine:
 
 ## Exclusions and tracking-issue rule
 
-Every entry in `dry4rs.toml`'s `exclude = [...]` array, every
+Every entry in `dry-rs.toml`'s `exclude = [...]` array, every
 `#[ignore]`, every `#[cfg(skip_in_ci)]` MUST carry an inline
 `# tracked: dry-rs#<n> -- <reason>` comment OR `# adr: <path>` if
 permanent. Quarterly grep audit. See `~/.claude/rules/exclusions.md`

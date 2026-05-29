@@ -42,7 +42,7 @@
 /// - `long_about` — long help body (paragraphs; rendered on `--help`).
 /// - `after_help` — text shown after the help body. May be empty.
 /// - `config_file_name` — the file name `discover_config` walks for
-///   (e.g. `"dry4rs.toml"`). Adapter-name-agnostic plumbing flows
+///   (e.g. `"dry-rs.toml"`). Adapter-name-agnostic plumbing flows
 ///   exclusively through this field (per ADR D7).
 /// - `extensions` — file extensions to walk by default (without the
 ///   leading dot). Overridable by `[walk] extensions = [...]` in
@@ -76,7 +76,7 @@ pub struct AdapterMeta {
     /// Text shown after the help body. May be empty.
     pub after_help: &'static str,
     /// The file name `discover_config` walks for (e.g.,
-    /// `"dry4rs.toml"`). Adapter-name-agnostic plumbing flows
+    /// `"dry-rs.toml"`). Adapter-name-agnostic plumbing flows
     /// exclusively through this field (per ADR D7). MUST be non-empty.
     ///
     /// The loader (`dry_core::adapters::config::discover_config`) lands

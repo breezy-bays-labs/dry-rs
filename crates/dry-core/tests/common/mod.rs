@@ -11,7 +11,7 @@
 //!   in behavior-affecting fields. The ONLY divergence is
 //!   `config_file_name = "test-adapter.toml"` (ast-purity discipline
 //!   per ADR D7 — `tests/config*.rs` MUST NOT contain
-//!   `"dry4rs.toml"` literal).
+//!   `"dry-rs.toml"` literal).
 //! - `parse_test_args` — added in Stage 4 with the clap rip-out;
 //!   internally calls `build_command(&TEST_META).try_get_matches_
 //!   from(args)` and constructs `Args::from_matches`. Preserves the
@@ -59,7 +59,7 @@ pub fn parse_test_args(args: &[&str]) -> Result<Args, clap::Error> {
 /// affects clap behavior or downstream consumer semantics, with the
 /// sole exception of `config_file_name = "test-adapter.toml"`
 /// (chosen so the layer-4 ast-purity gate landing in Stage 3 doesn't
-/// trip on `"dry4rs.toml"` literals appearing in `tests/config.rs`).
+/// trip on `"dry-rs.toml"` literals appearing in `tests/config.rs`).
 ///
 /// `tool_name = "dry4rs"` is fine here — the ast-purity gate covers
 /// `crates/dry-core/src/adapters/config.rs` +

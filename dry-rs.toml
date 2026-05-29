@@ -1,4 +1,4 @@
-# dry-rs dogfood — reference dry4rs.toml at workspace root.
+# dry-rs dogfood — reference dry-rs.toml at workspace root.
 #
 # Auto-discovered by dry4rs when running from any directory in the
 # workspace (rustfmt-style walk-upward via Path::ancestors per ADR

@@ -62,7 +62,7 @@ pub fn build_command(meta: &AdapterMeta) -> Command {
         // No `default_value` on `--threshold` / `--format` /
         // `--threshold-mode` — absence-on-CLI means "let the
         // precedence merger consult [gate]/[output] from
-        // dry4rs.toml" (per ADR D3). The compiled-in defaults
+        // dry-rs.toml" (per ADR D3). The compiled-in defaults
         // (0.85 / text / default) live in
         // `dry_core::cli::run::merge_effective_inputs`, applied
         // ONLY when neither CLI nor config supplied a value.
@@ -71,7 +71,7 @@ pub fn build_command(meta: &AdapterMeta) -> Command {
                 .long("threshold")
                 .global(true)
                 .value_parser(parse_threshold)
-                .help("Jaccard similarity threshold in the half-open interval (0.0, 1.0]; defaults to 0.85 when neither CLI nor [gate] in dry4rs.toml supplies one"),
+                .help("Jaccard similarity threshold in the half-open interval (0.0, 1.0]; defaults to 0.85 when neither CLI nor [gate] in dry-rs.toml supplies one"),
         )
         .arg(
             Arg::new("format")
@@ -134,7 +134,7 @@ pub fn build_command(meta: &AdapterMeta) -> Command {
                 .value_parser(value_parser!(PathBuf))
                 .action(ArgAction::Set)
                 .help(
-                    "Path to dry4rs.toml; bypasses auto-discovery (missing-is-error)",
+                    "Path to dry-rs.toml; bypasses auto-discovery (missing-is-error)",
                 ),
         )
         .subcommand(subcommand_with_paths(

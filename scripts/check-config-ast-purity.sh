@@ -5,7 +5,7 @@
 # + `dry-core::tests/config.rs` (loader tests). Per ADR D7, both
 # files MUST NOT contain double-quoted adapter-binary-name literals:
 #
-#   "dry4rs.toml" | "dry4ts.toml" | "dry4rs" | "dry4ts"
+#   "dry-rs.toml" | "dry4ts.toml" | "dry4rs" | "dry4ts"
 #
 # Adapter-name plumbing flows exclusively through `discover_config`'s
 # `file_name: &str` parameter (supplied by `&meta.config_file_name`
@@ -20,7 +20,7 @@
 #   as a synthetic CLI argv (per ADR V3 exception documented in
 #   `ops/decisions/dry-rs/adr-dry4rs-config-file.md`).
 # - `crates/dry4rs/tests/dogfood_discovery.rs` is EXCLUDED. That
-#   test asserts the literal `"dry4rs.toml"` IS the workspace-root
+#   test asserts the literal `"dry-rs.toml"` IS the workspace-root
 #   dogfood file — the literal is the point of the test.
 # - The dry4rs binary (`crates/dry4rs/src/main.rs`) is EXCLUDED.
 #   That's the ADAPTER, where adapter-name literals belong.
@@ -39,7 +39,7 @@ set -euo pipefail
 # We anchor each alternative with double quotes so substring matches
 # inside identifiers don't false-positive (e.g., `dry4rs::main`,
 # the rust module path, doesn't have surrounding quotes).
-REJECTED='"dry4rs\.toml"|"dry4ts\.toml"|"dry4rs"|"dry4ts"'
+REJECTED='"dry-rs\.toml"|"dry4ts\.toml"|"dry4rs"|"dry4ts"'
 
 FILES=(
     crates/dry-core/src/adapters/config.rs
@@ -83,7 +83,7 @@ adapter-binary-name literals. All adapter-name plumbing flows through
 `discover_config`'s `file_name: &str` parameter (supplied by
 `&meta.config_file_name` at the binary boundary).
 
-Fix: replace literal `"dry4rs.toml"` with `TEST_META.config_file_name`
+Fix: replace literal `"dry-rs.toml"` with `TEST_META.config_file_name`
 (via `crates/dry-core/tests/common/mod.rs`) or thread an explicit
 `&str` through the call site.
 
