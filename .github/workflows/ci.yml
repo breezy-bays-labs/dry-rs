@@ -200,6 +200,30 @@ jobs:
           fi
           echo "dry-core is AST-library-pure"
 
+  config-ast-purity:
+    name: dry-core::adapters::config ast-purity check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Layer-4 ast-purity gate for the config-file loader. Per the
+    # cross-tool config-file ADR (ops/decisions/org/adr-config-file-
+    # pattern.md D7), `dry-core::adapters::config` source +
+    # `dry-core::tests/config.rs` MUST NOT contain double-quoted
+    # adapter-binary-name string literals ("dry4rs.toml", "dry4rs",
+    # "dry4ts.toml", "dry4ts"). Adapter-name plumbing flows exclusively
+    # through `discover_config`'s `file_name: &str` parameter,
+    # supplied by `&meta.config_file_name` at the binary boundary.
+    #
+    # Sibling-coherent with scrap-rs#37 (layer-4 ast-purity for
+    # scrap-core::cli::config). Single source of truth in
+    # `scripts/check-config-ast-purity.sh`; the same script fires
+    # from the lefthook `config-ast-purity` pre-push hook so any
+    # pattern tweak only ever touches one file.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - run: bash scripts/check-config-ast-purity.sh
+
   span-locations-check:
     name: proc-macro2 span-locations enforcement
     runs-on: ubuntu-latest

@@ -16,10 +16,6 @@
 //! - D6 — schema POD types ([`Config`], [`GateConfig`][gc],
 //!   [`OutputConfig`][oc], [`WalkConfig`][wc]) live in
 //!   `dry-core::domain::config`; this module is the loader only.
-//!
-//! [gc]: crate::domain::GateConfig
-//! [oc]: crate::domain::OutputConfig
-//! [wc]: crate::domain::WalkConfig
 //! - D7 — ZERO double-quoted adapter-binary-name string literals
 //!   (`"dry4rs.toml"`, `"dry4rs"`, `"dry4ts.toml"`, `"dry4ts"`) appear
 //!   in this file or its tests. Adapter-name plumbing flows
@@ -27,6 +23,10 @@
 //!   parameter (supplied by `&meta.config_file_name` at the binary
 //!   boundary). The layer-4 ast-purity gate
 //!   (`scripts/check-config-ast-purity.sh`) enforces this.
+//!
+//! [gc]: crate::domain::GateConfig
+//! [oc]: crate::domain::OutputConfig
+//! [wc]: crate::domain::WalkConfig
 
 use std::path::{Path, PathBuf};
 
