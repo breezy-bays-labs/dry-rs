@@ -23,7 +23,7 @@ rust-version = "1.85"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# TOML parser for the `dry-rs.toml` config-file loader (lands with
+# TOML parser for the `dry.toml` config-file loader (lands with
 # dry-rs#71). Scoped to `dry-core::adapters::config`; the `domain/`
 # POD types stay parser-agnostic and derive only `serde`. v0.8 is
 # the current major; the loader uses `toml::from_str::<Config>()`
