@@ -198,8 +198,13 @@ jobs:
 
 dry4rs auto-discovers a `dry.toml` config file by walking
 upward from the analysis path via `Path::ancestors` — the first
-matching file found wins. A reference example is committed at this
-repo's root.
+matching file found wins. A worked reference is committed at the
+repo root ([`dry.toml`](dry.toml)) and exercised end-to-end on every
+CI run by the `dry-self-scorecard` and `dry-corpus-scorecard` jobs in
+[`.github/workflows/self-test.yml`](.github/workflows/self-test.yml).
+Both jobs invoke the bare `dry4rs` binary (no `--config` / `--threshold`
+/ `--format` flags) so the auto-discovery + parsing contract is
+verified through the production CI surface, not just unit tests.
 
 ### Schema
 

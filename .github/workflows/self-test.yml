@@ -14,6 +14,27 @@ name: Self-test (dry-self + crap-self + scrap-self)
 #                   envelope. This is the load-bearing gate at v0.1;
 #                   the insta snapshot fails CI if the comparison
 #                   engine or normalizer regresses.
+#   * dry-self-scorecard
+#                 — runs the bare `dry4rs` binary against dry-rs's
+#                   production source (`crates/dry-core/src/` +
+#                   `crates/dry4rs/src/`), auto-discovering `dry.toml`
+#                   at the workspace root. Distinct from `dry-self`:
+#                   that job exercises the cargo-test surface + insta
+#                   snapshot, this job exercises the production CI
+#                   surface that external consumers see, with findings
+#                   rendered into the workflow step summary.
+#                   Measurement-only at v0.1 (`--no-fail`); gate-flip
+#                   to fail-on-findings is a follow-up.
+#   * dry-corpus-scorecard
+#                 — runs the bare `dry4rs` binary against the curated
+#                   `crates/dry-examples/examples/` corpus to surface
+#                   the analyzer's signal on known duplicates.
+#                   Transparency measurement distinct from
+#                   `corpus-smoke` in `example-smoke.yml`: that job is
+#                   a regression gate against committed `expected.json`
+#                   files via the snapshot harness; this job is the
+#                   aggregate tier-breakdown rendered in the step
+#                   summary.
 #   * crap-self   — runs crap4rs against `crates/dry-core/src/` +
 #                   `crates/dry4rs/src/` via the public crap-rs
 #                   composite action. Production-code CC ladder gate
@@ -80,6 +101,121 @@ jobs:
       # surfaces a diff if the analyzer's findings drift.
       - name: Run dry4rs self-referential integration test
         run: cargo nextest run -p dry4rs --test self_check --locked
+
+  dry-self-scorecard:
+    name: dry-self-scorecard (production-code DRY measurement)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Symmetric dogfood on the production CI surface: bare `dry4rs`
+    # binary, no flags beyond `--no-fail`, positional paths only.
+    # Auto-discovers `dry.toml` at the workspace root via
+    # `discover_config` walk-upward and applies `[gate]`/`[output]`/
+    # `[walk]` values to the analysis.
+    #
+    # Why not the local `./.github/actions/scorecard` composite action?
+    # That action always passes `--threshold` (default 0.85) and
+    # `--format` (default json) as explicit CLI flags, which override
+    # any value `dry.toml` sets. A "defer-to-config" mode on the action
+    # is a follow-up; the bare binary is the canonical config-driven
+    # invocation today.
+    #
+    # Sibling-coherent with crap-rs#346 (`scorecard-production` job
+    # that consumes `crap-rs.toml` via auto-discovery).
+    #
+    # Measurement-only at v0.1: `--no-fail` makes this surface signal
+    # without gating the workflow. Gate-flip to fail-on-findings lands
+    # once dry-rs's own internal duplication baseline drops (follow-up).
+    #
+    # Security note: no `${{ ... }}` interpolations in `run:` blocks
+    # below — paths and tool args are static literals.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # tracks @stable branch
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: dry-rs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build dry4rs (release)
+        run: cargo build --release -p dry4rs --locked
+      - name: Run dry4rs scorecard on production source (auto-discovers dry.toml)
+        run: |
+          set -euo pipefail
+          ./target/release/dry4rs report \
+            --no-fail \
+            crates/dry-core/src \
+            crates/dry4rs/src \
+            | tee dry-self-scorecard.txt
+          {
+            echo "## dry-self-scorecard (production code)"
+            echo ""
+            echo "Bare \`dry4rs\` invocation against \`crates/dry-core/src\` + \`crates/dry4rs/src\`. No \`--config\` / \`--threshold\` / \`--format\` flags — auto-discovers \`dry.toml\` at the workspace root via \`discover_config\` walk-upward."
+            echo ""
+            echo '```text'
+            cat dry-self-scorecard.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  dry-corpus-scorecard:
+    name: dry-corpus-scorecard (dry-examples corpus measurement)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Transparency measurement: bare `dry4rs` binary against the
+    # curated `crates/dry-examples/examples/` corpus, surfacing the
+    # analyzer's aggregate tier signal on known-duplicate fixtures.
+    #
+    # Distinct from `corpus-smoke` in `example-smoke.yml`: that job
+    # is a per-fixture REGRESSION GATE via
+    # `cargo nextest run -p dry-examples` comparing each fixture's
+    # output to its committed `expected.json` (after sentinel
+    # normalization). This job is a workspace-wide aggregate
+    # MEASUREMENT rendered into the workflow step summary so
+    # reviewers see what dry4rs detects on the corpus at a glance.
+    # Per ADR `adr-dry-examples-corpus.md`, both surfaces stay —
+    # they measure different things.
+    #
+    # Shares `dry.toml` with `dry-self-scorecard` via the same
+    # `discover_config` walk-upward. Measurement-only (`--no-fail`)
+    # because the corpus is INTENTIONALLY duplicate.
+    #
+    # `--include-ignored` is the lone CLI flag here. `crates/dry-examples/`
+    # ships a `.ignore` file containing `*` to keep its curated
+    # duplicates out of every default walk (so `dry-self-scorecard` —
+    # and any external consumer running dry4rs against a checkout that
+    # includes this corpus — never pollutes its production analysis
+    # with intentional fixtures). For the corpus-scorecard measurement
+    # we explicitly opt back in to scan the ignored tree; this is a CLI
+    # flag (not a config knob) because the production posture in
+    # `dry.toml` (`include_ignored = false`) is the right default.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # tracks @stable branch
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: dry-rs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build dry4rs (release)
+        run: cargo build --release -p dry4rs --locked
+      - name: Run dry4rs scorecard on dry-examples corpus
+        run: |
+          set -euo pipefail
+          ./target/release/dry4rs report \
+            --no-fail \
+            --include-ignored \
+            crates/dry-examples/examples \
+            | tee dry-corpus-scorecard.txt
+          {
+            echo "## dry-corpus-scorecard (curated corpus, by design duplicate-rich)"
+            echo ""
+            echo "Bare \`dry4rs\` invocation against \`crates/dry-examples/examples\` with \`--include-ignored\` (the corpus carries a \`.ignore\` file containing \`*\` so it never pollutes default walks — this job opts back in for measurement). The corpus is intentionally duplicate-rich — see [\`crates/dry-examples/EXPECTED.md\`](https://github.com/breezy-bays-labs/dry-rs/blob/main/crates/dry-examples/EXPECTED.md) for the per-fixture catalogue. Measurement only (no gate)."
+            echo ""
+            echo '```text'
+            cat dry-corpus-scorecard.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   crap-self:
     name: crap-self (production-code CC ladder)
