@@ -25,37 +25,63 @@ branding:
   color: 'blue'
 
 inputs:
+  # Defer-to-config defaults: `paths` / `threshold` / `format` all
+  # default to empty string. When unset, the action OMITS the matching
+  # flag (or positional args) from the dry4rs invocation, letting the
+  # binary consult the auto-discovered `dry.toml`. Commit a `dry.toml`
+  # at your repo root + invoke the action with only `fail-on-findings`
+  # for the recommended minimal-input shape. Setting any input to a
+  # non-empty value overrides the matching config value (CLI > config
+  # > AdapterMeta default > compiled-in fallback, per
+  # `adr-config-file-pattern.md`).
   paths:
     description: |
       Space-separated list of paths to analyze, relative to the
-      caller's checkout root. Defaults to the entire checkout (`.`).
-      Multiple roots are passed verbatim to the dry4rs CLI as
-      positional arguments after the `report` subcommand.
+      caller's checkout root. Multiple roots are passed verbatim to
+      the dry4rs CLI as positional arguments after the `report`
+      subcommand.
+
+      Empty (the default) OMITS positional path args, letting dry4rs
+      use its own default — the current working directory
+      (`$GITHUB_WORKSPACE`). The future `[walk].src = [...]` field in
+      `dry.toml` (tracked: dry-rs#78) will apply once shipped.
     required: false
-    default: '.'
+    default: ''
   threshold:
     description: |
-      Jaccard similarity threshold in the half-open interval `(0.0, 1.0]`.
-      Defaults to the dry4rs CLI's compiled-in default (0.85 — aligned
-      with the comparison engine's `REVIEW_FIRST_FLOOR`). Tighten to
-      0.95 for `auto_refactor`-tier-only output, or loosen to surface
-      `advisory`-tier matches.
+      Jaccard similarity threshold in the half-open interval
+      `(0.0, 1.0]`. Tighten to 0.95 for `auto_refactor`-tier-only
+      output, or loosen to surface `advisory`-tier matches.
+
+      Empty (the default) OMITS `--threshold`, letting dry4rs consult
+      the auto-discovered `dry.toml`'s `[gate].threshold`. Falls back
+      to the binary's compiled-in default (0.85 —
+      `REVIEW_FIRST_FLOOR`) when no `dry.toml` is present.
     required: false
-    default: '0.85'
+    default: ''
   format:
     description: |
-      Output format for the binary invocation that writes the artifact
-      file. `json` (default) emits the v0.1 wire envelope to
-      `output-path` so downstream tooling can parse it; `text` writes
-      the human-readable terminal table. The step summary always
-      receives the text-format render regardless of this input.
+      Output format for the human-readable rendering invocation that
+      writes to the workflow step summary. `text` emits the dry4rs
+      reporter's terminal table; `json` emits the v0.1 wire envelope
+      inline in the step summary's collapsible block.
+
+      The artifact invocation that writes `output-path` ALWAYS emits
+      JSON regardless of this input — the artifact contract is fixed
+      for downstream tooling.
+
+      Empty (the default) OMITS `--format` on the text-render
+      invocation, letting dry4rs consult the auto-discovered
+      `dry.toml`'s `[output].format`. Falls back to `text` when no
+      `dry.toml` is present.
     required: false
-    default: 'json'
+    default: ''
   output-path:
     description: |
       Path (relative to the caller's checkout root) where the JSON
-      envelope is written when `format: json`. Defaults to
-      `dry-rs-report.json`. Surfaced on `outputs.report-path`.
+      envelope is written. Defaults to `dry-rs-report.json`. Surfaced
+      on `outputs.report-path`. Always JSON regardless of `format`
+      input — the artifact contract is fixed.
     required: false
     default: 'dry-rs-report.json'
   # `extensions:` input was originally exposed here at V1 (PR #61) but the
@@ -245,8 +271,38 @@ runs:
         # %q-style escaping is unnecessary because GitHub Actions
         # delivers the value through the env var rather than splicing
         # it into the shell line.
+        #
+        # Defer-to-config: when `DRY_PATHS` is empty (the default —
+        # see `inputs.paths` description), unquoted word-splitting
+        # produces zero positional args, the artifact + text-render
+        # invocations below pass no positional paths, and dry4rs uses
+        # its own default (CWD = `$GITHUB_WORKSPACE`). Once
+        # dry-rs#78's `[walk].src = [...]` ships, the auto-discovered
+        # `dry.toml` will drive multi-root paths.
         # shellcheck disable=SC2086
         set -- $DRY_PATHS
+
+        # Defer-to-config: when `DRY_THRESHOLD` / `DRY_FORMAT` are
+        # empty (the default — see `inputs.threshold` /
+        # `inputs.format` descriptions), the respective `--threshold`
+        # / `--format` flags are OMITTED from the invocation, letting
+        # dry4rs consult the auto-discovered `dry.toml` (or fall back
+        # to compiled defaults). Non-empty input wins — CLI > config >
+        # AdapterMeta default > compiled-in fallback, per the cross-
+        # tool `adr-config-file-pattern.md` precedence chain.
+        threshold_args=()
+        if [ -n "$DRY_THRESHOLD" ]; then
+          threshold_args+=(--threshold "$DRY_THRESHOLD")
+        fi
+
+        # `text_format_args` applies ONLY to the text-render
+        # invocation below (the step-summary surface). The artifact
+        # invocation hardcodes `--format json` independently because
+        # the artifact contract is fixed.
+        text_format_args=()
+        if [ -n "$DRY_FORMAT" ]; then
+          text_format_args+=(--format "$DRY_FORMAT")
+        fi
 
         # `--extensions` flag was originally spliced here at V1 from the
         # `extensions:` input. Removed at v0.1 (dry-rs#66) because the
@@ -260,11 +316,13 @@ runs:
         cd "$GITHUB_WORKSPACE"
 
         # Render the JSON envelope artifact. Always emit JSON to the
-        # artifact path regardless of the human-facing format choice;
-        # downstream consumers (mokumo aggregator) need JSON.
+        # artifact path regardless of `inputs.format`; downstream
+        # consumers (mokumo aggregator) need JSON. `--threshold` and
+        # positional paths defer to `dry.toml` when the inputs are
+        # empty — see the conditional-arg build above.
         "$DRY_BIN" report \
           --format json \
-          --threshold "$DRY_THRESHOLD" \
+          "${threshold_args[@]}" \
           --no-fail \
           "$@" \
           > "$DRY_OUTPUT_PATH"
@@ -354,18 +412,25 @@ runs:
           echo "by_crate_path=$by_crate_path"
         } >> "$GITHUB_OUTPUT"
 
-        # Render the human-facing text summary onto the workflow step
+        # Render the human-facing summary onto the workflow step
         # summary so reviewers see findings inline in the GitHub UI.
-        # We re-run the binary with --format text rather than
-        # converting the JSON, because the text reporter owns the
-        # grouping-by-tier formatting and re-implementing it in jq
-        # would duplicate that logic.
+        # We re-run the binary rather than converting the JSON
+        # artifact, because the text reporter owns the grouping-by-tier
+        # formatting and re-implementing it in jq would duplicate that
+        # logic. Format obeys the same defer-to-config rule as the
+        # artifact run: `${text_format_args[@]}` is empty when
+        # `inputs.format` is empty, in which case dry4rs consults
+        # `dry.toml`'s `[output].format` (falling back to text). If a
+        # caller's `dry.toml` explicitly sets `format = "json"`, the
+        # rendered block contains JSON rather than the text table —
+        # accepted as their explicit choice; the `Text report` label
+        # below becomes a minor mislabel in that case.
         {
           echo "## dry-rs scorecard"
           echo ""
           echo "- Tool: \`dry4rs\` @ \`$DRY_ACTION_REF\`"
-          echo "- Paths: \`$DRY_PATHS\`"
-          echo "- Threshold: \`$DRY_THRESHOLD\`"
+          echo "- Paths: \`${DRY_PATHS:-(deferred to dry.toml or CWD)}\`"
+          echo "- Threshold: \`${DRY_THRESHOLD:-(deferred to dry.toml or 0.85)}\`"
           echo "- Findings: \`$findings_count\`"
           echo "- Passed: \`$passed\`"
           echo ""
@@ -385,8 +450,8 @@ runs:
           echo ""
           echo '```'
           "$DRY_BIN" report \
-            --format text \
-            --threshold "$DRY_THRESHOLD" \
+            "${text_format_args[@]}" \
+            "${threshold_args[@]}" \
             --no-fail \
             "$@" || true
           echo '```'
@@ -398,6 +463,7 @@ runs:
         # in the action so we can keep a single source of truth across
         # the binary's exit code and the action's gate input.
         if [ "$DRY_FAIL_ON_FINDINGS" = "true" ] && [ "$passed" != "true" ]; then
-          echo "::error::dry-rs scorecard surfaced $findings_count match(es) at or above the threshold ($DRY_THRESHOLD)"
+          threshold_display="${DRY_THRESHOLD:-(deferred to dry.toml or 0.85)}"
+          echo "::error::dry-rs scorecard surfaced $findings_count match(es) at or above the threshold ($threshold_display)"
           exit 1
         fi
