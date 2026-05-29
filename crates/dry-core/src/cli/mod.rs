@@ -30,9 +30,11 @@
 //!   normalizes). Per-file parse errors are diagnostics, not gate
 //!   failures.
 
+mod adapter_meta;
 mod args;
 mod run;
 
+pub use adapter_meta::AdapterMeta;
 pub use args::{Args, Command, Format, ThresholdMode};
 pub use run::run;
 

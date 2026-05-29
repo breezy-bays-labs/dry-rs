@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
+use serde::{Deserialize, Serialize};
 
 /// Output format selector. `--format` accepts the v0.1 subset; reporters
 /// for `markdown`, `html`, and `sarif` land in later waves and are
@@ -27,7 +28,11 @@ use clap_complete::Shell;
 ///
 /// `#[non_exhaustive]` per the AGENTS.md `#[non_exhaustive]` discipline
 /// — enums YES, result structs NO.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+///
+/// Serde uses lowercase tags so TOML config files can use `format =
+/// "text"` / `format = "json"` symmetrically with the CLI flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum Format {
     /// Human-friendly terminal output (default).
@@ -41,7 +46,11 @@ pub enum Format {
 /// user-configurable labels.
 ///
 /// `#[non_exhaustive]` per the AGENTS.md `#[non_exhaustive]` discipline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+///
+/// Serde uses lowercase tags so TOML config files can use
+/// `threshold_mode = "strict"` symmetrically with the CLI flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum ThresholdMode {
     /// Higher threshold → fewer findings (high-confidence only).
