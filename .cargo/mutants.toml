@@ -31,30 +31,53 @@
 # or remove the matching line accordingly. The per-line ordering
 # here matches `cargo mutants --list` output for grep-ability.
 exclude_re = [
-    # -- tracked: dry-rs#37 — equivalent mutants (decide ADR vs in-source) --
-    # tracked: dry-rs#37 — partition predicate `==` -> `!=` produces
-    # infinite loop in Pass 1's cluster-emission loop. cargo-mutants
-    # catches via timeout (exit 3) but pollutes the green-CI signal.
-    # Line moved from 296 -> 311 and the partition predicate now lives
-    # in `emit_clusters_for_bucket` (extracted in dry-rs#42).
+    # -- adr: ops/decisions/org/adr-mutation-testing-equivalence.md --
+    # Equivalent + timeout-detected mutants classified per the
+    # mutation-testing-equivalence policy ADR. Each entry below carries
+    # the trace-proof rationale that the ADR requires; the patterns are
+    # operator-granular (one operator transform per regex) so a future
+    # killable mutant on the same line is never silently re-masked by a
+    # blanket `line:.*` exclude.
+    #
+    # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
+    # TIMEOUT-DETECTED category (NOT an equivalence claim): the
+    # partition predicate `==` -> `!=` produces an infinite loop in
+    # Pass 1's cluster-emission loop. cargo-mutants catches it via the
+    # timeout path (exit 3); excluded only to keep the green-CI signal
+    # clean per the ADR's timeout-detected handling. Line moved from
+    # 296 -> 311 and the predicate now lives in `emit_clusters_for_bucket`
+    # (extracted in dry-rs#42).
     "comparison/mod\\.rs:311:.* in emit_clusters_for_bucket",
-    # tracked: dry-rs#37 — pass2 score-1.0 defensive guard is unreachable
-    # by design (`debug_assert!(false, ...)` proves it); 4 mutants on this
-    # line (`<` -> `==`/`<=`, `-` -> `+`/`/`) all survive by being on a
-    # dead-code branch.
+    # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
+    # pass2 score-1.0 defensive guard is unreachable by design
+    # (`debug_assert!(false, ...)` proves it). Of the five operator
+    # mutants on the guard expression, FOUR survive on the dead-code
+    # branch and are provably equivalent: `<` -> `==`, `<` -> `<=`,
+    # `-` -> `+`, `-` -> `/`. The two patterns below are operator-
+    # granular per the ADR and match ONLY those four — never `< with >`.
     # Line moved from 361 -> 421 and the guard now lives in
     # `resolve_pass2_score` (extracted in dry-rs#42).
-    "comparison/mod\\.rs:421:.* in resolve_pass2_score",
-    # tracked: dry-rs#37 — jaccard `||` -> `&&` short-circuit: both
-    # branches produce 0.0 for every single-empty case (intersection
-    # of an empty set is 0, union > 0, score = 0/N = 0.0), so this is
-    # a provably-equivalent mutant — no test can distinguish the two
-    # behaviors without changing the empty-set policy itself.
-    # Line moved from 483 -> 535 during the dry-rs#42 refactor sweep
-    # (helper extractions above pushed `jaccard` further down the file).
+    "comparison/mod\\.rs:421:.*: replace < with (==|<=) in resolve_pass2_score",
+    "comparison/mod\\.rs:421:.*: replace - with (\\+|/) in resolve_pass2_score",
+    # NOTE: `replace < with > in resolve_pass2_score` is intentionally
+    # NOT excluded — flipping the guard to `>` fires the `debug_assert!`
+    # on every non-1.0 Pass-2 score, so existing tests CATCH it. Per the
+    # ADR's operator-granularity rule, do NOT re-add a blanket
+    # `comparison/mod\\.rs:421:.*` exclude: it would silently re-mask
+    # this killable mutant.
+    # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
+    # jaccard `||` -> `&&` short-circuit: both branches produce 0.0 for
+    # every single-empty case (intersection of an empty set is 0,
+    # union > 0, score = 0/N = 0.0), so this is a provably-equivalent
+    # mutant — no test can distinguish the two behaviors without changing
+    # the empty-set policy itself. Line moved from 483 -> 535 during the
+    # dry-rs#42 refactor sweep (helper extractions above pushed `jaccard`
+    # further down the file).
     "comparison/mod\\.rs:535:.*: replace \\|\\| with && in jaccard",
-    # tracked: dry-rs#37 — jaccard `a.len() <= b.len()` optimization
-    # invariant; the comment literally says "semantically equivalent".
+    # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
+    # jaccard `a.len() <= b.len()` optimization invariant; the source
+    # comment literally says "semantically equivalent" (iterating the
+    # smaller set is a perf choice, the count is identical either way).
     # Line moved from 488 -> 540 during the dry-rs#42 refactor sweep.
     "comparison/mod\\.rs:540:.*: replace <= with > in jaccard",
 ]
