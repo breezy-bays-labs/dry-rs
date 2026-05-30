@@ -31,18 +31,6 @@
 # or remove the matching line accordingly. The per-line ordering
 # here matches `cargo mutants --list` output for grep-ability.
 exclude_re = [
-    # -- tracked: dry-rs#36 — real test gaps (plug + delete) ----------------
-    # tracked: dry-rs#36 — pass2 break-math boundary not asserted (`> -> ==`, `> -> >=`)
-    # Line moved from 346 -> 367 during the dry-rs#42 refactor sweep
-    # (helper extraction); the `> bound` check still lives in
-    # `pass2_sliding_window`'s driver after the break-math invariant
-    # stayed in the outer function.
-    "comparison/mod\\.rs:367:.* in pass2_sliding_window",
-    # tracked: dry-rs#36 — pass2 threshold-equality not asserted (`< -> <=`)
-    # Line moved from 350 -> 398 and the `score < threshold` gate now
-    # lives in `try_emit_pass2_match` (extracted in dry-rs#42).
-    "comparison/mod\\.rs:398:.* in try_emit_pass2_match",
-
     # -- tracked: dry-rs#37 — equivalent mutants (decide ADR vs in-source) --
     # tracked: dry-rs#37 — partition predicate `==` -> `!=` produces
     # infinite loop in Pass 1's cluster-emission loop. cargo-mutants

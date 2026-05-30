@@ -842,6 +842,81 @@ mod tests {
     }
 
     #[test]
+    fn pass2_break_math_does_not_break_when_node_count_equals_bound_exactly() {
+        // Pins the STRICT `>` in `pass2_sliding_window`'s break gate
+        // (`forms[j].node_count > forms[i].node_count / threshold`).
+        // Equality must NOT break — the j-form is exactly at the
+        // Jaccard upper bound, so it is still a legal candidate.
+        //
+        // Constructed so `node_count_j == bound` is EXACT in f64:
+        // threshold = 0.5 (exactly representable), forms[i].node_count
+        // = 4, so bound = 4.0 / 0.5 = 8.0 (exact); forms[j].node_count
+        // = 8.0 (exact). With the correct strict `>`, `8.0 > 8.0` is
+        // false -> the loop does NOT break, the pair is evaluated, and
+        // its Jaccard (4/5 = 0.8) clears the 0.5 threshold -> 1 match.
+        //
+        // The `> -> ==` mutant: `8.0 == 8.0` is true -> break -> 0
+        // matches (test fails -> mutant killed).
+        // The `> -> >=` mutant: `8.0 >= 8.0` is true -> break -> 0
+        // matches (test fails -> mutant killed).
+        //
+        // The fingerprint sets are distinct (XOR bucket keys differ:
+        // 1^2^3^4 = 4 vs 4^5 = 1) AND node_count is decoupled from set
+        // size, so Pass 1 never claims them and the score sits well
+        // above the gate boundary — isolating the break-math `>`.
+        let forms = vec![make_form(&[1, 2, 3, 4], 4), make_form(&[1, 2, 3, 4, 5], 8)];
+        let matches = compare(&forms, 0.5);
+        assert_eq!(
+            matches.len(),
+            1,
+            "node_count == bound (8.0 == 8.0) must NOT break the loop; \
+             the pair must be evaluated and emitted, got {matches:?}"
+        );
+        assert!(
+            (matches[0].score - 0.8).abs() < 1e-9,
+            "expected ~0.8, got {}",
+            matches[0].score
+        );
+    }
+
+    #[test]
+    fn pass2_threshold_gate_emits_when_score_equals_threshold_exactly() {
+        // Pins the STRICT `<` in `try_emit_pass2_match`'s threshold
+        // gate (`if score < threshold { return; }`). A score that
+        // equals the threshold EXACTLY must NOT be filtered out —
+        // the gate is "meets or exceeds" (`>= threshold`), so `score
+        // == threshold` emits.
+        //
+        // Constructed so `score == threshold` is EXACT in f64:
+        // {1,2,3} vs {2,3,4} share {2,3}; Jaccard = 2/4 = 0.5
+        // (exact), and threshold = 0.5 (exact). Node counts are equal
+        // (3 == 3) so the break math (bound = 3/0.5 = 6.0, nj = 3.0,
+        // 3.0 > 6.0 is false) never prunes the pair — isolating the
+        // threshold gate.
+        //
+        // The `< -> <=` mutant: `0.5 <= 0.5` is true -> early return
+        // -> 0 matches (test fails -> mutant killed).
+        //
+        // Sets are distinct (XOR keys 0 vs 5) so Pass 1 leaves them
+        // for Pass 2.
+        let forms = vec![make_form(&[1, 2, 3], 3), make_form(&[2, 3, 4], 3)];
+        let matches = compare(&forms, 0.5);
+        assert_eq!(
+            matches.len(),
+            1,
+            "score == threshold (0.5 == 0.5) must NOT be filtered; \
+             the `< threshold` gate is strict, got {matches:?}"
+        );
+        assert!(
+            (matches[0].score - 0.5).abs() < f64::EPSILON,
+            "expected exactly 0.5, got {}",
+            matches[0].score
+        );
+        // 0.5 < 0.85 review_first floor -> Advisory.
+        assert_eq!(matches[0].tier, Tier::Advisory);
+    }
+
+    #[test]
     fn pass2_tier_assignment_auto_refactor_floor() {
         // Score >= 0.95 -> AutoRefactor (Pass 2 path; not score 1.0).
         // A = {1..=19, 20} (20 elts), B = {1..=19} (19 elts).
