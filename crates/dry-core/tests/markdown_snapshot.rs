@@ -1,11 +1,12 @@
 //! Insta snapshot for the markdown reporter (dry-rs#91).
 //!
-//! Locks the exact GitHub-flavored Markdown emitted for a
+//! Locks the exact GitHub-flavored Markdown "sticky card" emitted for a
 //! representative `Report` covering all three routing tiers
-//! (`auto_refactor` / `review_first` / `advisory`). The snapshot is
-//! the executable contract — any drift (tier heading change, reordered
-//! within-tier sort, different `file:line:col` rendering, fenced-block
-//! shape) surfaces as a snap diff.
+//! (`auto_refactor` / `review_first` / `advisory`). The snapshot is the
+//! executable contract — any drift (header summary line, tier-summary
+//! table, emoji severity, reordered within-tier sort, different
+//! `file:line:col` rendering, `<details>` block shape) surfaces as a
+//! snap diff.
 //!
 //! Mirrors `github_annotations_snapshot.rs`: a multi-tier locked
 //! snapshot plus the empty-report edge case. Per

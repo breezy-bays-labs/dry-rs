@@ -1,41 +1,46 @@
 {# Markdown reporter template (dry-rs#91).
 
-   Renders the tier-grouped duplication report produced by
-   `markdown::render`. Findings group into up to three tier sections
-   (`auto_refactor` / `review_first` / `advisory`); within each section
-   one block per match carries a `score`, a `kind`, and a fenced code
-   block listing the participating form locations (`file:line:col`).
+   Renders the duplication report as a rich GitHub-flavored "sticky
+   card": a header line (total matches + per-tier counts + worst score),
+   a tier-summary table, and one collapsible `<details>` block per
+   match. An empty report renders a clean "no matches" card.
 
-   `score` is pre-formatted as `{:.2}` in Rust — askama's `{{ }}`
-   interpolation does not honor Rust format specifiers; the template is
-   composition-only. The same applies to the 1-based column display
-   already baked into each `FormLine`.
+   This template OWNS all presentation — layout, the tier-severity emoji
+   (🔴 auto_refactor / 🟡 review_first / 🔵 advisory), and numeric
+   formatting (`{:.2}` via the askama `format` filter). The Rust view-model
+   (`MarkdownReport` / `TierView` / `MatchView`) supplies only semantic
+   data: raw `f64` scores, `Tier` values, and shared-helper-formatted
+   `file:line:col` strings. Tier/kind labels come from the single-source
+   `Tier::as_str` / `FormKind::as_str` — one vocabulary across the
+   header, the table, and the per-match `<details>` summaries.
 
    escape = "none" because markdown special chars (`|`, `*`, `_`, `#`,
-   backticks) must pass through verbatim. The reporter owns any
-   escaping its data needs.
+   backticks) must pass through verbatim. The reporter wraps file paths
+   in backticks so underscores do not italicize inside `<summary>`. -#}
+{%- if tiers.is_empty() -%}
+# 🔁 Duplication Report
 
-   Mirrors the crap4rs markdown template structure (crap4rs#260):
-   a top-level header, a `match` over the body discriminant, and a
-   `for` loop per section. -#}
-# Duplication Report
+✅ No matches above threshold.
+{%- else -%}
+# 🔁 Duplication Report
 
-{% match body -%}
-{%- when MarkdownBody::Empty -%}
-No matches above threshold.
-{%- when MarkdownBody::Filled with { sections } -%}
-{% for section in sections -%}
-## {{ section.heading }} ({{ section.matches.len() }})
+**{{ total_matches }} matches** —
+{%- for t in tiers %} {% match t.tier %}{% when Tier::AutoRefactor %}🔴{% when Tier::ReviewFirst %}🟡{% when Tier::Advisory %}🔵{% endmatch %} {{ t.count }} {{ t.tier.as_str() }}{% if !loop.last %} ·{% endif %}{% endfor %} · worst `{{ "{:.2}"|format(worst_overall) }}`
 
-{% for m in section.matches -%}
-### Score {{ m.score }} · {{ m.kind }}
+| Tier | Matches | Worst |
+|------|--------:|------:|
+{% for t in tiers -%}
+| {% match t.tier %}{% when Tier::AutoRefactor %}🔴{% when Tier::ReviewFirst %}🟡{% when Tier::Advisory %}🔵{% endmatch %} {{ t.tier.as_str() }} | {{ t.count }} | {{ "{:.2}"|format(t.worst) }} |
+{% endfor %}
+{% for t in tiers -%}
+{% for m in t.matches -%}
+<details><summary>{% match m.tier %}{% when Tier::AutoRefactor %}🔴{% when Tier::ReviewFirst %}🟡{% when Tier::Advisory %}🔵{% endmatch %} {{ "{:.2}"|format(m.score) }} · {{ m.kind }} · `{{ m.primary_file }}`{% if let Some(partner) = m.partner_file %} ↔ `{{ partner }}`{% endif %}</summary>
 
-```
 {% for form in m.forms -%}
-{{ form }}
-{% endfor -%}
-```
+- `{{ form }}`
+{% endfor %}
+</details>
 
 {% endfor -%}
 {% endfor -%}
-{%- endmatch -%}
+{%- endif -%}

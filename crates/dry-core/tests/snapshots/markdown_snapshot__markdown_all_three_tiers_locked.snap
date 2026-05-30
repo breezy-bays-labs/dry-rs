@@ -2,38 +2,40 @@
 source: crates/dry-core/tests/markdown_snapshot.rs
 expression: out
 ---
-# Duplication Report
+# 🔁 Duplication Report
 
-## auto_refactor (1)
+**4 matches** — 🔴 1 auto_refactor · 🟡 2 review_first · 🔵 1 advisory · worst `0.97`
 
-### Score 0.97 · production
+| Tier | Matches | Worst |
+|------|--------:|------:|
+| 🔴 auto_refactor | 1 | 0.97 |
+| 🟡 review_first | 2 | 0.93 |
+| 🔵 advisory | 1 | 0.83 |
 
-```
-src/auto_a.rs:10:1
-src/auto_b.rs:100:1
-```
+<details><summary>🔴 0.97 · production · `src/auto_a.rs` ↔ `src/auto_b.rs`</summary>
 
-## review_first (2)
+- `src/auto_a.rs:10:1`
+- `src/auto_b.rs:100:1`
 
-### Score 0.93 · production
+</details>
 
-```
-src/review_a.rs:20:1
-src/review_b.rs:200:1
-```
+<details><summary>🟡 0.93 · production · `src/review_a.rs` ↔ `src/review_b.rs`</summary>
 
-### Score 0.88 · test
+- `src/review_a.rs:20:1`
+- `src/review_b.rs:200:1`
 
-```
-tests/dup_a.rs:5:1
-tests/dup_b.rs:50:1
-```
+</details>
 
-## advisory (1)
+<details><summary>🟡 0.88 · test · `tests/dup_a.rs` ↔ `tests/dup_b.rs`</summary>
 
-### Score 0.83 · doctest
+- `tests/dup_a.rs:5:1`
+- `tests/dup_b.rs:50:1`
 
-```
-src/adv_a.rs:30:1
-src/adv_b.rs:300:1
-```
+</details>
+
+<details><summary>🔵 0.83 · doctest · `src/adv_a.rs` ↔ `src/adv_b.rs`</summary>
+
+- `src/adv_a.rs:30:1`
+- `src/adv_b.rs:300:1`
+
+</details>

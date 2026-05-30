@@ -96,8 +96,10 @@ fn render_match(m: &Match) -> Option<String> {
 
 // `Tier` is `#[non_exhaustive]` *for downstream consumers*; within
 // `dry-core` (where it is declared) every variant is visible. A new
-// tier landing in `domain::enums` MUST update both the severity and
-// label tables — the compiler enforces it.
+// tier landing in `domain::enums` MUST update this severity mapping —
+// the compiler enforces it. The human-readable tier label comes from
+// the shared `Tier::as_str` (see `format_message`); only the
+// annotation severity is reporter-specific.
 const fn severity_for(tier: Tier) -> &'static str {
     match tier {
         Tier::AutoRefactor => "error",
@@ -106,16 +108,8 @@ const fn severity_for(tier: Tier) -> &'static str {
     }
 }
 
-const fn tier_label(tier: Tier) -> &'static str {
-    match tier {
-        Tier::AutoRefactor => "auto_refactor",
-        Tier::ReviewFirst => "review_first",
-        Tier::Advisory => "advisory",
-    }
-}
-
 fn format_message(score: f64, tier: Tier, other: Option<&crate::domain::FormRef>) -> String {
-    let label = tier_label(tier);
+    let label = tier.as_str();
     match other {
         Some(o) => format!(
             "Duplicate of {file}:{line} (score={score:.2}, tier={label})",

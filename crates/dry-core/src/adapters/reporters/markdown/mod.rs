@@ -1,212 +1,205 @@
-//! Markdown reporter — GitHub-flavored Markdown grouped by tier.
+//! Markdown reporter — a rich GitHub-flavored "sticky card".
 //!
-//! Renders findings grouped by routing tier (`auto_refactor` →
-//! `review_first` → `advisory`), one section per non-empty tier. Each
-//! match becomes a `### Score N · kind` block followed by a fenced
-//! code block listing the participating form locations
-//! (`file:line:col`). No ANSI, no tables that depend on a terminal —
-//! the output is plain GitHub-flavored Markdown suitable for PR
-//! comments, issue bodies, dashboards, or `--format markdown >
-//! report.md`.
+//! Renders the duplication report as a self-contained Markdown card
+//! suitable for a sticky PR comment, an issue body, a dashboard, or
+//! `--format markdown > report.md`. The shape:
 //!
-//! ## Rendering goes through an askama compile-time template
+//! - a header line with the total match count, per-tier counts, and the
+//!   worst score across all matches;
+//! - a tier-summary table (one row per non-empty tier: count + worst
+//!   score in that tier);
+//! - one collapsible `<details>` block per match — emoji tier severity,
+//!   score, kind, and the participating files in the `<summary>`, with
+//!   the full `file:line:col` list inside.
 //!
-//! The structure (header → tier sections → per-match blocks) lives in
-//! `crates/dry-core/templates/markdown_report.md` and is type-checked
-//! against the view structs below at build time (dry-rs#91). Mirrors
-//! the crap4rs markdown reporter pattern (crap4rs#260). Width- and
-//! precision-formatted fields (`score` as `{:.2}`, the 1-based column
-//! display) are pre-computed in Rust because askama's `{{ }}`
-//! interpolation does not honor Rust format specifiers — the template
-//! is composition-only.
+//! An empty report renders a clean "✅ No matches above threshold."
+//! card.
 //!
-//! ## Determinism mirrors the text reporter
+//! ## The template owns presentation; Rust supplies semantic data
 //!
-//! Tiers iterate via a `BTreeMap<Tier, …>` so the section ordering is
-//! robust to `Tier` gaining a new variant (`Tier` is
-//! `#[non_exhaustive]`; a hand-rolled `[AutoRefactor, ReviewFirst,
-//! Advisory]` loop would silently omit any new tier). Within a tier,
-//! matches sort by score DESC, then primary `FormRef` (file, then
-//! span start) ASC — identical to the text reporter so a reader can
-//! cross-reference the two surfaces.
+//! The view-model below carries DATA — scores stay `f64`, tier/kind
+//! labels come from the shared [`crate::domain::Tier::as_str`] /
+//! [`crate::domain::FormKind::as_str`], form references come from the
+//! shared [`crate::adapters::reporters::format_form_ref`]. The askama
+//! template (`crates/dry-core/templates/markdown_report.md`) owns ALL
+//! structure, layout, emoji, and numeric formatting (`{:.2}` via the
+//! askama `format` filter). This is askama at the right layer:
+//! composition of semantic data, not concatenation of pre-rendered
+//! strings.
+//!
+//! ## Determinism is shared with the text reporter
+//!
+//! Grouping + sorting flows through the shared
+//! [`crate::adapters::reporters::group_and_sort_by_tier`] helper:
+//! tiers iterate in canonical order via a `BTreeMap` (robust to `Tier`
+//! gaining a `#[non_exhaustive]` variant), and within each tier matches
+//! sort by score DESC (via `f64::total_cmp`) then primary form ASC —
+//! byte-for-byte the same ordering the text reporter uses, so a reader
+//! can cross-reference the two surfaces. Because buckets arrive sorted
+//! DESC, each tier's worst score is its last element and the overall
+//! worst score is the max of the buckets' first elements.
 //!
 //! ## Column display is 1-based at the surface
 //!
 //! [`crate::domain::Span`] columns are 0-indexed in the domain; the
-//! `file:line:col` rendering converts to 1-based via
-//! `saturating_add(1)`, matching the text reporter and the GitHub
-//! annotations reporter. The per-surface conversion is deliberate and
-//! documented in AGENTS.md (do NOT unify these surfaces).
-
-use std::collections::BTreeMap;
+//! shared `format_form_ref` converts to 1-based via `saturating_add(1)`,
+//! matching the text and GitHub-annotations reporters. The per-surface
+//! 0-vs-1 convention is documented in AGENTS.md.
+//!
+//! ## Emoji are not ANSI
+//!
+//! Tier severity renders as emoji (🔴 / 🟡 / 🔵), which are ordinary
+//! UTF-8 — the reporter still emits zero ANSI escape bytes, so the
+//! no-ANSI contract the text reporter shares is preserved here too.
 
 use askama::Template;
 
-use crate::domain::{FormRef, Match, Report, Tier};
+use crate::adapters::reporters::{format_form_ref, group_and_sort_by_tier};
+use crate::domain::{Report, Tier};
 
-/// Render `report` as tier-grouped GitHub-flavored Markdown.
+/// Render `report` as a rich GitHub-flavored Markdown card.
 ///
 /// Findings group by tier (`auto_refactor` first, then `review_first`,
 /// then `advisory`). Inside each tier, matches order by descending
 /// score; ties break on primary form path then span start, both
 /// ascending — the same ordering the text reporter uses.
 ///
-/// An empty `report.matches` renders a single-line
-/// `"No matches above threshold."` body under the report header
-/// instead of an empty document; the reporter never emits a bare
-/// blank string.
+/// An empty `report.matches` renders a single "✅ No matches above
+/// threshold." card instead of an empty document; the reporter never
+/// emits a bare blank string.
 ///
-/// Output is plain UTF-8 with `\n` line endings and a trailing
-/// newline (POSIX text-file convention; downstream PR-comment
-/// emitters that `cat` the file rely on it).
+/// Output is plain UTF-8 with `\n` line endings and a trailing newline
+/// (POSIX text-file convention; downstream PR-comment emitters that
+/// `cat` the file rely on it).
 ///
 /// # Panics
 ///
 /// Never, in practice. The internal `.expect()` on the askama render
-/// is unreachable: `MarkdownReport` owns every field it interpolates
-/// (no borrowed lifetimes, no fallible formatters), so the compile-
-/// time-checked template render is total. The `expect` documents the
-/// invariant rather than guarding a real failure mode — mirroring the
-/// crap4rs reporter's "render is total" rationale.
+/// is unreachable: [`MarkdownReport`] owns every field it interpolates
+/// (no borrowed lifetimes, no fallible formatters), so the
+/// compile-time-checked template render is total. The `expect`
+/// documents the invariant rather than guarding a real failure mode.
 #[must_use]
 pub fn render(report: &Report) -> String {
-    let body = build_body(report);
-    let tmpl = MarkdownReport { body };
-    let mut out = tmpl
+    let view = build_view(report);
+    let mut out = view
         .render()
         .expect("markdown template render is total — all fields owned");
     // POSIX text files end with `\n`. The template's trailing `{%- -%}`
-    // whitespace control can strip it; restore so consumers that
-    // append a heredoc/EOF delimiter on its own line (the scorecard
-    // action's `cat <file>` path) parse correctly. Mirrors crap4rs.
+    // whitespace control can strip it; restore so consumers that append
+    // a heredoc/EOF delimiter on its own line (the scorecard action's
+    // `cat <file>` path) parse correctly.
     if !out.ends_with('\n') {
         out.push('\n');
     }
     out
 }
 
-/// Assemble the template's body discriminant from the report. Empty
-/// reports collapse to [`MarkdownBody::Empty`]; otherwise findings are
-/// grouped into one [`TierSection`] per non-empty tier in canonical
-/// tier order.
-fn build_body(report: &Report) -> MarkdownBody {
-    if report.matches.is_empty() {
-        return MarkdownBody::Empty;
-    }
+/// Assemble the semantic view-model from `report`.
+///
+/// Grouping + sorting is delegated to the shared
+/// [`group_and_sort_by_tier`] helper (the single cross-reporter pass).
+/// Per-tier and overall worst scores are read off the already-sorted
+/// buckets — no second sort.
+fn build_view(report: &Report) -> MarkdownReport {
+    let groups = group_and_sort_by_tier(report);
 
-    // Group by tier via BTreeMap so iteration is robust to a new
-    // `Tier` variant (non_exhaustive). Derived `Ord` on `Tier` orders
-    // by declaration: AutoRefactor < ReviewFirst < Advisory — the
-    // canonical display order. Mirrors the text reporter.
-    let mut groups: BTreeMap<Tier, Vec<&Match>> = BTreeMap::new();
-    for m in &report.matches {
-        groups.entry(m.tier).or_default().push(m);
-    }
+    let total_matches: usize = groups.values().map(Vec::len).sum();
 
-    let sections = groups
+    let mut worst_overall: Option<f64> = None;
+    let tiers: Vec<TierView> = groups
         .into_iter()
-        .map(|(tier, mut bucket)| {
-            bucket.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| match (a.forms.first(), b.forms.first()) {
-                        (Some(af), Some(bf)) => af
-                            .file
-                            .as_path()
-                            .cmp(bf.file.as_path())
-                            .then_with(|| af.span.start.cmp(&bf.span.start)),
-                        _ => std::cmp::Ordering::Equal,
-                    })
-            });
-            TierSection {
-                heading: tier_heading(tier),
-                matches: bucket.into_iter().map(match_block).collect(),
+        .map(|(tier, bucket)| {
+            // Buckets arrive sorted by score DESC, so the first element
+            // is the worst (highest) score in the tier and the last is
+            // the lowest. Track the overall worst as the max of the
+            // per-tier worsts.
+            let worst = bucket.first().map_or(0.0, |m| m.score);
+            worst_overall = Some(worst_overall.map_or(worst, |w| w.max(worst)));
+            let matches = bucket.iter().map(|m| MatchView::from_match(m)).collect();
+            TierView {
+                tier,
+                count: bucket.len(),
+                worst,
+                matches,
             }
         })
         .collect();
 
-    MarkdownBody::Filled { sections }
-}
-
-fn match_block(m: &Match) -> MatchBlock {
-    let kind = m
-        .forms
-        .first()
-        .map_or("unknown", |f| format_form_kind(f.kind));
-    MatchBlock {
-        score: format!("{:.2}", m.score),
-        kind,
-        forms: m.forms.iter().map(format_form_ref).collect(),
+    MarkdownReport {
+        total_matches,
+        worst_overall: worst_overall.unwrap_or(0.0),
+        tiers,
     }
 }
 
-// `Tier` and `FormKind` are `#[non_exhaustive]` *for downstream
-// consumers*; within `dry-core` (where they are declared) every
-// variant is visible and exhaustive-match is enforced. Adding a new
-// tier or kind here is a deliberate, compile-time-broken event.
-const fn tier_heading(tier: Tier) -> &'static str {
-    match tier {
-        Tier::AutoRefactor => "auto_refactor",
-        Tier::ReviewFirst => "review_first",
-        Tier::Advisory => "advisory",
-    }
-}
-
-const fn format_form_kind(kind: crate::domain::FormKind) -> &'static str {
-    match kind {
-        crate::domain::FormKind::Production => "production",
-        crate::domain::FormKind::Test => "test",
-        crate::domain::FormKind::Doctest => "doctest",
-    }
-}
-
-/// Render a form reference as `file:line:col`. Columns are 0-indexed
-/// in the domain; the surface display is 1-based (`saturating_add(1)`),
-/// matching the text and GitHub-annotations reporters.
-fn format_form_ref(form: &FormRef) -> String {
-    format!(
-        "{}:{}:{}",
-        form.file,
-        form.span.start.line,
-        form.span.start.column.saturating_add(1)
-    )
-}
-
-/// Top-level markdown template. The body discriminant carries the
-/// already-grouped, already-sorted sections; the template only
-/// composes structure.
+/// Top-level markdown view-model. Carries semantic data only; the
+/// template owns every presentation decision (layout, emoji, numeric
+/// formatting).
 #[derive(Template)]
 #[template(path = "markdown_report.md", escape = "none")]
 struct MarkdownReport {
-    body: MarkdownBody,
+    /// Total number of matches across all tiers.
+    total_matches: usize,
+    /// Worst (highest) score across all matches; `0.0` when empty.
+    worst_overall: f64,
+    /// One entry per non-empty tier, in canonical tier order.
+    tiers: Vec<TierView>,
 }
 
-/// Body discriminant. `Empty` renders a single advisory line; `Filled`
-/// carries one section per non-empty tier in canonical order.
-enum MarkdownBody {
-    Empty,
-    Filled { sections: Vec<TierSection> },
+/// One tier's worth of findings — the tier itself (for the template's
+/// emoji + label mapping), its count, its worst score, and its sorted
+/// matches.
+struct TierView {
+    /// The routing tier; the template derives its emoji and label.
+    tier: Tier,
+    /// Number of matches in this tier.
+    count: usize,
+    /// Worst (highest) score in this tier.
+    worst: f64,
+    /// Matches, already sorted by score DESC then primary form ASC.
+    matches: Vec<MatchView>,
 }
 
-/// One tier's worth of findings — a heading label and its ordered
-/// match blocks.
-struct TierSection {
-    heading: &'static str,
-    matches: Vec<MatchBlock>,
-}
-
-/// One match rendered as a score/kind header plus a fenced list of
-/// participating form locations.
-struct MatchBlock {
-    /// Pre-formatted `{:.2}` Jaccard score.
-    score: String,
+/// One match as semantic data: its tier (for the per-match emoji), raw
+/// `f64` score, kind label, primary + partner file labels for the
+/// `<summary>`, and the full `file:line:col` list for the body.
+struct MatchView {
+    /// The routing tier; the template derives the per-match emoji.
+    tier: Tier,
+    /// Raw Jaccard score; the template formats it `{:.2}`.
+    score: f64,
     /// Form-kind label of the primary form (`production` / `test` /
-    /// `doctest`).
+    /// `doctest`) via the shared [`crate::domain::FormKind::as_str`].
     kind: &'static str,
     /// `file:line:col` strings, one per participating form, in the
     /// order they appear on the `Match`.
     forms: Vec<String>,
+    /// Bare file path of the primary form (no line/col) for the compact
+    /// `<summary>` heading.
+    primary_file: String,
+    /// Bare file path of the partner form, if the match has a second
+    /// form — drives the `a ↔ b` summary affordance.
+    partner_file: Option<String>,
+}
+
+impl MatchView {
+    fn from_match(m: &crate::domain::Match) -> Self {
+        let kind = m.forms.first().map_or("unknown", |f| f.kind.as_str());
+        let primary_file = m
+            .forms
+            .first()
+            .map_or_else(String::new, |f| f.file.to_string());
+        let partner_file = m.forms.get(1).map(|f| f.file.to_string());
+        Self {
+            tier: m.tier,
+            score: m.score,
+            kind,
+            forms: m.forms.iter().map(format_form_ref).collect(),
+            primary_file,
+            partner_file,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -222,17 +215,23 @@ mod tests {
         )
     }
 
+    // These inline tests assert beautification-SURVIVING invariants
+    // (presence of refs, ordering, no-ANSI, empty-card text). The exact
+    // rendered layout is locked by the insta snapshots in
+    // `tests/markdown_snapshot.rs` — duplicating exact strings here would
+    // make them brittle clones of those snapshots.
+
     #[test]
-    fn empty_report_renders_no_matches_line() {
+    fn empty_report_renders_no_matches_card() {
         let out = render(&Report::empty_passed());
-        assert!(out.contains("# Duplication Report"), "out: {out}");
+        assert!(out.contains("Duplication Report"), "out: {out}");
         assert!(out.contains("No matches above threshold."), "out: {out}");
         assert!(!out.contains("auto_refactor"), "out: {out}");
         assert!(out.ends_with('\n'), "must end with newline: {out:?}");
     }
 
     #[test]
-    fn single_match_renders_tier_section_and_fenced_block() {
+    fn single_match_lists_participating_forms() {
         let m = Match::new(
             vec![make_form_ref("src/a.rs", 10), make_form_ref("src/b.rs", 20)],
             0.92,
@@ -240,17 +239,21 @@ mod tests {
         );
         let report = Report::new(vec![m], Summary::new(), false);
         let out = render(&report);
-        assert!(out.contains("## review_first (1)"), "out: {out}");
-        assert!(out.contains("### Score 0.92 · production"), "out: {out}");
-        // Fenced code block boundaries.
-        assert!(out.contains("```"), "expected fenced block: {out}");
         // Columns are 1-based at the surface (span col 0 -> :1).
         assert!(out.contains("src/a.rs:10:1"), "out: {out}");
         assert!(out.contains("src/b.rs:20:1"), "out: {out}");
+        // The score is rendered somewhere in the card.
+        assert!(out.contains("0.92"), "out: {out}");
+        // Tier label sourced from `Tier::as_str` (single vocabulary).
+        assert!(out.contains("review_first"), "out: {out}");
+        // Kind label sourced from `FormKind::as_str`.
+        assert!(out.contains("production"), "out: {out}");
     }
 
     #[test]
     fn output_contains_no_ansi_escape_codes() {
+        // Emoji severity markers are UTF-8, NOT ANSI — the no-ANSI
+        // contract the text reporter shares must still hold.
         let m = Match::new(
             vec![make_form_ref("src/a.rs", 10)],
             0.95,
@@ -291,11 +294,12 @@ mod tests {
     }
 
     #[test]
-    fn section_count_reflects_number_of_matches_in_tier() {
+    fn total_match_count_appears_in_header() {
         let a = Match::new(vec![make_form_ref("src/a.rs", 1)], 0.90, Tier::ReviewFirst);
         let b = Match::new(vec![make_form_ref("src/b.rs", 1)], 0.89, Tier::ReviewFirst);
-        let report = Report::new(vec![a, b], Summary::new(), false);
+        let c = Match::new(vec![make_form_ref("src/c.rs", 1)], 0.97, Tier::AutoRefactor);
+        let report = Report::new(vec![a, b, c], Summary::new(), false);
         let out = render(&report);
-        assert!(out.contains("## review_first (2)"), "out: {out}");
+        assert!(out.contains("3 matches"), "expected total count: {out}");
     }
 }
