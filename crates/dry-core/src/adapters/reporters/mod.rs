@@ -6,6 +6,9 @@
 //! - [`json::render`] — locked v0.1 wire envelope per
 //!   `ops/decisions/dry-rs/adr-nested-json-envelope.md`.
 //! - [`text::render`] — human-friendly terminal output grouped by tier.
+//! - [`markdown::render`] — GitHub-flavored Markdown grouped by tier
+//!   (askama compile-time template), suitable for PR comments / issue
+//!   bodies / `report.md` (dry-rs#91).
 //! - [`github_annotations::render`] — GitHub Actions workflow commands
 //!   (`::error::` / `::warning::` / `::notice::`) so duplications
 //!   surface inline on the PR "Files Changed" tab without GHAS / Code
@@ -21,4 +24,5 @@
 
 pub mod github_annotations;
 pub mod json;
+pub mod markdown;
 pub mod text;

@@ -57,6 +57,16 @@ ignore = { workspace = true }
 # is a CLI-flag concern owned by the `--color always|auto|never` flag
 # landing in PR 8.
 comfy-table = { workspace = true }
+# Markdown reporter (dry-rs#91) renders findings grouped by tier into
+# GitHub-flavored Markdown via an askama compile-time template
+# (`templates/markdown_report.md`). The template is type-checked against
+# the reporter's view structs at build time — pure rendering, no I/O.
+# Mirrors the crap4rs HTML/markdown reporter pattern (crap4rs#260). The
+# v0.3 HTML reporter (dry-rs#92) reuses this dep. See the hexagonal-
+# layout ADR per-crate dep table — askama is in the proc-macro chain
+# allowlist (Template derive), NOT an AST library, so it clears the
+# `dry-core AST-library purity` gate.
+askama = { workspace = true }
 # CLI surface (PR 8) — `clap` with `derive` powers `Args` + the
 # subcommand enum; `clap_complete` powers `--completions <SHELL>`.
 # Both ship inside `dry-core::cli` because the CLI surface is

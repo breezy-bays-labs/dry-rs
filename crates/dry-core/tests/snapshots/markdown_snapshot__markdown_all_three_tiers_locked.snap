@@ -1,0 +1,39 @@
+---
+source: crates/dry-core/tests/markdown_snapshot.rs
+expression: out
+---
+# Duplication Report
+
+## auto_refactor (1)
+
+### Score 0.97 · production
+
+```
+src/auto_a.rs:10:1
+src/auto_b.rs:100:1
+```
+
+## review_first (2)
+
+### Score 0.93 · production
+
+```
+src/review_a.rs:20:1
+src/review_b.rs:200:1
+```
+
+### Score 0.88 · test
+
+```
+tests/dup_a.rs:5:1
+tests/dup_b.rs:50:1
+```
+
+## advisory (1)
+
+### Score 0.83 · doctest
+
+```
+src/adv_a.rs:30:1
+src/adv_b.rs:300:1
+```

@@ -6,10 +6,11 @@
 //! default), `stats`, `check`, `ignore <fingerprint>`, `ignored`,
 //! `cleanup`; universal flags `--threshold`, `--format`, `--top`,
 //! `--only-failing`, `--no-fail`, `--include-ignored`,
-//! `--threshold-mode`, `--completions <SHELL>`. Markdown / HTML / SARIF
-//! reporters land in later waves and are deliberately rejected by the
-//! v0.1 `Format` enum so users get a clear "not yet" message instead
-//! of a silent fall-through.
+//! `--threshold-mode`, `--completions <SHELL>`. The `markdown` reporter
+//! joined the `Format` enum at v0.2 (dry-rs#91); HTML / SARIF land in
+//! later waves and are still deliberately rejected by the `Format`
+//! enum so users get a clear "not yet" message instead of a silent
+//! fall-through.
 //!
 //! The clap derive expansion lives in `dry-core` because the CLI
 //! surface is language-agnostic; only `NormalizerPort` differs across
@@ -21,8 +22,8 @@ use clap::ValueEnum;
 use clap_complete::Shell;
 use serde::{Deserialize, Serialize};
 
-/// Output format selector. `--format` accepts the v0.1 subset; reporters
-/// for `markdown`, `html`, and `sarif` land in later waves and are
+/// Output format selector. `--format` accepts `text` / `json` /
+/// `markdown`; `html` and `sarif` land in later waves and are
 /// deliberately omitted from the value enum so clap rejects them at
 /// parse time with an actionable message.
 ///
@@ -30,7 +31,8 @@ use serde::{Deserialize, Serialize};
 /// — enums YES, result structs NO.
 ///
 /// Serde uses lowercase tags so TOML config files can use `format =
-/// "text"` / `format = "json"` symmetrically with the CLI flag.
+/// "text"` / `format = "json"` / `format = "markdown"` symmetrically
+/// with the CLI flag.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -41,6 +43,10 @@ pub enum Format {
     Text,
     /// Locked v0.1 nested wire envelope (`dry_core::adapters::reporters::json`).
     Json,
+    /// GitHub-flavored Markdown grouped by tier
+    /// (`dry_core::adapters::reporters::markdown`, dry-rs#91) — suitable
+    /// for PR comments, issue bodies, or `report.md`.
+    Markdown,
 }
 
 /// Threshold-mode preset selector. v0.1 accepts the three named

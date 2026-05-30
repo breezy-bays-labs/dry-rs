@@ -36,7 +36,7 @@ use super::build_command::build_command;
 use super::effective::EffectiveConfig;
 use crate::adapters::config::{ConfigError, discover_config, load_config};
 use crate::adapters::reporters::json::{Envelope, EnvelopeMeta, ViewProjection};
-use crate::adapters::reporters::text;
+use crate::adapters::reporters::{markdown, text};
 use crate::adapters::source::{SourceError, SourceOutcome, SourceWarning, enumerate};
 use crate::comparison::compare_with_paths;
 use crate::domain::{Config, FilePath, Match, Report, Summary};
@@ -692,6 +692,13 @@ fn emit_full_report<N: NormalizerPort>(
             let to_render = view_as_report(view, report);
             print!("{}", text::render(&to_render));
         }
+        Format::Markdown => {
+            // Markdown reporter shares the text reporter's view/result
+            // contract — render the shaped projection when present,
+            // else the truthful report.
+            let to_render = view_as_report(view, report);
+            print!("{}", markdown::render(&to_render));
+        }
         Format::Json => {
             // JSON envelope carries BOTH result and view; the truthful
             // gate stays parseable from `result.*` regardless of flag
@@ -710,7 +717,13 @@ fn emit_stats<N: NormalizerPort>(
     view: Option<ViewProjection>,
 ) {
     match config.format {
-        Format::Text => {
+        // `stats` is a summary view, not the full per-match report —
+        // its plain `key: value` counter shape is format-agnostic, so
+        // `markdown` shares the `text` path here rather than cloning
+        // the counter block or piping an empty markdown table. The
+        // markdown reporter's value is in the `report` command, which
+        // carries the per-match tier sections + fenced blocks.
+        Format::Text | Format::Markdown => {
             // Render the summary block as plain ASCII. The text
             // reporter doesn't have a stats-only mode; we emit the
             // counters directly to keep the dispatch surface narrow.

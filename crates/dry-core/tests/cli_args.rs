@@ -144,11 +144,20 @@ fn format_flag_accepts_json() {
 }
 
 #[test]
-fn format_flag_rejects_markdown_at_v0_1() {
-    // markdown / html / sarif land in later waves; only text + json
-    // are valid at v0.1 (per AC).
-    let err = parse_test_args(&["--format", "markdown"])
-        .expect_err("--format markdown must reject at v0.1");
+fn format_flag_accepts_markdown() {
+    // markdown joined the `Format` enum at v0.2 (dry-rs#91).
+    let args = parse_test_args(&["--format", "markdown"]).expect("--format markdown parses");
+    assert_eq!(args.format, Some(Format::Markdown));
+}
+
+#[test]
+fn format_flag_rejects_html_until_later_wave() {
+    // html / sarif land in later waves; text + json + markdown are the
+    // valid `--format` values now (per AC). A still-unsupported value
+    // must reject with an actionable "possible values" message rather
+    // than silently falling through.
+    let err = parse_test_args(&["--format", "html"])
+        .expect_err("--format html must reject until its reporter lands");
     let msg = err.to_string();
     assert!(
         msg.contains("invalid value") || msg.contains("possible"),
