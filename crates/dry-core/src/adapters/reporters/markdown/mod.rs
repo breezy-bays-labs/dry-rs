@@ -75,7 +75,7 @@ use crate::domain::{Report, Tier};
 /// # Panics
 ///
 /// Never, in practice. The internal `.expect()` on the askama render
-/// is unreachable: [`MarkdownReport`] owns every field it interpolates
+/// is unreachable: the `MarkdownReport` view owns every field it interpolates
 /// (no borrowed lifetimes, no fallible formatters), so the
 /// compile-time-checked template render is total. The `expect`
 /// documents the invariant rather than guarding a real failure mode.
