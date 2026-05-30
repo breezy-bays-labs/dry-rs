@@ -8,9 +8,12 @@
 //!   worst score across all matches;
 //! - a tier-summary table (one row per non-empty tier: count + worst
 //!   score in that tier);
-//! - one collapsible `<details>` block per match — emoji tier severity,
-//!   score, kind, and the participating files in the `<summary>`, with
-//!   the full `file:line:col` list inside.
+//! - a collapsible `<details>` block PER TIER (collapsed by default,
+//!   `emoji tier (count)` in the `<summary>`), each wrapping one nested
+//!   `<details>` per match — emoji tier severity, score, kind, and the
+//!   participating files in the inner `<summary>`, with the full
+//!   `file:line:col` list inside. The visible card body is just the
+//!   header + table; matches are one click deep.
 //!
 //! An empty report renders a clean "✅ No matches above threshold."
 //! card.

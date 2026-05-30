@@ -2,8 +2,17 @@
 
    Renders the duplication report as a rich GitHub-flavored "sticky
    card": a header line (total matches + per-tier counts + worst score),
-   a tier-summary table, and one collapsible `<details>` block per
-   match. An empty report renders a clean "no matches" card.
+   a tier-summary table, and a collapsible `<details>` block PER TIER —
+   each tier's block (collapsed by default) wraps one nested `<details>`
+   per match, which in turn expands to the participating form list. The
+   visible body is therefore just the header + table; everything else
+   is one click deep. An empty report renders a clean "no matches" card.
+
+   GitHub renders nested `<details>` only when there is a BLANK LINE
+   after every `<summary>` and before every `</details>`, at BOTH the
+   outer (tier) and inner (match) levels, and the markdown is flush-left
+   (any 4-space indent turns a block into a code block and kills the
+   dropdown). The askama whitespace control below preserves that.
 
    This template OWNS all presentation — layout, the tier-severity emoji
    (🔴 auto_refactor / 🟡 review_first / 🔵 advisory), and numeric
@@ -33,6 +42,8 @@
 | {% match t.tier %}{% when Tier::AutoRefactor %}🔴{% when Tier::ReviewFirst %}🟡{% when Tier::Advisory %}🔵{% endmatch %} {{ t.tier.as_str() }} | {{ t.count }} | {{ "{:.2}"|format(t.worst) }} |
 {% endfor %}
 {% for t in tiers -%}
+<details><summary>{% match t.tier %}{% when Tier::AutoRefactor %}🔴{% when Tier::ReviewFirst %}🟡{% when Tier::Advisory %}🔵{% endmatch %} {{ t.tier.as_str() }} ({{ t.count }})</summary>
+
 {% for m in t.matches -%}
 <details><summary>{% match m.tier %}{% when Tier::AutoRefactor %}🔴{% when Tier::ReviewFirst %}🟡{% when Tier::Advisory %}🔵{% endmatch %} {{ "{:.2}"|format(m.score) }} · {{ m.kind }} · `{{ m.primary_file }}`{% if let Some(partner) = m.partner_file %} ↔ `{{ partner }}`{% endif %}</summary>
 
@@ -42,5 +53,7 @@
 </details>
 
 {% endfor -%}
+</details>
+
 {% endfor -%}
 {%- endif -%}
