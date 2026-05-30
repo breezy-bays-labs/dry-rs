@@ -453,7 +453,6 @@ pub fn merge_effective_inputs(
     let extensions = resolved
         .walk
         .extensions
-        .clone()
         .unwrap_or_else(|| meta.extensions_owned());
 
     // include_ignored: CLI > resolved > false. The CLI default is
@@ -491,10 +490,10 @@ pub fn merge_effective_inputs(
 
     // Scorecard labels — Option<String> on AnalysisConfig + the
     // wire envelope. Resolved-tier only at v0.1 (no CLI flag).
-    if let Some(title) = resolved.output.title.clone() {
+    if let Some(title) = resolved.output.title {
         analysis = analysis.with_title(title);
     }
-    if let Some(subtitle) = resolved.output.subtitle.clone() {
+    if let Some(subtitle) = resolved.output.subtitle {
         analysis = analysis.with_subtitle(subtitle);
     }
 
