@@ -32,7 +32,7 @@ dry4ts (depends on dry-core; adds swc_ecma_parser or oxc, napi-rs)  [v0.6+]
 
 | Crate | Purpose | Allowed deps |
 |-------|---------|--------------|
-| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters), config-file loader, `init`-time annotated example + JSON schema emitter | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `clap` (derive), `clap_complete`, `thiserror`, `toml`, `toml_edit`, `documented`, `schemars` |
+| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters), config-file loader, `init`-time annotated example + JSON schema emitter | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `askama` (Template derive, markdown/HTML reporters), `clap` (derive), `clap_complete`, `thiserror`, `toml`, `toml_edit`, `documented`, `schemars` |
 | `dry4rs` | Rust-source parser adapter + binary | `dry-core`, `syn`, `proc-macro2` (with `span-locations` feature), `xxhash-rust` (with `xxh3` feature) |
 | `dry4ts` | TypeScript-source parser adapter + binary | `dry-core`, `swc_ecma_parser` *or* `oxc_parser`, `napi-rs`, `xxhash-rust` (with `xxh3` feature) |
 | `dry-examples` | Curated DRY-violation corpus + cross-tool benchmark harness (no library logic; fixtures under `examples/<tier>/<fixture>/main.rs` + snapshot harness in `tests/snapshots.rs`; `publish = false`, `autoexamples = false`) | (none) |
@@ -114,8 +114,9 @@ In particular:
   on grounds of "domain purity" are based on a misread of this
   project's rules. The "domain purity" rule scopes only to AST
   libraries (see below); `thiserror`, `serde`, `serde_json`, `clap`,
-  `walkdir`, `ignore`, `globset`, `comfy-table`, `toml`, `toml_edit`,
-  `documented`, and `schemars` are explicitly permitted in `dry-core`.
+  `walkdir`, `ignore`, `globset`, `comfy-table`, `askama`, `toml`,
+  `toml_edit`, `documented`, and `schemars` are explicitly permitted
+  in `dry-core`.
 - **`toml` IS allowed in `dry-core::adapters::config`** (config-file
   loader landed in dry-rs#71 per
   `ops/decisions/org/adr-config-file-pattern.md` D6). Suggestions to
@@ -125,6 +126,20 @@ In particular:
   `serde` derives only; the loader uses `toml::from_str` +
   `toml::to_string_pretty` (the latter for the round-trip property
   test).
+- **`askama` IS allowed in `dry-core`** (markdown reporter landed in
+  dry-rs#91; HTML reporter follows at v0.3 in dry-rs#92). The
+  `#[derive(Template)]` macro lives on reporter-side view structs in
+  `dry-core::adapters::reporters::markdown`, NOT in `domain/`. askama
+  is a compile-time templating library — it generates rendering code
+  from `.md` / `.html` templates under `crates/dry-core/templates/`,
+  type-checked against the struct fields. It is in the proc-macro
+  chain allowlist (the Template derive), NOT an AST library, so the
+  `dry-core AST-library purity` gate does not reject it (the gate
+  greps only `syn`, `quote`, `proc-macro2`, `swc_*`, `oxc_*`,
+  `tree-sitter*`, `rustc_ast`, `rustc_parse`). Suggestions to
+  hand-roll the markdown with `format!` / `write!` instead misread
+  the sibling-coherence precedent (crap4rs#260 ships its HTML/markdown
+  reporters through askama). Mirrors crap4rs's `askama = "0.16"` pin.
 - **`schemars` IS allowed in `dry-core`** (JSON schema emitter
   landed in dry-rs#78). `#[derive(JsonSchema)]` lives on the same
   POD config types in `dry-core::domain::config` alongside the

@@ -72,6 +72,17 @@ ignore = "0.4"
 # Terminal table rendering for the text reporter (PR 7). Pure stdout; no ANSI
 # color is emitted at the reporter layer (color is a CLI-flag concern at PR 8).
 comfy-table = "7"
+# Compile-time-checked Jinja-like templates for the markdown reporter
+# (`dry-core::adapters::reporters::markdown`, dry-rs#91). askama 0.16
+# (post-rinja-merge) generates rendering code at compile time via
+# `#[derive(Template)]`; the template text is type-checked against the
+# struct fields so a renamed field is a build error, not a runtime
+# panic. Pure rendering — no I/O. Mirrors the crap4rs HTML/markdown
+# reporter pin (crap4rs#260). Restricted to `dry-core` — reporters
+# live in the language-agnostic core. The HTML reporter (v0.3, dry-rs#92)
+# reuses the same dep. Templates live under `crates/dry-core/templates/`
+# (askama's default search root, no `askama.toml` needed).
+askama = "0.16"
 # CLI surface (PR 8). `clap` with `derive` powers the `Args` struct and
 # the subcommand enum (`report` / `stats` / `check` / `ignore` / `ignored`
 # / `cleanup`); `clap_complete` powers the `--completions <SHELL>` flag.

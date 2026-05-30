@@ -28,7 +28,7 @@
   "additionalProperties": false,
   "$defs": {
     "Format": {
-      "description": "Output format selector. `--format` accepts the v0.1 subset; reporters\nfor `markdown`, `html`, and `sarif` land in later waves and are\ndeliberately omitted from the value enum so clap rejects them at\nparse time with an actionable message.\n\n`#[non_exhaustive]` per the AGENTS.md `#[non_exhaustive]` discipline\n— enums YES, result structs NO.\n\nSerde uses lowercase tags so TOML config files can use `format =\n\"text\"` / `format = \"json\"` symmetrically with the CLI flag.",
+      "description": "Output format selector. `--format` accepts `text` / `json` /\n`markdown`; `html` and `sarif` land in later waves and are\ndeliberately omitted from the value enum so clap rejects them at\nparse time with an actionable message.\n\n`#[non_exhaustive]` per the AGENTS.md `#[non_exhaustive]` discipline\n— enums YES, result structs NO.\n\nSerde uses lowercase tags so TOML config files can use `format =\n\"text\"` / `format = \"json\"` / `format = \"markdown\"` symmetrically\nwith the CLI flag.",
       "oneOf": [
         {
           "description": "Human-friendly terminal output (default).",
@@ -39,6 +39,11 @@
           "description": "Locked v0.1 nested wire envelope (`dry_core::adapters::reporters::json`).",
           "type": "string",
           "const": "json"
+        },
+        {
+          "description": "GitHub-flavored Markdown grouped by tier\n(`dry_core::adapters::reporters::markdown`, dry-rs#91) — suitable\nfor PR comments, issue bodies, or `report.md`.",
+          "type": "string",
+          "const": "markdown"
         }
       ]
     },

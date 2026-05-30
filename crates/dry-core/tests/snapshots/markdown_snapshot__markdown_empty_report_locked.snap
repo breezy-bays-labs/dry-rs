@@ -1,0 +1,7 @@
+---
+source: crates/dry-core/tests/markdown_snapshot.rs
+expression: out
+---
+# 🔁 Duplication Report
+
+✅ No matches above threshold.

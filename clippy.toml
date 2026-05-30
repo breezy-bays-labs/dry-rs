@@ -1,1 +1,9 @@
 cognitive-complexity-threshold = 15
+# winnow major-version split introduced by the askama markdown reporter
+# (dry-rs#91): `toml_edit` 0.22 pulls `winnow` 0.7, `askama_parser` 0.16
+# pulls `winnow` 1.0. The two majors are incompatible, so the duplicate
+# is unavoidable until `toml_edit` ships a `winnow`-1.x release. Scoped
+# to `winnow` only — the `clippy::cargo` `multiple_crate_versions` lint
+# stays live for every OTHER future duplicate.
+# tracked: dry-rs#93 — lift once toml_edit depends on winnow 1.x
+allowed-duplicate-crates = ["winnow"]

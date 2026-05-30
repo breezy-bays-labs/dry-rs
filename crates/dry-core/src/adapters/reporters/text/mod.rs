@@ -14,7 +14,8 @@ use std::fmt::Write;
 
 use comfy_table::{Cell, ContentArrangement, Table, presets::ASCII_MARKDOWN};
 
-use crate::domain::{Match, Report, Tier};
+use crate::adapters::reporters::{format_form_ref, group_and_sort_by_tier};
+use crate::domain::Report;
 
 /// Render `report` as a human-friendly terminal view.
 ///
@@ -36,38 +37,12 @@ pub fn render(report: &Report) -> String {
 
     let mut out = String::new();
 
-    // Group matches by tier via BTreeMap so the iteration is robust to
-    // `Tier` gaining a new variant (Tier is `#[non_exhaustive]`; a
-    // hand-rolled loop over [AutoRefactor, ReviewFirst, Advisory] would
-    // silently omit any new tier from the text report). The derived
-    // `Ord` on Tier orders by declaration: AutoRefactor < ReviewFirst <
-    // Advisory, which is the canonical tier ordering for display.
-    // Gemini callout (PR #30 review, 2026-05-24).
-    let mut groups: std::collections::BTreeMap<Tier, Vec<&Match>> =
-        std::collections::BTreeMap::new();
-    for m in &report.matches {
-        groups.entry(m.tier).or_default().push(m);
-    }
-
-    for (tier, mut bucket) in groups {
-        // Stable ordering within each tier: score DESC, then primary
-        // FormRef (file, span.start) ASC for determinism across
-        // walker orderings.
-        bucket.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| match (a.forms.first(), b.forms.first()) {
-                    (Some(af), Some(bf)) => af
-                        .file
-                        .as_path()
-                        .cmp(bf.file.as_path())
-                        .then_with(|| af.span.start.cmp(&bf.span.start)),
-                    _ => std::cmp::Ordering::Equal,
-                })
-        });
-
-        let _ = writeln!(out, "\n{} ({})", tier_heading(tier), bucket.len());
+    // Group + sort via the shared reporter helper so the text and
+    // markdown surfaces stay cross-referenceable. BTreeMap iteration is
+    // robust to `Tier` gaining a new variant; within-tier ordering is
+    // score DESC (via `f64::total_cmp`) then primary FormRef ASC.
+    for (tier, bucket) in group_and_sort_by_tier(report) {
+        let _ = writeln!(out, "\n{} ({})", tier.as_str(), bucket.len());
 
         let mut table = Table::new();
         table
@@ -82,10 +57,7 @@ pub fn render(report: &Report) -> String {
                 .map(format_form_ref)
                 .collect::<Vec<_>>()
                 .join("\n");
-            let kind = m
-                .forms
-                .first()
-                .map_or("<unknown>", |f| format_form_kind(f.kind));
+            let kind = m.forms.first().map_or("<unknown>", |f| f.kind.as_str());
             table.add_row(vec![
                 Cell::new(format!("{:.2}", m.score)),
                 Cell::new(kind),
@@ -98,35 +70,6 @@ pub fn render(report: &Report) -> String {
     }
 
     out
-}
-
-// `Tier` and `FormKind` are `#[non_exhaustive]` *for downstream consumers*;
-// within `dry-core` (where they are declared) every variant is visible
-// and exhaustive-match is enforced. Adding a new tier or kind here is
-// a deliberate, compile-time-broken event — exactly what we want.
-fn tier_heading(tier: Tier) -> &'static str {
-    match tier {
-        Tier::AutoRefactor => "auto_refactor",
-        Tier::ReviewFirst => "review_first",
-        Tier::Advisory => "advisory",
-    }
-}
-
-fn format_form_kind(kind: crate::domain::FormKind) -> &'static str {
-    match kind {
-        crate::domain::FormKind::Production => "production",
-        crate::domain::FormKind::Test => "test",
-        crate::domain::FormKind::Doctest => "doctest",
-    }
-}
-
-fn format_form_ref(form: &crate::domain::FormRef) -> String {
-    format!(
-        "{}:{}:{}",
-        form.file,
-        form.span.start.line,
-        form.span.start.column.saturating_add(1)
-    )
 }
 
 #[cfg(test)]

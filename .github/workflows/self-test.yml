@@ -166,9 +166,7 @@ jobs:
             echo ""
             echo "Bare \`dry4rs\` invocation against \`crates/dry-core/src\` + \`crates/dry4rs/src\`. No \`--config\` / \`--threshold\` / \`--format\` flags — auto-discovers \`dry.toml\` at the workspace root via \`discover_config\` walk-upward."
             echo ""
-            echo '```text'
             cat dry-self-scorecard.txt
-            echo '```'
           } | tee dry-self-scorecard-comment.md >> "$GITHUB_STEP_SUMMARY"
       - name: Post dry-self-scorecard sticky PR comment
         # Sticky comment edition of the step-summary rendering. Skipped
@@ -247,9 +245,7 @@ jobs:
             echo ""
             echo "Bare \`dry4rs\` invocation against \`crates/dry-examples/examples\` with \`--include-ignored\` (the corpus carries a \`.ignore\` file containing \`*\` so it never pollutes default walks — this job opts back in for measurement). The corpus is intentionally duplicate-rich — see [\`crates/dry-examples/EXPECTED.md\`](https://github.com/breezy-bays-labs/dry-rs/blob/main/crates/dry-examples/EXPECTED.md) for the per-fixture catalogue. Measurement only (no gate)."
             echo ""
-            echo '```text'
             cat dry-corpus-scorecard.txt
-            echo '```'
           } | tee dry-corpus-scorecard-comment.md >> "$GITHUB_STEP_SUMMARY"
       - name: Post dry-corpus-scorecard sticky PR comment
         # See `dry-self-scorecard`'s sticky step for the skip-on-main +

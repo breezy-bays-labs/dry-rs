@@ -30,6 +30,25 @@ pub enum FormKind {
     Doctest,
 }
 
+impl FormKind {
+    /// Stable label for this kind — the single source of truth shared
+    /// by every reporter surface.
+    ///
+    /// The returned `&'static str` is byte-identical to the serde wire
+    /// rendering (`#[serde(rename_all = "snake_case")]`): `production`
+    /// / `test` / `doctest`. Reporters that need a display label call
+    /// this instead of re-spelling the mapping, so a new variant breaks
+    /// exactly one match arm.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Production => "production",
+            Self::Test => "test",
+            Self::Doctest => "doctest",
+        }
+    }
+}
+
 /// Agentic-quality routing tier derived from a `Match`'s score.
 ///
 /// The thresholds are fixed at v0.1:
@@ -51,6 +70,25 @@ pub enum Tier {
     ReviewFirst,
     /// Score above threshold but below 0.85; surface as advisory.
     Advisory,
+}
+
+impl Tier {
+    /// Stable label for this tier — the single source of truth shared
+    /// by every reporter surface.
+    ///
+    /// The returned `&'static str` is byte-identical to the serde wire
+    /// rendering (`#[serde(rename_all = "snake_case")]`): `auto_refactor`
+    /// / `review_first` / `advisory`. Reporters that need a heading or
+    /// message label call this instead of re-spelling the mapping, so a
+    /// new variant breaks exactly one match arm.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AutoRefactor => "auto_refactor",
+            Self::ReviewFirst => "review_first",
+            Self::Advisory => "advisory",
+        }
+    }
 }
 
 /// Display severity derived from [`Tier`] (cosmetic at v0.1; the
@@ -139,6 +177,28 @@ mod tests {
             let json = serde_json::to_string(&sev).unwrap();
             let back: Severity = serde_json::from_str(&json).unwrap();
             assert_eq!(back, sev);
+        }
+    }
+
+    #[test]
+    fn form_kind_as_str_matches_serde_label() {
+        // `as_str` is the single source of truth shared by reporters;
+        // it MUST stay byte-identical to the serde wire rendering so the
+        // text/markdown/github-annotations surfaces never drift from the
+        // JSON envelope.
+        for kind in [FormKind::Production, FormKind::Test, FormKind::Doctest] {
+            let json = serde_json::to_string(&kind).unwrap();
+            let unquoted = json.trim_matches('"');
+            assert_eq!(kind.as_str(), unquoted, "kind label drifted from serde");
+        }
+    }
+
+    #[test]
+    fn tier_as_str_matches_serde_label() {
+        for tier in [Tier::AutoRefactor, Tier::ReviewFirst, Tier::Advisory] {
+            let json = serde_json::to_string(&tier).unwrap();
+            let unquoted = json.trim_matches('"');
+            assert_eq!(tier.as_str(), unquoted, "tier label drifted from serde");
         }
     }
 
