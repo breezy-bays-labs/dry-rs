@@ -32,9 +32,11 @@ threshold = 0.85
 threshold_mode = "default"
 
 [output]
-# Output format. `text` for step-summary-friendly CI rendering;
-# `json` for downstream tooling consuming the v0.1 wire envelope.
-format = "text"
+# Output format. `markdown` renders the tier-grouped sticky card
+# (collapsible per-match `<details>`, emoji severity) surfaced in the
+# self-test scorecard PR comment; `text` for the comfy-table terminal
+# view; `json` for downstream tooling consuming the v0.1 wire envelope.
+format = "markdown"
 
 [walk]
 # Walk `.gitignore`'d paths? `false` keeps `target/`, `node_modules/`,
