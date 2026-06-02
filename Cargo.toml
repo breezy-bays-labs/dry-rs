@@ -29,7 +29,7 @@ serde_json = "1"
 # the current major; the loader uses `toml::from_str::<Config>()`
 # + `toml::to_string_pretty(&Config)` (the latter for the round-trip
 # property test). See `ops/decisions/org/adr-config-file-pattern.md`.
-toml = "0.8"
+toml = "1.1"
 # Format-preserving TOML writer for the Starship-style doc-gen
 # emitter (lands with dry-rs#77). `toml::to_string_pretty` only
 # emits values; `toml_edit::DocumentMut` carries leading comments
