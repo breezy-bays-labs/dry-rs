@@ -39,7 +39,7 @@ toml = "0.8"
 # (via `toml`); naming it directly keeps the adapters/config layer
 # self-documenting. Restricted to `dry-core` per the hexagonal-
 # layout ADR — adapter crates do not need TOML writing.
-toml_edit = "0.22"
+toml_edit = "0.25"
 # Doc-comment reflection for the Starship-style doc-gen emitter
 # (lands with dry-rs#77). `#[derive(DocumentedFields)]` exposes
 # each field's `///` doc as an associated constant accessible at
