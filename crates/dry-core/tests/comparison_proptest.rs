@@ -23,10 +23,10 @@
 //! `crates/dry-core/proptest-regressions/` and are committed (never
 //! gitignored) per `AGENTS.md`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use dry_core::comparison::{compare, jaccard};
-use dry_core::domain::{FormKind, LineColumn, NormalizedForm, Span, Tier};
+use dry_core::comparison::{compare, compare_with_paths, jaccard};
+use dry_core::domain::{FilePath, FormKind, LineColumn, Match, NormalizedForm, Span, Tier};
 use proptest::prelude::*;
 
 /// Strategy for an arbitrary fingerprint set. Bounded element range
@@ -58,6 +58,84 @@ fn make_form_with_node_count(fps: HashSet<u64>, node_count: u32) -> NormalizedFo
         node_count,
         1,
     )
+}
+
+/// Unique synthetic path per input index — gives every form a unique
+/// wire identity so emitted `FormRef`s can be mapped back to input
+/// forms (`f<i>.rs` -> `forms[i]`) in the clustering properties below.
+fn unique_paths(n: usize) -> Vec<FilePath> {
+    (0..n)
+        .map(|i| FilePath::from(std::path::PathBuf::from(format!("f{i:04}.rs"))))
+        .collect()
+}
+
+/// Map an emitted `FormRef` file back to its input index (inverse of
+/// [`unique_paths`]).
+fn index_of_file(file: &str) -> usize {
+    file.strip_prefix('f')
+        .and_then(|s| s.strip_suffix(".rs"))
+        .and_then(|s| s.parse().ok())
+        .expect("FormRef file must be a unique_paths() synthetic path")
+}
+
+/// Reference pair set for the edge-conservation property, computed
+/// brute-force from the input. With `node_count == |fingerprint_set|`
+/// (the canonical generator), the sliding-window proxy break is exact
+/// — a pruned pair provably has `J < t` — so the reference is the
+/// complete ground truth for what the engine must represent:
+///
+/// - **exact pairs**: equal non-empty fingerprint sets (covered by a
+///   Pass 1 n-ary match);
+/// - **near pairs**: both forms unclaimed by Pass 1 (no equal-set
+///   partner anywhere), sets unequal, `J >= t`.
+///
+/// Pairs where exactly one side is Pass-1-claimed are the documented
+/// cross-tier-leakage gap — excluded here as they are in the engine.
+fn reference_pairs(forms: &[NormalizedForm], threshold: f64) -> HashSet<(usize, usize)> {
+    let claimed: Vec<bool> = (0..forms.len())
+        .map(|i| {
+            !forms[i].fingerprint_set.is_empty()
+                && (0..forms.len())
+                    .any(|j| j != i && forms[j].fingerprint_set == forms[i].fingerprint_set)
+        })
+        .collect();
+    let mut pairs = HashSet::new();
+    for i in 0..forms.len() {
+        for j in (i + 1)..forms.len() {
+            if forms[i].fingerprint_set.is_empty() || forms[j].fingerprint_set.is_empty() {
+                continue;
+            }
+            let exact_pair = forms[i].fingerprint_set == forms[j].fingerprint_set;
+            let near_pair = !exact_pair
+                && !claimed[i]
+                && !claimed[j]
+                && jaccard(&forms[i].fingerprint_set, &forms[j].fingerprint_set) >= threshold;
+            if exact_pair || near_pair {
+                pairs.insert((i, j));
+            }
+        }
+    }
+    pairs
+}
+
+/// All member pairs derivable from an emitted match, as input-index
+/// pairs, counted with multiplicity.
+fn derived_pairs(matches: &[Match]) -> HashMap<(usize, usize), usize> {
+    let mut pairs: HashMap<(usize, usize), usize> = HashMap::new();
+    for m in matches {
+        let idx: Vec<usize> = m
+            .forms
+            .iter()
+            .map(|f| index_of_file(&f.file.to_string()))
+            .collect();
+        for (pos, &a) in idx.iter().enumerate() {
+            for &b in &idx[pos + 1..] {
+                let key = if a < b { (a, b) } else { (b, a) };
+                *pairs.entry(key).or_insert(0) += 1;
+            }
+        }
+    }
+    pairs
 }
 
 proptest! {
@@ -203,6 +281,124 @@ proptest! {
                 m.tier,
             );
         }
+    }
+
+    /// Clique guarantee (dry-rs#97, adr-cluster-output ADR-1): every
+    /// pair of forms inside ANY emitted match — Pass 1 n-ary exact
+    /// cluster, Pass 3 carved clique, or residual pair — has Jaccard
+    /// `>= threshold`. No member is ever a below-threshold
+    /// transitive hanger-on.
+    #[test]
+    fn every_intra_match_pair_clears_the_threshold(
+        forms in prop::collection::vec(arb_form_with_set_size_node_count(), 0..12),
+        threshold in 0.5f64..0.99,
+    ) {
+        let paths = unique_paths(forms.len());
+        let matches = compare_with_paths(&forms, &paths, threshold);
+        for m in &matches {
+            let idx: Vec<usize> = m
+                .forms
+                .iter()
+                .map(|f| index_of_file(&f.file.to_string()))
+                .collect();
+            for (pos, &a) in idx.iter().enumerate() {
+                for &b in &idx[pos + 1..] {
+                    let j = jaccard(&forms[a].fingerprint_set, &forms[b].fingerprint_set);
+                    prop_assert!(
+                        j >= threshold,
+                        "intra-match pair ({}, {}) has J={} below threshold={} in {:?}",
+                        a, b, j, threshold, m,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Edge conservation (adr-cluster-output ADR-2): the pairs
+    /// derivable from the output — every member pair of every match,
+    /// counted with multiplicity — are EXACTLY the reference pairs
+    /// (equal-set pairs + unclaimed `J >= t` pairs), each exactly
+    /// once. Clustering is a lossless regrouping of the pairwise
+    /// output: nothing dropped, nothing invented, nothing
+    /// double-counted.
+    #[test]
+    fn output_conserves_every_edge_exactly_once(
+        forms in prop::collection::vec(arb_form_with_set_size_node_count(), 0..12),
+        threshold in 0.5f64..0.99,
+    ) {
+        let paths = unique_paths(forms.len());
+        let matches = compare_with_paths(&forms, &paths, threshold);
+        let derived = derived_pairs(&matches);
+        let reference = reference_pairs(&forms, threshold);
+
+        for (&pair, &count) in &derived {
+            prop_assert!(
+                reference.contains(&pair),
+                "output invented pair {:?} (J below threshold or claimed-form leak)",
+                pair,
+            );
+            prop_assert_eq!(
+                count, 1,
+                "pair {:?} represented {} times; edge conservation requires exactly once",
+                pair, count,
+            );
+        }
+        for &pair in &reference {
+            prop_assert!(
+                derived.contains_key(&pair),
+                "output dropped reference pair {:?}",
+                pair,
+            );
+        }
+    }
+
+    /// Permutation stability (adr-cluster-output ADR-4): permuting
+    /// the input order (forms and paths together) leaves the emitted
+    /// match set unchanged — membership, scores, and tiers derive
+    /// from form identities, never from input indices. (Forms here
+    /// have unique file identities via `unique_paths`; the identity
+    /// tie-break chain only falls back to the input index when
+    /// identities collide.)
+    #[test]
+    fn cluster_membership_is_permutation_stable(
+        forms in prop::collection::vec(arb_form_with_set_size_node_count(), 0..12),
+        rotation in 0usize..12,
+        reversed in any::<bool>(),
+        threshold in 0.5f64..0.99,
+    ) {
+        let paths = unique_paths(forms.len());
+
+        let canonical = |ms: &[Match]| -> Vec<(Vec<String>, u64, Tier)> {
+            let mut v: Vec<(Vec<String>, u64, Tier)> = ms
+                .iter()
+                .map(|m| {
+                    let mut files: Vec<String> =
+                        m.forms.iter().map(|f| f.file.to_string()).collect();
+                    files.sort();
+                    (files, m.score.to_bits(), m.tier)
+                })
+                .collect();
+            v.sort();
+            v
+        };
+
+        let baseline = canonical(&compare_with_paths(&forms, &paths, threshold));
+
+        let mut indices: Vec<usize> = (0..forms.len()).collect();
+        let len = indices.len();
+        if len > 0 {
+            indices.rotate_left(rotation % len);
+        }
+        if reversed {
+            indices.reverse();
+        }
+        let permuted_forms: Vec<NormalizedForm> =
+            indices.iter().map(|&i| forms[i].clone()).collect();
+        let permuted_paths: Vec<FilePath> =
+            indices.iter().map(|&i| paths[i].clone()).collect();
+        let permuted = canonical(&compare_with_paths(&permuted_forms, &permuted_paths, threshold));
+
+        prop_assert_eq!(baseline, permuted);
     }
 
     /// Matches are sorted by `(forms[0].file, forms[0].span.start,
