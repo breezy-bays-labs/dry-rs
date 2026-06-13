@@ -77,6 +77,7 @@ impl LeafClass {
     /// a display label call this instead of re-spelling the mapping, so
     /// a new variant breaks exactly one match arm.
     #[must_use]
+    #[inline]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Ident => "ident",
@@ -212,6 +213,7 @@ impl NormalizedTree {
 
     /// Whether this node is a leaf (`leaf.is_some()`).
     #[must_use]
+    #[inline]
     pub const fn is_leaf(&self) -> bool {
         self.leaf.is_some()
     }
