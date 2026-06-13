@@ -149,7 +149,7 @@ const CLUSTER_COMPONENT_CAP: usize = 512;
 /// Compare a slice of normalized forms and return all matches whose
 /// Jaccard similarity meets or exceeds `threshold`.
 ///
-/// The implementation runs two passes:
+/// The implementation runs three stages:
 ///
 /// 1. **Hash-bucket clustering** — forms whose `fingerprint_set` is
 ///    structurally identical surface as an n-ary match with score
@@ -157,8 +157,13 @@ const CLUSTER_COMPONENT_CAP: usize = 512;
 ///    rejected via a structural-equality verification step before
 ///    emission.
 /// 2. **Sliding-window Jaccard** — remaining pairs whose Jaccard
-///    similarity clears `threshold` surface as binary matches with
-///    the computed score and a tier from the floor table.
+///    similarity clears `threshold` are collected as internal
+///    pairwise edges (never emitted directly).
+/// 3. **Clique carving** — the Pass 2 edge graph is partitioned into
+///    maximal cliques; each clique emits one n-ary match scored by
+///    its weakest intra-clique pair, and every edge not absorbed by a
+///    clique emits as a residual binary match (edge conservation,
+///    dry-rs#97 / adr-cluster-output).
 ///
 /// The returned `Vec<Match>` is sorted deterministically by
 /// `(forms[0].file, forms[0].span.start, -score)`.
@@ -603,10 +608,15 @@ fn component_size_by_node(
 /// exact score ties the common case, so the identity tie-break is
 /// load-bearing for byte-stable output.
 fn carving_order(edges: &[PairwiseEdge], ident: &BTreeMap<usize, NodeIdent>) -> Vec<usize> {
-    let edge_keys: Vec<(NodeIdent, NodeIdent)> = edges
+    // Hold references into `ident` rather than cloning each
+    // `NodeIdent` (its `FilePath` wraps a `PathBuf` — a clone per edge
+    // is a heap allocation). `&NodeIdent` orders by referent, so the
+    // tie-break comparison below is unchanged. `edge_keys` is local —
+    // the borrows never escape.
+    let edge_keys: Vec<(&NodeIdent, &NodeIdent)> = edges
         .iter()
         .map(|e| {
-            let (a, b) = (ident[&e.i].clone(), ident[&e.j].clone());
+            let (a, b) = (&ident[&e.i], &ident[&e.j]);
             if a <= b { (a, b) } else { (b, a) }
         })
         .collect();
@@ -839,8 +849,9 @@ fn uf_union(parent: &mut BTreeMap<usize, usize>, a: usize, b: usize) {
     let rb = uf_find(parent, b);
     if ra != rb {
         let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) };
+        // `lo` stays root; `uf_find` reads an absent node as its own
+        // root, so no `lo -> lo` self-entry is needed.
         parent.insert(hi, lo);
-        parent.entry(lo).or_insert(lo);
     }
 }
 
