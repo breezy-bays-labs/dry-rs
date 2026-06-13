@@ -696,7 +696,7 @@ fn derive_match_template<N: TreeDeriverPort>(
         derived.push(member);
     }
 
-    decide_template(&derived)
+    decide_template(derived)
 }
 
 /// One cluster member after re-derivation: its re-derived tree plus the
@@ -727,15 +727,15 @@ struct DerivedMember<'a> {
 /// form of "`root.fp` equals the form's stored top-level fold". An
 /// edited-on-disk source produces top-level fps absent from the stored
 /// bag, failing the gate.
-fn decide_template(members: &[Option<DerivedMember<'_>>]) -> Option<Template> {
+fn decide_template(members: Vec<Option<DerivedMember<'_>>>) -> Option<Template> {
     let mut trees: Vec<NormalizedTree> = Vec::with_capacity(members.len());
     for member in members {
-        let DerivedMember { tree, bag } = member.as_ref()?;
-        let bag = (*bag)?;
-        if !tree_top_level_fps_in_bag(tree, bag) {
+        let DerivedMember { tree, bag } = member?;
+        let bag = bag?;
+        if !tree_top_level_fps_in_bag(&tree, bag) {
             return None;
         }
-        trees.push(tree.clone());
+        trees.push(tree);
     }
     Some(antiunify(&trees))
 }
@@ -1625,7 +1625,7 @@ mod tests {
                 bag: Some(&bag_b),
             }),
         ];
-        let template = decide_template(&members).expect("template must attach");
+        let template = decide_template(members).expect("template must attach");
         // The two member trees are structurally identical (same child
         // fps) -> a hole-free template (LGG of identical trees).
         assert!(
@@ -1653,7 +1653,7 @@ mod tests {
             }),
         ];
         assert!(
-            decide_template(&members).is_none(),
+            decide_template(members).is_none(),
             "a single fp-drifted member must degrade the whole match to None"
         );
     }
@@ -1670,7 +1670,7 @@ mod tests {
             }),
             None,
         ];
-        assert!(decide_template(&members).is_none());
+        assert!(decide_template(members).is_none());
     }
 
     #[test]
@@ -1688,7 +1688,7 @@ mod tests {
                 bag: None,
             }),
         ];
-        assert!(decide_template(&members).is_none());
+        assert!(decide_template(members).is_none());
     }
 
     #[test]
