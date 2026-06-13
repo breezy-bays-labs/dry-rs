@@ -5,8 +5,8 @@ expression: projection
 {
   "by_tier": {
     "auto_refactor": 9,
-    "review_first": 45
+    "review_first": 15
   },
-  "matches_count": 54,
-  "total_forms": 733
+  "matches_count": 24,
+  "total_forms": 762
 }

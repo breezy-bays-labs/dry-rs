@@ -70,17 +70,36 @@ source-level (`dry-core AST-library purity` CI job rejects matching
 
 ## Comparison algorithm contract
 
-The comparison engine (lands in PR 6) has two passes:
+The comparison engine has three stages:
 
 1. **Hash-bucket pass** — clusters forms by `fingerprint_set` hash for
-   exact-match detection in O(N).
+   exact-match detection in O(N); emits n-ary matches (score 1.0).
 2. **Sliding-window Jaccard pass** — sorts forms ascending by
    `node_count`, runs Jaccard over the window. Inner loop breaks when
    `forms[j].node_count > forms[i].node_count / threshold` (Jaccard
-   upper bound `min/max >= t` ⟹ `max <= min/t`).
+   upper bound `min/max >= t` ⟹ `max <= min/t`). Collects the
+   `>= threshold` pairwise edges.
+3. **Clique carving** (dry-rs#97; semantics pinned in the ops ADR
+   `adr-cluster-output.md`) — carves the edge graph into maximal
+   cliques per connected component (prefer-larger greedy). Every
+   intra-cluster pair carries a COMPUTED Jaccard `>= threshold`; a
+   missing edge blocks membership and is never fabricated as 0.0.
+   Cluster score = the minimum intra-clique pair score (generalizes
+   the Pass 1 score-1.0-as-group-min precedent); tier routes by the
+   weakest pair. **Edge conservation**: every collected edge is
+   represented exactly once — absorbed in a clique or emitted as a
+   residual binary match; a form may appear in multiple matches.
+   Determinism derives from form identity `(file, span)` +
+   `f64::total_cmp`, never input indices or `HashSet` iteration;
+   cluster membership is stable across walker orderings. Components
+   above `CLUSTER_COMPONENT_CAP` (512) fall back to pairwise
+   passthrough. Do NOT suggest connected-component (transitive
+   closure) grouping — chaining hands agents clusters containing
+   below-threshold pairs; do NOT suggest a separate cluster wire
+   type — the locked `Match.forms: Vec<FormRef>` is the N-ary shape.
 
-The threshold tier vocabulary is fixed at v0.1: `auto_refactor`
-(>= 0.95) / `review_first` (>= 0.85) / `advisory` (>= threshold).
+The threshold tier vocabulary is fixed: `auto_refactor` (>= 0.95) /
+`review_first` (>= 0.85) / `advisory` (>= threshold).
 
 ## Cross-language node-counting heuristic
 

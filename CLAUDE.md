@@ -39,19 +39,29 @@ dry4ts  (depends on dry-core; adds swc_ecma_parser or oxc, napi-rs)  [v0.6+]
 | v0.6+  | dry4ts joins workspace (swc/oxc + napi-rs), cross-adapter wire-shape verification     | No |
 | **v1.0** | **per-crate decoupled gate**: `dry4rs` ships first when CLI/JSON stabilizes; `dry-core` + `dry4ts` ship together when cross-language abstraction validates | **YES** |
 
-## Comparison algorithm (v0.1)
+## Comparison algorithm
 
-Two-tier exact + near detection:
+Three-stage exact + near detection:
 
 1. **Hash-bucket clustering** — first pass clusters forms by their
    `fingerprint_set` hash. Exact structural matches surface in O(N)
-   without pairwise comparison.
+   without pairwise comparison, as n-ary matches.
 2. **Sliding-window Jaccard** — second pass over remaining forms
    sorted ascending by `node_count`. For each form `forms[i]`, the
    inner loop breaks when `forms[j].node_count > forms[i].node_count /
    threshold` — the Jaccard upper bound is `min/max`, so for threshold
    `t`, the largest comparable form has `node_count <= forms[i].node_count / t`.
-3. **Threshold tiers** — `auto_refactor` (>= 0.95) / `review_first`
+   Collects the `>= threshold` pairwise edges.
+3. **Clique carving** (dry-rs#97, `adr-cluster-output.md`) — third
+   stage groups the edge graph into maximal cliques (prefer-larger
+   greedy: seed heaviest edge, grow by max-min candidate) so a
+   near-duplication in N places surfaces as ONE n-ary `Match`.
+   Cluster score = minimum intra-clique pairwise Jaccard; tier routes
+   by that weakest pair. **Edge conservation**: leftover edges emit
+   as residual binary matches — clustering is a lossless regrouping
+   of the pairwise output. Components > 512 forms fall back to
+   pairwise passthrough.
+4. **Threshold tiers** — `auto_refactor` (>= 0.95) / `review_first`
    (>= 0.85) / `advisory` (>= threshold) drive agentic-quality routing.
 
 The comparison engine lives in `dry-core::comparison` (single module,
@@ -102,6 +112,9 @@ Filled in as comparison engine + reporters land:
 | Sliding-window break | If inner loop breaks at `j`, then for all `k > j`, `J(forms[i], forms[k]) < threshold` |
 | Hash-bucket clustering | If two forms hash to the same bucket, their `fingerprint_set` is structurally equal |
 | Detector idempotence | `detect(detect(forms))` produces the same finding set as `detect(forms)` |
+| Clique guarantee | Every pair of forms inside ANY emitted `Match` has `J >= threshold` — no transitive hanger-ons |
+| Edge conservation | Pairs derivable from the output == reference pairs (equal-set + unclaimed `J >= t`), each exactly once |
+| Permutation stability | Permuting input order leaves the emitted match set unchanged (membership, scores, tiers) |
 
 ## Commit convention
 

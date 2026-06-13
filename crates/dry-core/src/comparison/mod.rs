@@ -1,23 +1,32 @@
 //! Comparison engine for the dry structural duplication detector.
 //!
 //! Single module — dry-rs has one algorithm (Jaccard on subform
-//! fingerprints), not a detector taxonomy (per O6). Two-tier
-//! detection:
+//! fingerprints), not a detector taxonomy (per O6). Three stages:
 //!
 //! 1. **Hash-bucket clustering** — first pass clusters forms by their
 //!    `fingerprint_set` hash. Exact structural matches surface in O(N)
-//!    without pairwise comparison.
+//!    without pairwise comparison, as n-ary matches.
 //! 2. **Sliding-window Jaccard** — second pass over remaining forms
 //!    sorted ascending by `node_count`. For each form `forms[i]`, the
 //!    inner loop breaks when
 //!    `forms[j].node_count > forms[i].node_count / threshold`. This
 //!    is the Jaccard upper bound: `J(A,B) <= min(|A|,|B|)/max(|A|,|B|)`,
 //!    so for threshold `t`, the largest comparable form has
-//!    `node_count <= forms[i].node_count / t`.
+//!    `node_count <= forms[i].node_count / t`. Collects the
+//!    `>= threshold` pairwise edges.
+//! 3. **Clique carving** (dry-rs#97, adr-cluster-output) — third
+//!    stage groups the Pass 2 edge graph into maximal cliques so a
+//!    near-duplication appearing in N places surfaces as ONE n-ary
+//!    match. Every intra-cluster pair carries a computed Jaccard
+//!    `>= threshold`; leftover edges emit as residual binary matches
+//!    (edge conservation — the clustering is a lossless regrouping
+//!    of the pairwise output).
 //!
 //! Threshold tier assignment (`auto_refactor` >= 0.95,
 //! `review_first` >= 0.85, `advisory` >= threshold) drives
-//! agentic-quality routing.
+//! agentic-quality routing; a cluster routes by its WEAKEST pair
+//! (score = minimum intra-clique Jaccard, generalizing Pass 1's
+//! score-1.0-as-group-min precedent).
 //!
 //! # Algorithm contract
 //!
@@ -57,6 +66,29 @@
 //! sorting by `node_count` is `O(N log N)` on `u32`, and the
 //! sliding-window can prune most pairs without computing Jaccard.
 //!
+//! ## Pass 3 — clique carving
+//!
+//! The Pass 2 edges form a sparse graph (vertices = forms, edge =
+//! `>= threshold` pair). Pass 3 carves **maximal cliques** with a
+//! prefer-larger-cliques greedy: seed at the highest-score
+//! unassigned edge, grow by repeatedly admitting the candidate
+//! adjacent to ALL current members that maximizes the minimum edge
+//! into the clique. Guarantees, per adr-cluster-output:
+//!
+//! - **Clique guarantee** — every pair inside an emitted cluster has
+//!   a computed Jaccard `>= threshold`; a missing edge (pruned by
+//!   the window proxy or computed sub-threshold) blocks membership
+//!   and is never fabricated as `0.0`.
+//! - **Edge conservation** — every collected edge is represented in
+//!   the output exactly once: absorbed inside a clique or emitted as
+//!   a residual binary match. Nothing the pairwise output carried is
+//!   lost; a form may appear in multiple matches, as before.
+//! - **Determinism** — carving order, candidate tie-breaks, and
+//!   member order derive from form identity `(file, span)` and
+//!   `f64::total_cmp`; cluster membership is stable across walker
+//!   orderings. Components larger than `CLUSTER_COMPONENT_CAP`
+//!   (private const, 512) fall back to pairwise passthrough.
+//!
 //! ## Empty `fingerprint_set` policy
 //!
 //! [`jaccard`] returns `0.0` when either set is empty (including
@@ -90,7 +122,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::hash::BuildHasher;
 
-use crate::domain::{FilePath, FormRef, Match, NormalizedForm, Tier};
+use crate::domain::{FilePath, FormRef, LineColumn, Match, NormalizedForm, Tier};
 
 /// Floor below which a score-tier is downgraded from
 /// [`Tier::AutoRefactor`] — pinned at `0.95` per the roadmap's
@@ -104,10 +136,20 @@ pub const AUTO_REFACTOR_FLOOR: f64 = 0.95;
 /// route to [`Tier::ReviewFirst`].
 pub const REVIEW_FIRST_FLOOR: f64 = 0.85;
 
+/// Largest connected component (in forms) the Pass 3 clique carving
+/// will process. Components above the cap fall back to pairwise
+/// passthrough — every edge emits as a binary match, exactly the
+/// pre-clustering behavior — keeping the engine deterministic and
+/// bounded on pathological generated-code families
+/// (adr-cluster-output ADR-6). Defense in depth only: the largest
+/// component observed across six real corpora (including a
+/// 23k-form workspace at a lenient 0.6 threshold) is 110 forms.
+const CLUSTER_COMPONENT_CAP: usize = 512;
+
 /// Compare a slice of normalized forms and return all matches whose
 /// Jaccard similarity meets or exceeds `threshold`.
 ///
-/// The implementation runs two passes:
+/// The implementation runs three stages:
 ///
 /// 1. **Hash-bucket clustering** — forms whose `fingerprint_set` is
 ///    structurally identical surface as an n-ary match with score
@@ -115,8 +157,13 @@ pub const REVIEW_FIRST_FLOOR: f64 = 0.85;
 ///    rejected via a structural-equality verification step before
 ///    emission.
 /// 2. **Sliding-window Jaccard** — remaining pairs whose Jaccard
-///    similarity clears `threshold` surface as binary matches with
-///    the computed score and a tier from the floor table.
+///    similarity clears `threshold` are collected as internal
+///    pairwise edges (never emitted directly).
+/// 3. **Clique carving** — the Pass 2 edge graph is partitioned into
+///    maximal cliques; each clique emits one n-ary match scored by
+///    its weakest intra-clique pair, and every edge not absorbed by a
+///    clique emits as a residual binary match (edge conservation,
+///    dry-rs#97 / adr-cluster-output).
 ///
 /// The returned `Vec<Match>` is sorted deterministically by
 /// `(forms[0].file, forms[0].span.start, -score)`.
@@ -194,8 +241,22 @@ fn compare_with(
 
     // Pass 2 — sliding-window Jaccard over forms NOT claimed by
     // Pass 1. Sorted ascending by `node_count` with the
-    // break-math shortcut.
-    pass2_sliding_window(forms, resolver, threshold, &claimed, &mut matches);
+    // break-math shortcut. Collects the >= threshold pairwise edges
+    // instead of emitting matches directly.
+    let edges = pass2_sliding_window(forms, threshold, &claimed);
+
+    // Pass 3 — clique carving over the collected edge graph
+    // (dry-rs#97, adr-cluster-output). Maximal cliques emit as
+    // n-ary matches; leftover edges emit as residual binary
+    // matches (edge conservation — nothing Pass 2 found is lost).
+    emit_pass2_clusters(
+        forms,
+        resolver,
+        threshold,
+        &edges,
+        CLUSTER_COMPONENT_CAP,
+        &mut matches,
+    );
 
     sort_matches_for_output(&mut matches);
     matches
@@ -339,21 +400,31 @@ fn emit_pass1_cluster(
     }
 }
 
+/// A Pass 2 pairwise edge: two indices into the engine's input slice
+/// plus the computed (post-de-rate) Jaccard score. Engine-internal
+/// plumbing for the Pass 3 clique carving — never a domain type,
+/// never on the wire. Indices are invocation-scoped; the durable
+/// identity is the projected [`FormRef`].
+struct PairwiseEdge {
+    i: usize,
+    j: usize,
+    score: f64,
+}
+
 /// Pass 2 — sliding-window Jaccard over unclaimed forms. Sorts
 /// candidates ascending by `node_count`, then for each pair
 /// `(i, j)` with `i < j` the inner loop breaks when
-/// `forms[j].node_count > forms[i].node_count / threshold`. Emits
-/// one binary [`Match`] per pair clearing `threshold`; tier is
-/// assigned by the score (Pass 2 cannot emit `score == 1.0` —
-/// those land in Pass 1).
+/// `forms[j].node_count > forms[i].node_count / threshold`. Collects
+/// one [`PairwiseEdge`] per pair clearing `threshold` (Pass 2 cannot
+/// produce `score == 1.0` — those land in Pass 1); Pass 3 turns the
+/// edge graph into matches.
 fn pass2_sliding_window(
     forms: &[NormalizedForm],
-    resolver: &dyn PathResolver,
     threshold: f64,
     claimed: &HashSet<usize>,
-    matches: &mut Vec<Match>,
-) {
+) -> Vec<PairwiseEdge> {
     let sorted = sort_unclaimed_by_node_count(forms, claimed);
+    let mut edges: Vec<PairwiseEdge> = Vec::new();
 
     for outer_pos in 0..sorted.len() {
         let i = sorted[outer_pos];
@@ -367,9 +438,12 @@ fn pass2_sliding_window(
             if f64::from(forms[j].node_count) > bound {
                 break;
             }
-            try_emit_pass2_match(forms, resolver, threshold, i, j, matches);
+            if let Some(edge) = try_collect_pass2_edge(forms, threshold, i, j) {
+                edges.push(edge);
+            }
         }
     }
+    edges
 }
 
 /// Project to unclaimed indices and sort ascending by
@@ -381,30 +455,404 @@ fn sort_unclaimed_by_node_count(forms: &[NormalizedForm], claimed: &HashSet<usiz
     sorted
 }
 
-/// Try to emit a Pass 2 match for the candidate pair `(i, j)`.
+/// Try to collect a Pass 2 edge for the candidate pair `(i, j)`.
 ///
-/// Computes Jaccard, applies the threshold gate, resolves the
+/// Computes Jaccard, applies the threshold gate, and resolves the
 /// effective score (de-rating any unexpected score-1.0 hit per the
-/// Pass 1 exhaustive-emit invariant), and pushes the Match.
-fn try_emit_pass2_match(
+/// Pass 1 exhaustive-emit invariant). Returns `None` below the
+/// threshold — sub-threshold similarities are never retained, so the
+/// edge graph only ever contains `>= threshold` pairs.
+fn try_collect_pass2_edge(
     forms: &[NormalizedForm],
-    resolver: &dyn PathResolver,
     threshold: f64,
     i: usize,
     j: usize,
-    matches: &mut Vec<Match>,
-) {
+) -> Option<PairwiseEdge> {
     let score = jaccard(&forms[i].fingerprint_set, &forms[j].fingerprint_set);
     if score < threshold {
-        return;
+        return None;
     }
     let final_score = resolve_pass2_score(score, i, j);
-    let tier = tier_for(final_score, threshold);
-    let forms_refs = vec![
-        form_ref_for(&forms[i], i, resolver),
-        form_ref_for(&forms[j], j, resolver),
-    ];
-    matches.push(Match::new(forms_refs, final_score, tier));
+    Some(PairwiseEdge {
+        i,
+        j,
+        score: final_score,
+    })
+}
+
+/// Identity key for a form inside the Pass 3 carving: the projected
+/// `(file, span.start, span.end)` plus the input index as a final
+/// tie-break for degenerate inputs (e.g. unit-test forms sharing one
+/// synthetic path and span). On real corpora the `(file, span)`
+/// prefix is unique, which is what makes cluster membership and
+/// member ordering stable across walker orderings — the input index
+/// never decides anything unless identities collide.
+type NodeIdent = (FilePath, LineColumn, LineColumn, usize);
+
+fn node_ident(forms: &[NormalizedForm], i: usize, resolver: &dyn PathResolver) -> NodeIdent {
+    let form = &forms[i];
+    (
+        resolver.path_for(form, i),
+        form.span.start,
+        form.span.end,
+        i,
+    )
+}
+
+/// Pass 3 — clique carving over the Pass 2 edge graph (dry-rs#97,
+/// adr-cluster-output).
+///
+/// Carves **maximal cliques** out of each connected component with a
+/// prefer-larger-cliques greedy: seed at the highest-score unassigned
+/// edge, then repeatedly admit the candidate adjacent (`>= threshold`)
+/// to **all** current members that maximizes the minimum edge into
+/// the clique. Every emitted cluster is a clique in the thresholded
+/// graph — every intra-cluster pair carries a COMPUTED Jaccard
+/// `>= threshold` (the "guaranteed extractability" contract that
+/// makes tier routing safe for downstream automation). A missing
+/// edge always blocks membership; absence means "not computed", never
+/// a fabricated 0.0 (adr-cluster-output ADR-5).
+///
+/// **Edge conservation** (ADR-2): every collected edge is represented
+/// in the output exactly once — absorbed inside a carved clique, or
+/// emitted as a residual binary [`Match`] identical to the
+/// pre-clustering output. Nothing Pass 2 found is lost; a form may
+/// appear in multiple matches, exactly as in the pairwise output this
+/// stage replaces.
+///
+/// **Determinism** (ADR-4): all ordering — carving order, candidate
+/// tie-breaks, member order — derives from [`NodeIdent`] and
+/// `f64::total_cmp`, never from `HashSet` iteration. Components
+/// larger than `component_cap` fall back to pairwise passthrough.
+fn emit_pass2_clusters(
+    forms: &[NormalizedForm],
+    resolver: &dyn PathResolver,
+    threshold: f64,
+    edges: &[PairwiseEdge],
+    component_cap: usize,
+    matches: &mut Vec<Match>,
+) {
+    if edges.is_empty() {
+        return;
+    }
+
+    let ident = build_node_idents(forms, resolver, edges);
+    let adj = build_adjacency(edges);
+    let component_size = component_size_by_node(edges, &ident);
+    let order = carving_order(edges, &ident);
+
+    let (cliques, clique_of) =
+        carve_cliques(edges, &order, &adj, &ident, &component_size, component_cap);
+
+    emit_clique_matches(forms, resolver, threshold, &cliques, &adj, matches);
+    emit_residual_matches(
+        forms, resolver, threshold, edges, &order, &ident, &clique_of, matches,
+    );
+}
+
+/// Node identities for deterministic, permutation-stable ordering —
+/// one [`NodeIdent`] per endpoint touched by an edge.
+fn build_node_idents(
+    forms: &[NormalizedForm],
+    resolver: &dyn PathResolver,
+    edges: &[PairwiseEdge],
+) -> BTreeMap<usize, NodeIdent> {
+    let mut ident: BTreeMap<usize, NodeIdent> = BTreeMap::new();
+    for e in edges {
+        for n in [e.i, e.j] {
+            ident
+                .entry(n)
+                .or_insert_with(|| node_ident(forms, n, resolver));
+        }
+    }
+    ident
+}
+
+/// Adjacency map: node -> (neighbor -> edge score). Drives clique
+/// growth, score lookups, and the absorbed/residual split.
+fn build_adjacency(edges: &[PairwiseEdge]) -> BTreeMap<usize, BTreeMap<usize, f64>> {
+    let mut adj: BTreeMap<usize, BTreeMap<usize, f64>> = BTreeMap::new();
+    for e in edges {
+        adj.entry(e.i).or_default().insert(e.j, e.score);
+        adj.entry(e.j).or_default().insert(e.i, e.score);
+    }
+    adj
+}
+
+/// Component size keyed by node (not root) so the carving loop can
+/// apply the oversize cap with a plain map lookup — no `&mut parent`
+/// borrow inside the hot loop. Union-find is consulted only here.
+fn component_size_by_node(
+    edges: &[PairwiseEdge],
+    ident: &BTreeMap<usize, NodeIdent>,
+) -> BTreeMap<usize, usize> {
+    let mut parent: BTreeMap<usize, usize> = BTreeMap::new();
+    for e in edges {
+        uf_union(&mut parent, e.i, e.j);
+    }
+    let mut size_by_root: BTreeMap<usize, usize> = BTreeMap::new();
+    for &n in ident.keys() {
+        let root = uf_find(&mut parent, n);
+        *size_by_root.entry(root).or_insert(0) += 1;
+    }
+    let mut by_node: BTreeMap<usize, usize> = BTreeMap::new();
+    for &n in ident.keys() {
+        let root = uf_find(&mut parent, n);
+        by_node.insert(n, size_by_root[&root]);
+    }
+    by_node
+}
+
+/// Carving order: score descending (total order via `total_cmp`),
+/// then the ident-ordered endpoint pair. Quantized Jaccard makes
+/// exact score ties the common case, so the identity tie-break is
+/// load-bearing for byte-stable output.
+fn carving_order(edges: &[PairwiseEdge], ident: &BTreeMap<usize, NodeIdent>) -> Vec<usize> {
+    // Hold references into `ident` rather than cloning each
+    // `NodeIdent` (its `FilePath` wraps a `PathBuf` — a clone per edge
+    // is a heap allocation). `&NodeIdent` orders by referent, so the
+    // tie-break comparison below is unchanged. `edge_keys` is local —
+    // the borrows never escape.
+    let edge_keys: Vec<(&NodeIdent, &NodeIdent)> = edges
+        .iter()
+        .map(|e| {
+            let (a, b) = (&ident[&e.i], &ident[&e.j]);
+            if a <= b { (a, b) } else { (b, a) }
+        })
+        .collect();
+    let mut order: Vec<usize> = (0..edges.len()).collect();
+    order.sort_by(|&x, &y| {
+        edges[y]
+            .score
+            .total_cmp(&edges[x].score)
+            .then_with(|| edge_keys[x].cmp(&edge_keys[y]))
+    });
+    order
+}
+
+/// Carve maximal cliques in carving order. A node belongs to at most
+/// one clique; each carved clique's members are sorted by identity so
+/// the wire-visible `forms[0]` is stable. Edges whose endpoints land
+/// in different cliques (or none) become residuals. Returns the
+/// cliques plus the node -> clique-id map the residual split needs.
+fn carve_cliques(
+    edges: &[PairwiseEdge],
+    order: &[usize],
+    adj: &BTreeMap<usize, BTreeMap<usize, f64>>,
+    ident: &BTreeMap<usize, NodeIdent>,
+    component_size: &BTreeMap<usize, usize>,
+    component_cap: usize,
+) -> (Vec<Vec<usize>>, BTreeMap<usize, usize>) {
+    let mut clique_of: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut cliques: Vec<Vec<usize>> = Vec::new();
+    for &ei in order {
+        let e = &edges[ei];
+        if component_size[&e.i] > component_cap {
+            continue;
+        }
+        if clique_of.contains_key(&e.i) || clique_of.contains_key(&e.j) {
+            continue;
+        }
+        let mut clique = vec![e.i, e.j];
+        grow_clique(&mut clique, adj, ident, &clique_of);
+        clique.sort_by(|a, b| ident[a].cmp(&ident[b]));
+        let id = cliques.len();
+        for &m in &clique {
+            clique_of.insert(m, id);
+        }
+        cliques.push(clique);
+    }
+    (cliques, clique_of)
+}
+
+/// Emit carved cliques as n-ary matches: members already identity-
+/// ordered, score = the minimum intra-clique pair score (generalizing
+/// Pass 1's score-1.0-as-group-min precedent), tier routed by that
+/// weakest pair.
+fn emit_clique_matches(
+    forms: &[NormalizedForm],
+    resolver: &dyn PathResolver,
+    threshold: f64,
+    cliques: &[Vec<usize>],
+    adj: &BTreeMap<usize, BTreeMap<usize, f64>>,
+    matches: &mut Vec<Match>,
+) {
+    for clique in cliques {
+        let min_score = min_intra_clique_score(clique, adj);
+        let tier = tier_for(min_score, threshold);
+        let forms_refs: Vec<FormRef> = clique
+            .iter()
+            .map(|&m| form_ref_for(&forms[m], m, resolver))
+            .collect();
+        matches.push(Match::new(forms_refs, min_score, tier));
+    }
+}
+
+/// The weakest (minimum) pairwise score over every pair in a clique.
+fn min_intra_clique_score(clique: &[usize], adj: &BTreeMap<usize, BTreeMap<usize, f64>>) -> f64 {
+    let mut min_score = f64::INFINITY;
+    for (pos, &a) in clique.iter().enumerate() {
+        for &b in &clique[pos + 1..] {
+            min_score = min_score.min(adj[&a][&b]);
+        }
+    }
+    min_score
+}
+
+/// Residual edges — endpoints not co-members of one clique — emit as
+/// binary matches (edge conservation). Covers both cross-clique
+/// leftovers and every edge of an oversize (capped) component.
+/// Members ordered by identity.
+#[allow(clippy::too_many_arguments)]
+fn emit_residual_matches(
+    forms: &[NormalizedForm],
+    resolver: &dyn PathResolver,
+    threshold: f64,
+    edges: &[PairwiseEdge],
+    order: &[usize],
+    ident: &BTreeMap<usize, NodeIdent>,
+    clique_of: &BTreeMap<usize, usize>,
+    matches: &mut Vec<Match>,
+) {
+    for &ei in order {
+        let e = &edges[ei];
+        if edge_absorbed(clique_of, e.i, e.j) {
+            continue;
+        }
+        let (a, b) = if ident[&e.i] <= ident[&e.j] {
+            (e.i, e.j)
+        } else {
+            (e.j, e.i)
+        };
+        let tier = tier_for(e.score, threshold);
+        let forms_refs = vec![
+            form_ref_for(&forms[a], a, resolver),
+            form_ref_for(&forms[b], b, resolver),
+        ];
+        matches.push(Match::new(forms_refs, e.score, tier));
+    }
+}
+
+/// True when both endpoints landed in the same carved clique (the edge
+/// is already represented by that clique's n-ary match).
+fn edge_absorbed(clique_of: &BTreeMap<usize, usize>, i: usize, j: usize) -> bool {
+    match (clique_of.get(&i), clique_of.get(&j)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// Grow a seeded clique to maximality: repeatedly admit the
+/// unassigned candidate adjacent to ALL current members that
+/// maximizes the minimum edge score into the clique; ties break on
+/// the smaller node identity. The adjacent-to-all check is what
+/// maintains the clique invariant — a candidate with any missing
+/// edge (never computed or sub-threshold) is rejected.
+fn grow_clique(
+    clique: &mut Vec<usize>,
+    adj: &BTreeMap<usize, BTreeMap<usize, f64>>,
+    ident: &BTreeMap<usize, NodeIdent>,
+    clique_of: &BTreeMap<usize, usize>,
+) {
+    while let Some(cand) = best_clique_candidate(clique, adj, ident, clique_of) {
+        clique.push(cand);
+    }
+}
+
+/// Pick the next node to admit into `clique`: among unassigned nodes
+/// adjacent to every current member, the one maximizing the minimum
+/// edge into the clique (ties → smaller identity). `None` when no
+/// admissible candidate remains (the clique is maximal).
+fn best_clique_candidate(
+    clique: &[usize],
+    adj: &BTreeMap<usize, BTreeMap<usize, f64>>,
+    ident: &BTreeMap<usize, NodeIdent>,
+    clique_of: &BTreeMap<usize, usize>,
+) -> Option<usize> {
+    let mut best: Option<(f64, usize)> = None;
+    for &cand in adj[&clique[0]].keys() {
+        if clique_of.contains_key(&cand) || clique.contains(&cand) {
+            continue;
+        }
+        let Some(worst) = min_edge_into_clique(clique, adj, cand) else {
+            continue;
+        };
+        if candidate_beats_best(worst, cand, best, ident) {
+            best = Some((worst, cand));
+        }
+    }
+    best.map(|(_, cand)| cand)
+}
+
+/// Minimum edge score from `cand` into every current clique member,
+/// or `None` if `cand` is not adjacent to all of them — a missing
+/// edge disqualifies the candidate (it would break the clique
+/// invariant).
+fn min_edge_into_clique(
+    clique: &[usize],
+    adj: &BTreeMap<usize, BTreeMap<usize, f64>>,
+    cand: usize,
+) -> Option<f64> {
+    let mut worst = f64::INFINITY;
+    for &m in clique {
+        let w = *adj[&m].get(&cand)?;
+        worst = worst.min(w);
+    }
+    Some(worst)
+}
+
+/// Prefer-larger-clique candidate ranking: a higher minimum edge wins;
+/// exact ties (the common case under quantized Jaccard) break on the
+/// smaller node identity for deterministic output.
+fn candidate_beats_best(
+    worst: f64,
+    cand: usize,
+    best: Option<(f64, usize)>,
+    ident: &BTreeMap<usize, NodeIdent>,
+) -> bool {
+    match best {
+        None => true,
+        Some((best_worst, best_cand)) => match worst.total_cmp(&best_worst) {
+            std::cmp::Ordering::Greater => true,
+            std::cmp::Ordering::Less => false,
+            std::cmp::Ordering::Equal => ident[&cand] < ident[&best_cand],
+        },
+    }
+}
+
+/// Union-find `find` with path compression over a sparse
+/// `BTreeMap` parent table. A node absent from the table is its own
+/// root.
+fn uf_find(parent: &mut BTreeMap<usize, usize>, x: usize) -> usize {
+    let mut root = x;
+    while let Some(&p) = parent.get(&root) {
+        if p == root {
+            break;
+        }
+        root = p;
+    }
+    let mut cur = x;
+    while let Some(&p) = parent.get(&cur) {
+        if p == root {
+            break;
+        }
+        parent.insert(cur, root);
+        cur = p;
+    }
+    root
+}
+
+/// Union by min-root — the smaller index becomes the representative,
+/// keeping the structure deterministic.
+fn uf_union(parent: &mut BTreeMap<usize, usize>, a: usize, b: usize) {
+    let ra = uf_find(parent, a);
+    let rb = uf_find(parent, b);
+    if ra != rb {
+        let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) };
+        // `lo` stays root; `uf_find` reads an absent node as its own
+        // root, so no `lo -> lo` self-entry is needed.
+        parent.insert(hi, lo);
+    }
 }
 
 /// Resolve the effective Pass 2 score, de-rating an unexpected
@@ -1254,5 +1702,210 @@ mod tests {
         // `paths[i]`; the explicit `assert_eq!` surfaces the lengths.
         let paths: Vec<FilePath> = Vec::new();
         let _ = compare_with_paths(&forms, &paths, 0.85);
+    }
+
+    // --- Pass 2 clique clustering (dry-rs#97, adr-cluster-output) ---
+
+    /// `{1..=10}`, `{1..=9, 11}`, `{1..=9, 12}` — every pair shares 9
+    /// of 11 union elements: Jaccard 9/11 ≈ 0.818 for all three pairs.
+    fn triangle_forms() -> Vec<NormalizedForm> {
+        let a: Vec<u64> = (1..=10).collect();
+        let b: Vec<u64> = (1..=9).chain([11]).collect();
+        let c: Vec<u64> = (1..=9).chain([12]).collect();
+        vec![make_form(&a, 10), make_form(&b, 10), make_form(&c, 10)]
+    }
+
+    #[test]
+    fn pass2_clusters_triangle_into_single_n_ary_match() {
+        // A triangle (all three pairs >= threshold) is a 3-clique and
+        // must emit ONE 3-form Match, not three binary matches.
+        let matches = compare(&triangle_forms(), 0.8);
+        assert_eq!(
+            matches.len(),
+            1,
+            "triangle must collapse into one cluster, got {matches:?}"
+        );
+        assert_eq!(matches[0].forms.len(), 3);
+        // Cluster score is the MINIMUM intra-clique pairwise Jaccard
+        // (all pairs are 9/11 here).
+        assert!(
+            (matches[0].score - 9.0 / 11.0).abs() < 1e-9,
+            "expected 9/11, got {}",
+            matches[0].score
+        );
+    }
+
+    #[test]
+    fn pass2_chain_emits_clique_plus_residual_pair() {
+        // A–B and B–C clear the threshold; A–C does not. Clique
+        // semantics must NOT merge all three (the A–C pair would be
+        // below threshold inside the cluster). Edge conservation must
+        // NOT drop the real B–C relationship either: the output is
+        // the carved 2-clique plus the leftover edge as a residual
+        // binary match.
+        //
+        // A = {1..=9, 20}, B = {1..=10}, C = {2..=10, 21}:
+        //   A∩B = 9, A∪B = 11 → 0.818 >= 0.8
+        //   B∩C = 9, B∪C = 11 → 0.818 >= 0.8
+        //   A∩C = 8, A∪C = 12 → 0.667 <  0.8
+        let a: Vec<u64> = (1..=9).chain([20]).collect();
+        let b: Vec<u64> = (1..=10).collect();
+        let c: Vec<u64> = (2..=10).chain([21]).collect();
+        let forms = vec![make_form(&a, 10), make_form(&b, 10), make_form(&c, 10)];
+        let matches = compare(&forms, 0.8);
+        assert_eq!(
+            matches.len(),
+            2,
+            "chain must emit clique + residual pair, got {matches:?}"
+        );
+        assert!(
+            matches.iter().all(|m| m.forms.len() == 2),
+            "no 3-form cluster may form across a below-threshold pair: {matches:?}"
+        );
+    }
+
+    #[test]
+    fn pass2_cluster_tier_follows_min_pairwise_score() {
+        // 3-clique with heterogeneous pair scores: A–C and B–C are
+        // 19/20 = 0.95 (AutoRefactor range) but A–B is 19/21 ≈ 0.905.
+        // The cluster routes by its WEAKEST pair: ReviewFirst.
+        let a: Vec<u64> = (1..=19).chain([20]).collect();
+        let b: Vec<u64> = (1..=19).chain([21]).collect();
+        let c: Vec<u64> = (1..=19).collect();
+        let forms = vec![make_form(&a, 20), make_form(&b, 20), make_form(&c, 19)];
+        let matches = compare(&forms, 0.85);
+        assert_eq!(matches.len(), 1, "expected one 3-clique, got {matches:?}");
+        assert_eq!(matches[0].forms.len(), 3);
+        assert!(
+            (matches[0].score - 19.0 / 21.0).abs() < 1e-9,
+            "cluster score must be the min pair (19/21), got {}",
+            matches[0].score
+        );
+        assert_eq!(matches[0].tier, Tier::ReviewFirst);
+    }
+
+    #[test]
+    fn pass2_cluster_members_ordered_by_file_identity() {
+        // Cluster members are ordered by (file, span.start), not by
+        // input index — the ordering is wire-visible (forms[0] feeds
+        // the canonical output sort) and must be stable across walker
+        // orderings.
+        let paths = vec![
+            FilePath::from(std::path::PathBuf::from("z.rs")),
+            FilePath::from(std::path::PathBuf::from("a.rs")),
+            FilePath::from(std::path::PathBuf::from("m.rs")),
+        ];
+        let matches = compare_with_paths(&triangle_forms(), &paths, 0.8);
+        assert_eq!(matches.len(), 1);
+        let files: Vec<String> = matches[0]
+            .forms
+            .iter()
+            .map(|f| f.file.to_string())
+            .collect();
+        assert_eq!(files, vec!["a.rs", "m.rs", "z.rs"]);
+    }
+
+    #[test]
+    fn pass2_cluster_membership_is_stable_across_input_permutation() {
+        // Same forms, permuted input order (paths permuted alongside):
+        // the emitted match set must be identical up to ordering —
+        // membership and scores may not depend on input indices.
+        let forms = triangle_forms();
+        let paths: Vec<FilePath> = ["x.rs", "y.rs", "z.rs"]
+            .iter()
+            .map(|p| FilePath::from(std::path::PathBuf::from(p)))
+            .collect();
+
+        let canonical = |ms: &[Match]| -> Vec<(Vec<String>, u64)> {
+            let mut v: Vec<(Vec<String>, u64)> = ms
+                .iter()
+                .map(|m| {
+                    let mut files: Vec<String> =
+                        m.forms.iter().map(|f| f.file.to_string()).collect();
+                    files.sort();
+                    (files, m.score.to_bits())
+                })
+                .collect();
+            v.sort();
+            v
+        };
+
+        let forward = compare_with_paths(&forms, &paths, 0.8);
+        let permuted_forms: Vec<NormalizedForm> =
+            vec![forms[2].clone(), forms[0].clone(), forms[1].clone()];
+        let permuted_paths = vec![paths[2].clone(), paths[0].clone(), paths[1].clone()];
+        let backward = compare_with_paths(&permuted_forms, &permuted_paths, 0.8);
+
+        assert_eq!(canonical(&forward), canonical(&backward));
+    }
+
+    #[test]
+    fn pass2_path_of_four_conserves_every_edge() {
+        // Path A–B–C–D where consecutive pairs clear the threshold
+        // and all other pairs are below. Carving yields two 2-cliques
+        // and one residual pair — three binary matches that together
+        // cover exactly the three collected edges (edge conservation).
+        //
+        // A = {1..=9, 20}, B = {1..=10}, C = {2..=10, 21},
+        // D = {2..=9, 21, 30}:
+        //   A–B 9/11, B–C 9/11, C–D 9/11 (all >= 0.8)
+        //   A–C 8/12, A–D 8/12, B–D 8/12 (all < 0.8)
+        let a: Vec<u64> = (1..=9).chain([20]).collect();
+        let b: Vec<u64> = (1..=10).collect();
+        let c: Vec<u64> = (2..=10).chain([21]).collect();
+        let d: Vec<u64> = (2..=9).chain([21, 30]).collect();
+        let forms = vec![
+            make_form(&a, 10),
+            make_form(&b, 10),
+            make_form(&c, 10),
+            make_form(&d, 10),
+        ];
+        let matches = compare(&forms, 0.8);
+        assert_eq!(
+            matches.len(),
+            3,
+            "path of four must emit exactly its three edges, got {matches:?}"
+        );
+        assert!(matches.iter().all(|m| m.forms.len() == 2));
+    }
+
+    #[test]
+    fn oversize_component_falls_back_to_pairwise_passthrough() {
+        // A 4-clique with a component cap of 3 skips carving and
+        // emits all six edges pairwise — deterministic defense for
+        // pathological generated-code families (adr-cluster-output
+        // ADR-6). Exercises `emit_pass2_clusters` directly with a
+        // small cap; the production cap is `CLUSTER_COMPONENT_CAP`.
+        //
+        // Shared core {1..=9} plus one unique element each: every
+        // pair is 9/11 ≈ 0.818.
+        let sets: Vec<Vec<u64>> = (0..4u64)
+            .map(|u| (1..=9).chain([100 + u]).collect())
+            .collect();
+        let forms: Vec<NormalizedForm> = sets.iter().map(|s| make_form(s, 10)).collect();
+        let claimed: HashSet<usize> = HashSet::new();
+        let edges = pass2_sliding_window(&forms, 0.8, &claimed);
+        assert_eq!(edges.len(), 6, "4-clique has six edges");
+
+        let mut capped: Vec<Match> = Vec::new();
+        emit_pass2_clusters(&forms, &SyntheticPathResolver, 0.8, &edges, 3, &mut capped);
+        assert_eq!(
+            capped.len(),
+            6,
+            "cap 3 must passthrough all six edges pairwise, got {capped:?}"
+        );
+        assert!(capped.iter().all(|m| m.forms.len() == 2));
+
+        let mut uncapped: Vec<Match> = Vec::new();
+        emit_pass2_clusters(
+            &forms,
+            &SyntheticPathResolver,
+            0.8,
+            &edges,
+            CLUSTER_COMPONENT_CAP,
+            &mut uncapped,
+        );
+        assert_eq!(uncapped.len(), 1, "uncapped carving emits one 4-clique");
+        assert_eq!(uncapped[0].forms.len(), 4);
     }
 }

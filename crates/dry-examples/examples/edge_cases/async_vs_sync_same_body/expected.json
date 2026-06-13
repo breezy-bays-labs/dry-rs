@@ -10,11 +10,11 @@
             "span": {
               "end": {
                 "column": 1,
-                "line": 17
+                "line": 10
               },
               "start": {
-                "column": 0,
-                "line": 12
+                "column": 6,
+                "line": 5
               }
             }
           },
@@ -24,11 +24,11 @@
             "span": {
               "end": {
                 "column": 1,
-                "line": 10
+                "line": 17
               },
               "start": {
-                "column": 6,
-                "line": 5
+                "column": 0,
+                "line": 12
               }
             }
           }
