@@ -124,6 +124,13 @@ use std::hash::BuildHasher;
 
 use crate::domain::{FilePath, FormRef, LineColumn, Match, NormalizedForm, Tier};
 
+mod antiunify;
+
+pub use antiunify::{
+    DistinctValue, Divergence, Hole, HoleId, HoleKind, SubElement, Substitution, Template,
+    TemplateNode, antiunify, instantiate,
+};
+
 /// Floor below which a score-tier is downgraded from
 /// [`Tier::AutoRefactor`] — pinned at `0.95` per the roadmap's
 /// threshold-tier vocabulary. Scores at or above this floor route
