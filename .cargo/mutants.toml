@@ -111,6 +111,41 @@ exclude_re = [
     # guard change and is CAUGHT, so it is NOT excluded. tracked: dry-rs#116
     "comparison/mod\\.rs:851:30: replace < with (==|>|<=) in uf_union",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
+    # EQUIVALENT: `candidate_beats_best`'s `Ordering::Equal` arm is the
+    # identity tie-break `ident[&cand] < ident[&best_cand]`. `cand` and
+    # `best_cand` are ALWAYS distinct nodes: `best_cand` was a PRIOR
+    # `cand` from the same `for &cand in adj[&clique[0]].keys()` scan
+    # (BTreeMap keys are unique), and the current `cand` is skipped if it
+    # is already a clique member (line 774), so the current and prior
+    # nodes never coincide. `NodeIdent` ends in the form's input index
+    # (`(FilePath, LineColumn, LineColumn, usize)`), which is unique per
+    # node, so `ident[&cand] != ident[&best_cand]` always holds. On a
+    # total order with distinct operands `a < b` and `a <= b` agree, so
+    # the `< -> <=` flip is behaviorally identical — no test can
+    # distinguish them. Operator-granular: ONLY `< with <=`. The sibling
+    # `< with ==` (admit on every tie -> wrong member on ties) and
+    # `< with >` (reverse the tie-break -> wrong member) DO change
+    # behavior and are CAUGHT by
+    # `candidate_tie_break_picks_smaller_identity_deterministically`, so
+    # they are NOT excluded. tracked: dry-rs#116
+    "comparison/mod\\.rs:818:55: replace < with <= in candidate_beats_best",
+    # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
+    # TIMEOUT-DETECTED (NOT an equivalence claim): the FIRST `if p ==
+    # root` loop in `uf_find` (line 829, col 14) is the root walk that
+    # ascends the parent chain to the component root, breaking when a
+    # node is its own parent (`p == root`). Flipping `==` to `!=`
+    # inverts the break condition: the walk no longer stops at the
+    # self-parent root, so `root` is corrupted to a non-root node — and
+    # the SECOND (path-compression) loop, rewriting `parent[cur] = root`
+    # against that corrupt target on a non-trivial parent chain, never
+    # reaches its own `p == root` break and spins forever. A genuine
+    # infinite loop, caught via cargo-mutants's timeout path (exit 3)
+    # under the `minimum_test_timeout = 120` floor. Operator-granular
+    # (only the `== -> !=` at col 14 of the FIRST loop); excluded to
+    # keep the green-CI signal clean per the ADR's timeout-detected
+    # handling, NOT as an equivalence claim. tracked: dry-rs#116
+    "comparison/mod\\.rs:829:14: replace == with != in uf_find",
+    # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # EQUIVALENT: the SECOND `if p == root` loop in `uf_find` is path
     # compression (a perf optimization). `uf_find`'s RETURN value (the
     # root) is computed in the FIRST loop; the second loop only rewrites
@@ -120,7 +155,9 @@ exclude_re = [
     # unchanged. Verified: the full `dry-core` suite PASSES under this
     # mutant. Anchored to col 14 of line 836 (the path-compression loop)
     # — the FIRST `== -> !=` at line 829 col 14 corrupts the root walk
-    # and is CAUGHT, so it is NOT excluded. tracked: dry-rs#116
+    # into a genuine infinite loop and is TIMEOUT-DETECTED (see the
+    # separate 829 entry directly above), a different line/loop from
+    # this path-compression equivalence. tracked: dry-rs#116
     "comparison/mod\\.rs:836:14: replace == with != in uf_find",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # TIMEOUT-DETECTED (NOT an equivalence claim): replacing
