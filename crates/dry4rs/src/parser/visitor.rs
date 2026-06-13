@@ -497,8 +497,9 @@ fn walk_pat<S: SubformSink>(sink: &mut S, pat: &syn::Pat) -> S::Out {
             // The bound name is an alpha-renameable Var — its REAL surface
             // text rides the tree leaf (dry-rs#138) while the fingerprint
             // collapses to the Var class.
-            sink.record_identifier(pi.ident.to_string());
-            sink.leaf_var(&mut node, &pi.ident.to_string(), node_span(&pi.ident));
+            let name = pi.ident.to_string();
+            sink.leaf_var(&mut node, &name, node_span(&pi.ident));
+            sink.record_identifier(name);
             if pi.mutability.is_some() {
                 sink.leaf(&mut node, &NormalizedToken::Kw("mut"), pat_span);
             }

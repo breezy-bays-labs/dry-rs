@@ -153,7 +153,7 @@ fn three_member_rename_cluster_fires_rename_count_with_real_lexemes() {
     assert!(
         ["input", "value", "number"]
             .iter()
-            .any(|name| lexemes.contains(name)),
+            .all(|name| lexemes.contains(name)),
         "rename-hole substitutions must show the real param names, got: {lexemes:?}"
     );
     assert!(
