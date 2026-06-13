@@ -23,19 +23,18 @@ const INTEGRATION_TEST_ROOTS: &[&str] = &["tests", "benches"];
 /// Does `path` live under a Cargo integration-test root (`tests/` or
 /// `benches/`)?
 ///
-/// Matches on a PATH COMPONENT (so `src/tests_helpers.rs` is NOT a
-/// match — `tests_helpers` is not the `tests` component), and works
-/// regardless of separator style: `Path::components` normalises both
-/// `/` and `\` on the respective platforms, and we additionally split
-/// raw components on backslashes so a Windows-style path captured on a
+/// Matches on a PATH SEGMENT (so `src/tests_helpers.rs` is NOT a
+/// match — `tests_helpers` is not the `tests` segment), and works
+/// regardless of separator style: the path is lowered to a string once
+/// and split on both `/` and `\`, so a Windows-style path captured on a
 /// Unix host (or vice versa) still classifies correctly (see global
-/// memory: Rust emits backslashes on Windows runners).
+/// memory: Rust emits backslashes on Windows runners). Splitting the
+/// whole string once avoids the per-component allocation of iterating
+/// `Path::components` (a single `to_string_lossy` + `split`).
 fn is_integration_test_path(path: &Path) -> bool {
-    path.components().any(|component| {
-        let raw = component.as_os_str().to_string_lossy();
-        raw.split(['/', '\\'])
-            .any(|segment| INTEGRATION_TEST_ROOTS.contains(&segment))
-    })
+    path.to_string_lossy()
+        .split(['/', '\\'])
+        .any(|segment| INTEGRATION_TEST_ROOTS.contains(&segment))
 }
 
 /// The Rust adapter that converts Rust source into [`NormalizedForm`]s
