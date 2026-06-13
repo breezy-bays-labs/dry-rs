@@ -27,15 +27,28 @@
 //!   at v0.1.
 //! - **`node_count` is per-leaf** (per O8 table); `fingerprint_set`
 //!   cardinality exceeds it.
+//!
+//! ## Generic dispatch
+//!
+//! The syn-subtree traversal — which nodes open a subform, the order
+//! their children fold, and which leaf tokens each contributes — lives
+//! in [`super::visitor`] behind the [`SubformSink`] trait, NOT inline
+//! here. [`FormEmitter`] is the v0.1 sink: it maps the node lifecycle
+//! onto an `Xxh3` fold, reproducing the original inline hashing
+//! byte-for-byte (the fingerprint-determinism gate of dry-rs#121). A
+//! future tree-building sink (PR 4) reuses the same dispatch, so the
+//! fingerprint path and the tree path cannot drift on *which* subforms
+//! exist. This module owns only form ENUMERATION (which fn-shaped bodies
+//! become [`NormalizedForm`]s) and the [`FormEmitter`] sink.
 
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
-use dry_core::domain::{FormKind, LineColumn, NormalizedForm, Span};
-use proc_macro2::Span as PmSpan;
+use dry_core::domain::{FormKind, NormalizedForm, Span};
 use xxhash_rust::xxh3::Xxh3;
 
 use super::token::NormalizedToken;
+use super::visitor::{self, SubformSink, span_from_pm};
 
 /// Walk a parsed `syn::File` and produce one [`NormalizedForm`] per
 /// emitted form-shape body.
@@ -163,30 +176,15 @@ impl Walker {
     fn emit_item_fn(&mut self, item_fn: &syn::ItemFn, qpath: &[String], in_test_module: bool) {
         let mut form_qpath: Vec<String> = qpath.to_vec();
         form_qpath.push(item_fn.sig.ident.to_string());
-        let kind = if in_test_module || has_test_attr(&item_fn.attrs) {
-            FormKind::Test
-        } else {
-            FormKind::Production
-        };
+        let kind = form_kind(in_test_module, &item_fn.attrs);
         let span = Self::span_for_item_fn(item_fn);
 
         let mut emitter = FormEmitter::new();
         emitter.hash_attrs(&item_fn.attrs);
-        emitter.hash_sig(&item_fn.sig);
-        emitter.hash_block(&item_fn.block);
+        visitor::walk_sig(&mut emitter, &item_fn.sig);
+        visitor::walk_block(&mut emitter, &item_fn.block);
 
-        let (fingerprint_set, identifier_set, node_count) = emitter.into_parts();
-        let line_count = lines_in_span(&span);
-        let form = NormalizedForm::with_context(
-            kind,
-            fingerprint_set,
-            identifier_set,
-            form_qpath,
-            span,
-            node_count,
-            line_count,
-        );
-        self.forms.push(form);
+        self.push_form(emitter, kind, form_qpath, span);
     }
 
     fn emit_impl_item_fn(
@@ -197,30 +195,15 @@ impl Walker {
     ) {
         let mut form_qpath: Vec<String> = qpath.to_vec();
         form_qpath.push(impl_fn.sig.ident.to_string());
-        let kind = if in_test_module || has_test_attr(&impl_fn.attrs) {
-            FormKind::Test
-        } else {
-            FormKind::Production
-        };
+        let kind = form_kind(in_test_module, &impl_fn.attrs);
         let span = Self::span_for_impl_item_fn(impl_fn);
 
         let mut emitter = FormEmitter::new();
         emitter.hash_attrs(&impl_fn.attrs);
-        emitter.hash_sig(&impl_fn.sig);
-        emitter.hash_block(&impl_fn.block);
+        visitor::walk_sig(&mut emitter, &impl_fn.sig);
+        visitor::walk_block(&mut emitter, &impl_fn.block);
 
-        let (fingerprint_set, identifier_set, node_count) = emitter.into_parts();
-        let line_count = lines_in_span(&span);
-        let form = NormalizedForm::with_context(
-            kind,
-            fingerprint_set,
-            identifier_set,
-            form_qpath,
-            span,
-            node_count,
-            line_count,
-        );
-        self.forms.push(form);
+        self.push_form(emitter, kind, form_qpath, span);
     }
 
     fn emit_trait_item_fn(
@@ -234,18 +217,28 @@ impl Walker {
         };
         let mut form_qpath: Vec<String> = qpath.to_vec();
         form_qpath.push(trait_fn.sig.ident.to_string());
-        let kind = if in_test_module || has_test_attr(&trait_fn.attrs) {
-            FormKind::Test
-        } else {
-            FormKind::Production
-        };
+        let kind = form_kind(in_test_module, &trait_fn.attrs);
         let span = Self::span_for_trait_item_fn(trait_fn);
 
         let mut emitter = FormEmitter::new();
         emitter.hash_attrs(&trait_fn.attrs);
-        emitter.hash_sig(&trait_fn.sig);
-        emitter.hash_block(block);
+        visitor::walk_sig(&mut emitter, &trait_fn.sig);
+        visitor::walk_block(&mut emitter, block);
 
+        self.push_form(emitter, kind, form_qpath, span);
+    }
+
+    /// Finalise a [`FormEmitter`] into a [`NormalizedForm`] and append
+    /// it. Shared by all three form-emission sites (item / impl / trait
+    /// fn) so the part-extraction and `with_context` plumbing lives in
+    /// one place.
+    fn push_form(
+        &mut self,
+        emitter: FormEmitter,
+        kind: FormKind,
+        form_qpath: Vec<String>,
+        span: Span,
+    ) {
         let (fingerprint_set, identifier_set, node_count) = emitter.into_parts();
         let line_count = lines_in_span(&span);
         let form = NormalizedForm::with_context(
@@ -282,10 +275,33 @@ impl Walker {
     }
 }
 
-/// Per-form accumulator. Carries the fingerprint set, identifier list,
-/// and node count for the form currently being emitted. Form boundaries
-/// (nested fn, closure) consult the walker, not the emitter.
-struct FormEmitter {
+/// Resolve [`FormKind`] from the test-module context flag plus the form's
+/// attributes (`#[test]`, cucumber `#[given]`, …).
+fn form_kind(in_test_module: bool, attrs: &[syn::Attribute]) -> FormKind {
+    if in_test_module || has_test_attr(attrs) {
+        FormKind::Test
+    } else {
+        FormKind::Production
+    }
+}
+
+/// The v0.1 fingerprint-fold [`SubformSink`].
+///
+/// Maps the generic node lifecycle onto a Merkle-style `Xxh3` fold: each
+/// open node is an `Xxh3` hasher; `tag` and `fold` hash the
+/// discriminator and each child `u64`; `leaf` hashes the token and
+/// counts it; `seal` finalises the hasher and inserts the resulting
+/// `u64` into `fingerprint_set`. Carries the form's identifier list and
+/// per-leaf node count alongside.
+///
+/// This sink IS the original inline fold — the hashing operations are
+/// reproduced exactly so the refactor is byte-identical on
+/// `fingerprint_set` / `node_count` / `identifier_set`. Form boundaries
+/// (nested fn, closure) are handled by the [`Walker`]'s enumeration, not
+/// the sink: the walker simply never recurses into a nested form's body,
+/// so the dispatch only ever feeds this sink the enclosing form's
+/// subtree.
+pub(super) struct FormEmitter {
     fingerprint_set: HashSet<u64>,
     identifier_set: Vec<String>,
     node_count: u32,
@@ -311,6 +327,12 @@ impl FormEmitter {
     /// no fingerprint. Preserved attributes contribute an `Attr(<name>)`
     /// token to the form's fingerprint stream.
     ///
+    /// This is a form-level prelude, not a dispatched subform — the
+    /// `Attrs` node only seals (inserts its `u64`) when at least one
+    /// preserved attribute was seen, so an attribute-free fn never gains
+    /// a phantom fingerprint. It therefore drives the sink primitives
+    /// directly rather than going through [`super::visitor`].
+    ///
     /// Attribute names are NOT recorded into `identifier_set` — the
     /// O11 rename-signal contract uses `identifier_set` for renameable
     /// identifiers (locals, fn names, type names, field names). An
@@ -318,933 +340,49 @@ impl FormEmitter {
     /// language vocabulary, not a renameable identifier, and including
     /// it would create false rename-diff signal at v0.2+.
     fn hash_attrs(&mut self, attrs: &[syn::Attribute]) {
-        let mut hasher = Xxh3::new();
-        "Attrs".hash(&mut hasher);
+        let mut node = self.begin("Attrs");
         let mut any_preserved = false;
         for attr in attrs {
             let Some(name) = preserved_attr_name(attr) else {
                 continue;
             };
             any_preserved = true;
-            self.feed_token(&mut hasher, &NormalizedToken::Attr(name));
+            self.leaf(&mut node, &NormalizedToken::Attr(name));
         }
         if any_preserved {
-            let fp = hasher.finish();
-            self.fingerprint_set.insert(fp);
+            self.seal(node);
         }
     }
+}
 
-    /// Hash the function signature: name + param types + return type +
-    /// modifier keywords (async / const / unsafe).
-    fn hash_sig(&mut self, sig: &syn::Signature) -> u64 {
-        let mut hasher = Xxh3::new();
-        "Sig".hash(&mut hasher);
+impl SubformSink for FormEmitter {
+    type Out = u64;
+    type Node = Xxh3;
 
-        if sig.constness.is_some() {
-            self.feed_token(&mut hasher, &NormalizedToken::Modifier("const"));
-        }
-        if sig.asyncness.is_some() {
-            self.feed_token(&mut hasher, &NormalizedToken::Modifier("async"));
-        }
-        if sig.unsafety.is_some() {
-            self.feed_token(&mut hasher, &NormalizedToken::Modifier("unsafe"));
-        }
-
-        // Function name is preserved as Ident.
-        let name = sig.ident.to_string();
-        self.record_identifier(name.clone());
-        self.feed_token(&mut hasher, &NormalizedToken::Ident(name));
-
-        // Generic parameters (type params + lifetimes).
-        for gp in &sig.generics.params {
-            let gp_fp = self.hash_generic_param(gp);
-            gp_fp.hash(&mut hasher);
-        }
-
-        // Inputs (parameters).
-        for input in &sig.inputs {
-            let input_fp = self.hash_fn_arg(input);
-            input_fp.hash(&mut hasher);
-        }
-
-        // Return type.
-        if let syn::ReturnType::Type(_, ty) = &sig.output {
-            let ret_fp = self.hash_type(ty);
-            ret_fp.hash(&mut hasher);
-        }
-
-        let fp = hasher.finish();
-        self.fingerprint_set.insert(fp);
-        fp
+    fn begin_node(&mut self) -> Xxh3 {
+        Xxh3::new()
     }
 
-    fn hash_generic_param(&mut self, gp: &syn::GenericParam) -> u64 {
-        let mut hasher = Xxh3::new();
-        match gp {
-            syn::GenericParam::Type(tp) => {
-                "GenericTypeParam".hash(&mut hasher);
-                self.record_identifier(tp.ident.to_string());
-                self.feed_token(&mut hasher, &NormalizedToken::TypeParam);
-                for bound in &tp.bounds {
-                    let bound_fp = self.hash_type_param_bound(bound);
-                    bound_fp.hash(&mut hasher);
-                }
-            }
-            syn::GenericParam::Lifetime(lt) => {
-                "GenericLifetimeParam".hash(&mut hasher);
-                let token = lifetime_token(&lt.lifetime);
-                self.feed_token(&mut hasher, &token);
-            }
-            syn::GenericParam::Const(c) => {
-                "GenericConstParam".hash(&mut hasher);
-                self.record_identifier(c.ident.to_string());
-                self.feed_token(&mut hasher, &NormalizedToken::TypeParam);
-                let ty_fp = self.hash_type(&c.ty);
-                ty_fp.hash(&mut hasher);
-            }
-        }
-        let fp = hasher.finish();
-        self.fingerprint_set.insert(fp);
-        fp
+    fn tag(&mut self, node: &mut Xxh3, tag: &'static str) {
+        tag.hash(node);
     }
 
-    fn hash_type_param_bound(&mut self, bound: &syn::TypeParamBound) -> u64 {
-        let mut hasher = Xxh3::new();
-        match bound {
-            syn::TypeParamBound::Trait(t) => {
-                "TraitBound".hash(&mut hasher);
-                let path_fp = self.hash_path(&t.path);
-                path_fp.hash(&mut hasher);
-            }
-            syn::TypeParamBound::Lifetime(lt) => {
-                "LifetimeBound".hash(&mut hasher);
-                let token = lifetime_token(lt);
-                self.feed_token(&mut hasher, &token);
-            }
-            _ => {
-                "UnknownBound".hash(&mut hasher);
-            }
-        }
-        let fp = hasher.finish();
-        self.fingerprint_set.insert(fp);
-        fp
+    fn fold(&mut self, node: &mut Xxh3, child: u64) {
+        child.hash(node);
     }
 
-    fn hash_fn_arg(&mut self, arg: &syn::FnArg) -> u64 {
-        let mut hasher = Xxh3::new();
-        match arg {
-            syn::FnArg::Receiver(r) => {
-                "Receiver".hash(&mut hasher);
-                if r.reference.is_some() {
-                    self.feed_token(&mut hasher, &NormalizedToken::Op("&"));
-                }
-                if r.mutability.is_some() {
-                    self.feed_token(&mut hasher, &NormalizedToken::Kw("mut"));
-                }
-                self.feed_token(&mut hasher, &NormalizedToken::Var);
-            }
-            syn::FnArg::Typed(pt) => {
-                "TypedArg".hash(&mut hasher);
-                let pat_fp = self.hash_pat(&pt.pat);
-                pat_fp.hash(&mut hasher);
-                let ty_fp = self.hash_type(&pt.ty);
-                ty_fp.hash(&mut hasher);
-            }
-        }
-        let fp = hasher.finish();
-        self.fingerprint_set.insert(fp);
-        fp
-    }
-
-    fn hash_type(&mut self, ty: &syn::Type) -> u64 {
-        let mut hasher = Xxh3::new();
-        match ty {
-            syn::Type::Path(tp) => {
-                "TypePath".hash(&mut hasher);
-                let path_fp = self.hash_path(&tp.path);
-                path_fp.hash(&mut hasher);
-            }
-            syn::Type::Reference(r) => {
-                "TypeRef".hash(&mut hasher);
-                if r.mutability.is_some() {
-                    self.feed_token(&mut hasher, &NormalizedToken::Kw("mut"));
-                }
-                if let Some(lt) = &r.lifetime {
-                    let token = lifetime_token(lt);
-                    self.feed_token(&mut hasher, &token);
-                }
-                let inner_fp = self.hash_type(&r.elem);
-                inner_fp.hash(&mut hasher);
-            }
-            syn::Type::Tuple(t) => {
-                "TypeTuple".hash(&mut hasher);
-                for elem in &t.elems {
-                    let elem_fp = self.hash_type(elem);
-                    elem_fp.hash(&mut hasher);
-                }
-            }
-            syn::Type::Array(a) => {
-                "TypeArray".hash(&mut hasher);
-                let inner_fp = self.hash_type(&a.elem);
-                inner_fp.hash(&mut hasher);
-                let len_fp = self.hash_expr(&a.len);
-                len_fp.hash(&mut hasher);
-            }
-            syn::Type::Slice(s) => {
-                "TypeSlice".hash(&mut hasher);
-                let inner_fp = self.hash_type(&s.elem);
-                inner_fp.hash(&mut hasher);
-            }
-            syn::Type::TraitObject(to) => {
-                "TypeDyn".hash(&mut hasher);
-                for bound in &to.bounds {
-                    let bound_fp = self.hash_type_param_bound(bound);
-                    bound_fp.hash(&mut hasher);
-                }
-            }
-            syn::Type::ImplTrait(it) => {
-                "TypeImpl".hash(&mut hasher);
-                for bound in &it.bounds {
-                    let bound_fp = self.hash_type_param_bound(bound);
-                    bound_fp.hash(&mut hasher);
-                }
-            }
-            syn::Type::BareFn(_)
-            | syn::Type::Group(_)
-            | syn::Type::Infer(_)
-            | syn::Type::Macro(_)
-            | syn::Type::Never(_)
-            | syn::Type::Paren(_)
-            | syn::Type::Ptr(_)
-            | syn::Type::Verbatim(_) => {
-                // Less-common type shapes — emit a discriminator and a
-                // placeholder; downstream PRs can refine if these turn
-                // out to be duplication hotspots.
-                "TypeOther".hash(&mut hasher);
-            }
-            _ => {
-                "TypeUnknown".hash(&mut hasher);
-            }
-        }
-        let fp = hasher.finish();
-        self.fingerprint_set.insert(fp);
-        // node_count is per-leaf (O8 ADR); the subform itself does NOT
-        // contribute. Any leaf tokens fed via feed_token during the
-        // match arms above already incremented node_count.
-        fp
-    }
-
-    fn hash_path(&mut self, path: &syn::Path) -> u64 {
-        let mut hasher = Xxh3::new();
-        "Path".hash(&mut hasher);
-        for seg in &path.segments {
-            let name = seg.ident.to_string();
-            self.record_identifier(name.clone());
-            // If the segment looks like a generic placeholder (single
-            // uppercase letter or short PascalCase that matches no real
-            // type), we still preserve it as PathSeg — the heuristic
-            // for distinguishing generic params from types is contextual
-            // and lives elsewhere.
-            self.feed_token(&mut hasher, &NormalizedToken::PathSeg(name));
-            // Generic arguments inside the path segment.
-            if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
-                for arg in &args.args {
-                    let arg_fp = self.hash_generic_arg(arg);
-                    arg_fp.hash(&mut hasher);
-                }
-            }
-        }
-        let fp = hasher.finish();
-        self.fingerprint_set.insert(fp);
-        fp
-    }
-
-    fn hash_generic_arg(&mut self, arg: &syn::GenericArgument) -> u64 {
-        let mut hasher = Xxh3::new();
-        match arg {
-            syn::GenericArgument::Type(ty) => {
-                "GArgType".hash(&mut hasher);
-                let ty_fp = self.hash_type(ty);
-                ty_fp.hash(&mut hasher);
-            }
-            syn::GenericArgument::Lifetime(lt) => {
-                "GArgLifetime".hash(&mut hasher);
-                let token = lifetime_token(lt);
-                self.feed_token(&mut hasher, &token);
-            }
-            syn::GenericArgument::Const(expr) => {
-                "GArgConst".hash(&mut hasher);
-                let e_fp = self.hash_expr(expr);
-                e_fp.hash(&mut hasher);
-            }
-            _ => {
-                "GArgOther".hash(&mut hasher);
-            }
-        }
-        let fp = hasher.finish();
-        self.fingerprint_set.insert(fp);
-        fp
-    }
-
-    fn hash_pat(&mut self, pat: &syn::Pat) -> u64 {
-        let mut hasher = Xxh3::new();
-        match pat {
-            syn::Pat::Ident(pi) => self.hash_pat_ident(&mut hasher, pi),
-            syn::Pat::Wild(_) => "PatWild".hash(&mut hasher),
-            syn::Pat::Path(pp) => self.hash_pat_path(&mut hasher, &pp.path),
-            syn::Pat::Lit(pl) => self.hash_pat_lit(&mut hasher, &pl.lit),
-            syn::Pat::Tuple(t) => self.hash_pat_seq(&mut hasher, "PatTuple", &t.elems),
-            syn::Pat::Slice(s) => self.hash_pat_seq(&mut hasher, "PatSlice", &s.elems),
-            syn::Pat::Or(po) => self.hash_pat_seq(&mut hasher, "PatOr", &po.cases),
-            syn::Pat::TupleStruct(ts) => self.hash_pat_tuple_struct(&mut hasher, ts),
-            syn::Pat::Struct(ps) => self.hash_pat_struct(&mut hasher, ps),
-            syn::Pat::Reference(pr) => self.hash_pat_reference(&mut hasher, pr),
-            syn::Pat::Type(pt) => self.hash_pat_type(&mut hasher, pt),
-            syn::Pat::Range(_) => "PatRange".hash(&mut hasher),
-            syn::Pat::Rest(_) => "PatRest".hash(&mut hasher),
-            _ => "PatOther".hash(&mut hasher),
-        }
-        let fp = hasher.finish();
-        self.fingerprint_set.insert(fp);
-        // node_count is per-leaf (O8 ADR); the pattern subform itself
-        // does NOT contribute. Leaf tokens fed via feed_token during
-        // the match arms above already incremented node_count.
-        fp
-    }
-
-    fn hash_pat_ident(&mut self, hasher: &mut Xxh3, pi: &syn::PatIdent) {
-        "PatIdent".hash(hasher);
-        self.record_identifier(pi.ident.to_string());
-        self.feed_token(hasher, &NormalizedToken::Var);
-        if pi.mutability.is_some() {
-            self.feed_token(hasher, &NormalizedToken::Kw("mut"));
-        }
-    }
-
-    fn hash_pat_path(&mut self, hasher: &mut Xxh3, path: &syn::Path) {
-        "PatPath".hash(hasher);
-        let path_fp = self.hash_path(path);
-        path_fp.hash(hasher);
-    }
-
-    fn hash_pat_lit(&mut self, hasher: &mut Xxh3, lit: &syn::Lit) {
-        "PatLit".hash(hasher);
-        let lit_token = Self::lit_to_token(lit);
-        self.feed_token(hasher, &lit_token);
-    }
-
-    /// Hash a sub-pattern sequence (Tuple / Slice / Or arms) with a
-    /// caller-supplied discriminator. Generic over the punctuation
-    /// token because syn uses `Comma` for Tuple/Slice and `Or` for
-    /// Or-patterns.
-    fn hash_pat_seq<P>(
-        &mut self,
-        hasher: &mut Xxh3,
-        discriminator: &'static str,
-        elems: &syn::punctuated::Punctuated<syn::Pat, P>,
-    ) {
-        discriminator.hash(hasher);
-        for elem in elems {
-            let e_fp = self.hash_pat(elem);
-            e_fp.hash(hasher);
-        }
-    }
-
-    fn hash_pat_tuple_struct(&mut self, hasher: &mut Xxh3, ts: &syn::PatTupleStruct) {
-        "PatTupleStruct".hash(hasher);
-        let path_fp = self.hash_path(&ts.path);
-        path_fp.hash(hasher);
-        for elem in &ts.elems {
-            let e_fp = self.hash_pat(elem);
-            e_fp.hash(hasher);
-        }
-    }
-
-    fn hash_pat_struct(&mut self, hasher: &mut Xxh3, ps: &syn::PatStruct) {
-        "PatStruct".hash(hasher);
-        let path_fp = self.hash_path(&ps.path);
-        path_fp.hash(hasher);
-        for field in &ps.fields {
-            let f_fp = self.hash_pat(&field.pat);
-            f_fp.hash(hasher);
-        }
-    }
-
-    fn hash_pat_reference(&mut self, hasher: &mut Xxh3, pr: &syn::PatReference) {
-        "PatRef".hash(hasher);
-        if pr.mutability.is_some() {
-            self.feed_token(hasher, &NormalizedToken::Kw("mut"));
-        }
-        let inner_fp = self.hash_pat(&pr.pat);
-        inner_fp.hash(hasher);
-    }
-
-    fn hash_pat_type(&mut self, hasher: &mut Xxh3, pt: &syn::PatType) {
-        "PatType".hash(hasher);
-        let inner_fp = self.hash_pat(&pt.pat);
-        inner_fp.hash(hasher);
-        let ty_fp = self.hash_type(&pt.ty);
-        ty_fp.hash(hasher);
-    }
-
-    fn hash_block(&mut self, block: &syn::Block) -> u64 {
-        let mut hasher = Xxh3::new();
-        "Block".hash(&mut hasher);
-        for stmt in &block.stmts {
-            let s_fp = self.hash_stmt(stmt);
-            s_fp.hash(&mut hasher);
-        }
-        let fp = hasher.finish();
-        self.fingerprint_set.insert(fp);
-        // Block itself is a structural wrapper; per O8 it does NOT
-        // count toward node_count. The contained statements do.
-        fp
-    }
-
-    fn hash_stmt(&mut self, stmt: &syn::Stmt) -> u64 {
-        let mut hasher = Xxh3::new();
-        match stmt {
-            syn::Stmt::Local(local) => {
-                "StmtLet".hash(&mut hasher);
-                self.feed_token(&mut hasher, &NormalizedToken::Kw("let"));
-                let pat_fp = self.hash_pat(&local.pat);
-                pat_fp.hash(&mut hasher);
-                if let Some(init) = &local.init {
-                    let e_fp = self.hash_expr(&init.expr);
-                    e_fp.hash(&mut hasher);
-                    if let Some((_, else_block)) = &init.diverge {
-                        let div_fp = self.hash_expr(else_block);
-                        div_fp.hash(&mut hasher);
-                    }
-                }
-            }
-            syn::Stmt::Item(item) => {
-                "StmtItem".hash(&mut hasher);
-                // Nested item — form-boundary marker. The nested item
-                // may emit its own form (via top-level visit_item),
-                // BUT we don't recurse into nested forms from inside a
-                // function body at v0.1 (function-local items are
-                // emitted as form-boundary markers only).
-                if matches!(item, syn::Item::Fn(_)) {
-                    self.feed_token(&mut hasher, &NormalizedToken::NestedFn);
-                }
-                // Other nested item shapes don't carry useful structural
-                // signal inside an enclosing fn body; collapse to a
-                // generic marker.
-            }
-            syn::Stmt::Expr(expr, _semi) => {
-                "StmtExpr".hash(&mut hasher);
-                let e_fp = self.hash_expr(expr);
-                e_fp.hash(&mut hasher);
-            }
-            syn::Stmt::Macro(m) => {
-                "StmtMacro".hash(&mut hasher);
-                let m_fp = self.hash_macro(&m.mac);
-                m_fp.hash(&mut hasher);
-            }
-        }
-        let fp = hasher.finish();
-        self.fingerprint_set.insert(fp);
-        fp
-    }
-
-    fn hash_expr(&mut self, expr: &syn::Expr) -> u64 {
-        let mut hasher = Xxh3::new();
-        // Dispatch by category to keep the outer match small. Each
-        // category helper handles a fraction of `syn::Expr`'s ~33
-        // variants. Less-common shapes (Group, Verbatim, Const block,
-        // TryBlock, Yield, …) fall through to the `_ => ExprOther`
-        // arm; downstream PRs refine if profiling shows duplication
-        // hotspots there.
-        if !self.hash_expr_dispatch(&mut hasher, expr) {
-            "ExprOther".hash(&mut hasher);
-        }
-        let fp = hasher.finish();
-        self.fingerprint_set.insert(fp);
-        // Expression itself is a fingerprint-emitting subform; whether
-        // it counts as a node_count leaf depends on what it is. We
-        // count primitives (Lit, Path leaves) via feed_token; the
-        // subform itself does not add to node_count here (would
-        // double-count).
-        fp
-    }
-
-    /// Dispatch a `syn::Expr` to its category-grouped hash helper.
-    /// Returns `true` when a category handler claimed the variant;
-    /// `false` falls back to the [`Self::hash_expr`] caller's
-    /// `ExprOther` discriminator.
-    fn hash_expr_dispatch(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
-        if self.hash_expr_value(hasher, expr) {
-            return true;
-        }
-        if self.hash_expr_operator(hasher, expr) {
-            return true;
-        }
-        if self.hash_expr_call_like(hasher, expr) {
-            return true;
-        }
-        if self.hash_expr_control(hasher, expr) {
-            return true;
-        }
-        if self.hash_expr_collection(hasher, expr) {
-            return true;
-        }
-        if self.hash_expr_wrap(hasher, expr) {
-            return true;
-        }
-        self.hash_expr_block_like(hasher, expr)
-    }
-
-    /// Value-level expressions: path-or-local, literal, struct
-    /// literal, repeat.
-    fn hash_expr_value(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
-        match expr {
-            syn::Expr::Path(ep) => self.hash_expr_path(hasher, ep),
-            syn::Expr::Lit(el) => self.hash_expr_lit(hasher, &el.lit),
-            syn::Expr::Struct(es) => self.hash_expr_struct(hasher, es),
-            syn::Expr::Repeat(er) => self.hash_expr_repeat(hasher, er),
-            _ => return false,
-        }
-        true
-    }
-
-    /// Operator expressions: binary, unary, assign, cast, range, try.
-    fn hash_expr_operator(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
-        match expr {
-            syn::Expr::Binary(eb) => self.hash_expr_binary(hasher, eb),
-            syn::Expr::Unary(eu) => self.hash_expr_unary(hasher, eu),
-            syn::Expr::Assign(ea) => self.hash_expr_assign(hasher, ea),
-            syn::Expr::Cast(ec) => self.hash_expr_cast(hasher, ec),
-            syn::Expr::Range(er) => self.hash_expr_range(hasher, er),
-            syn::Expr::Try(et) => self.hash_expr_try(hasher, et),
-            _ => return false,
-        }
-        true
-    }
-
-    /// Call-like expressions: free call, method call, field, index.
-    fn hash_expr_call_like(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
-        match expr {
-            syn::Expr::Call(ec) => self.hash_expr_call(hasher, ec),
-            syn::Expr::MethodCall(em) => self.hash_expr_method_call(hasher, em),
-            syn::Expr::Field(ef) => self.hash_expr_field(hasher, ef),
-            syn::Expr::Index(ei) => self.hash_expr_index(hasher, ei),
-            _ => return false,
-        }
-        true
-    }
-
-    /// Control-flow expressions: if, match, while, for, loop, return,
-    /// break, continue, let.
-    fn hash_expr_control(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
-        match expr {
-            syn::Expr::If(ei) => self.hash_expr_if(hasher, ei),
-            syn::Expr::Match(em) => self.hash_expr_match(hasher, em),
-            syn::Expr::While(ew) => self.hash_expr_while(hasher, ew),
-            syn::Expr::ForLoop(efl) => self.hash_expr_for(hasher, efl),
-            syn::Expr::Loop(el) => self.hash_expr_loop(hasher, el),
-            syn::Expr::Return(er) => self.hash_expr_return(hasher, er),
-            syn::Expr::Break(eb) => self.hash_expr_break(hasher, eb),
-            syn::Expr::Continue(_) => self.hash_expr_continue(hasher),
-            syn::Expr::Let(el) => self.hash_expr_let(hasher, el),
-            _ => return false,
-        }
-        true
-    }
-
-    /// Collection-shaped expressions: tuple, array.
-    fn hash_expr_collection(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
-        match expr {
-            syn::Expr::Tuple(et) => self.hash_expr_seq(hasher, "ExprTuple", &et.elems),
-            syn::Expr::Array(ea) => self.hash_expr_seq(hasher, "ExprArray", &ea.elems),
-            _ => return false,
-        }
-        true
-    }
-
-    /// Unary-wrapping expressions: reference, paren, await, macro,
-    /// closure (form-boundary).
-    fn hash_expr_wrap(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
-        match expr {
-            syn::Expr::Reference(er) => self.hash_expr_reference(hasher, er),
-            syn::Expr::Paren(ep) => self.hash_expr_paren(hasher, ep),
-            syn::Expr::Await(ea) => self.hash_expr_await(hasher, ea),
-            syn::Expr::Macro(em) => self.hash_expr_macro(hasher, em),
-            syn::Expr::Closure(_) => self.hash_expr_closure(hasher),
-            _ => return false,
-        }
-        true
-    }
-
-    /// Block-bearing expressions: block, async, unsafe.
-    fn hash_expr_block_like(&mut self, hasher: &mut Xxh3, expr: &syn::Expr) -> bool {
-        match expr {
-            syn::Expr::Block(eb) => self.hash_expr_block_expr(hasher, &eb.block),
-            syn::Expr::Async(ea) => self.hash_expr_async(hasher, ea),
-            syn::Expr::Unsafe(eu) => self.hash_expr_unsafe(hasher, eu),
-            _ => return false,
-        }
-        true
-    }
-
-    /// Path expression: single-segment, snake-case identifier paths
-    /// in expression position are treated as local-variable
-    /// references (alpha-equivalent collapse). This is the v0.1
-    /// heuristic for "this is a local" without full scope tracking;
-    /// multi-segment paths (e.g., `foo::bar`) and `PascalCase`
-    /// single-segment paths (e.g., `Some`, `MyType`) are treated as
-    /// concrete value paths.
-    fn hash_expr_path(&mut self, hasher: &mut Xxh3, ep: &syn::ExprPath) {
-        if let Some(name) = single_seg_local(&ep.path) {
-            "ExprLocal".hash(hasher);
-            self.record_identifier(name);
-            self.feed_token(hasher, &NormalizedToken::Var);
-        } else {
-            "ExprPath".hash(hasher);
-            let path_fp = self.hash_path(&ep.path);
-            path_fp.hash(hasher);
-        }
-    }
-
-    fn hash_expr_lit(&mut self, hasher: &mut Xxh3, lit: &syn::Lit) {
-        "ExprLit".hash(hasher);
-        let lit_token = Self::lit_to_token(lit);
-        self.feed_token(hasher, &lit_token);
-    }
-
-    fn hash_expr_binary(&mut self, hasher: &mut Xxh3, eb: &syn::ExprBinary) {
-        "ExprBinary".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Op(binop_symbol(&eb.op)));
-        let l_fp = self.hash_expr(&eb.left);
-        l_fp.hash(hasher);
-        let r_fp = self.hash_expr(&eb.right);
-        r_fp.hash(hasher);
-    }
-
-    fn hash_expr_unary(&mut self, hasher: &mut Xxh3, eu: &syn::ExprUnary) {
-        "ExprUnary".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Op(unop_symbol(&eu.op)));
-        let inner_fp = self.hash_expr(&eu.expr);
-        inner_fp.hash(hasher);
-    }
-
-    fn hash_expr_assign(&mut self, hasher: &mut Xxh3, ea: &syn::ExprAssign) {
-        "ExprAssign".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Op("="));
-        let l_fp = self.hash_expr(&ea.left);
-        l_fp.hash(hasher);
-        let r_fp = self.hash_expr(&ea.right);
-        r_fp.hash(hasher);
-    }
-
-    fn hash_expr_call(&mut self, hasher: &mut Xxh3, ec: &syn::ExprCall) {
-        "ExprCall".hash(hasher);
-        let f_fp = self.hash_expr(&ec.func);
-        f_fp.hash(hasher);
-        for arg in &ec.args {
-            let a_fp = self.hash_expr(arg);
-            a_fp.hash(hasher);
-        }
-    }
-
-    fn hash_expr_method_call(&mut self, hasher: &mut Xxh3, em: &syn::ExprMethodCall) {
-        "ExprMethodCall".hash(hasher);
-        let recv_fp = self.hash_expr(&em.receiver);
-        recv_fp.hash(hasher);
-        let method = em.method.to_string();
-        self.record_identifier(method.clone());
-        self.feed_token(hasher, &NormalizedToken::Ident(method));
-        for arg in &em.args {
-            let a_fp = self.hash_expr(arg);
-            a_fp.hash(hasher);
-        }
-    }
-
-    fn hash_expr_field(&mut self, hasher: &mut Xxh3, ef: &syn::ExprField) {
-        "ExprField".hash(hasher);
-        let recv_fp = self.hash_expr(&ef.base);
-        recv_fp.hash(hasher);
-        match &ef.member {
-            syn::Member::Named(ident) => {
-                let name = ident.to_string();
-                self.record_identifier(name.clone());
-                self.feed_token(hasher, &NormalizedToken::Ident(name));
-            }
-            syn::Member::Unnamed(idx) => {
-                self.feed_token(hasher, &NormalizedToken::LitInt(i128::from(idx.index)));
-            }
-        }
-    }
-
-    fn hash_expr_index(&mut self, hasher: &mut Xxh3, ei: &syn::ExprIndex) {
-        "ExprIndex".hash(hasher);
-        let recv_fp = self.hash_expr(&ei.expr);
-        recv_fp.hash(hasher);
-        let idx_fp = self.hash_expr(&ei.index);
-        idx_fp.hash(hasher);
-    }
-
-    fn hash_expr_block_expr(&mut self, hasher: &mut Xxh3, block: &syn::Block) {
-        "ExprBlock".hash(hasher);
-        let b_fp = self.hash_block(block);
-        b_fp.hash(hasher);
-    }
-
-    fn hash_expr_if(&mut self, hasher: &mut Xxh3, ei: &syn::ExprIf) {
-        "ExprIf".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Kw("if"));
-        let c_fp = self.hash_expr(&ei.cond);
-        c_fp.hash(hasher);
-        let t_fp = self.hash_block(&ei.then_branch);
-        t_fp.hash(hasher);
-        if let Some((_, else_branch)) = &ei.else_branch {
-            let e_fp = self.hash_expr(else_branch);
-            e_fp.hash(hasher);
-        }
-    }
-
-    fn hash_expr_match(&mut self, hasher: &mut Xxh3, em: &syn::ExprMatch) {
-        "ExprMatch".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Kw("match"));
-        let scrutinee_fp = self.hash_expr(&em.expr);
-        scrutinee_fp.hash(hasher);
-        for arm in &em.arms {
-            let arm_fp = self.hash_arm(arm);
-            arm_fp.hash(hasher);
-        }
-    }
-
-    fn hash_expr_while(&mut self, hasher: &mut Xxh3, ew: &syn::ExprWhile) {
-        "ExprWhile".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Kw("while"));
-        let c_fp = self.hash_expr(&ew.cond);
-        c_fp.hash(hasher);
-        let b_fp = self.hash_block(&ew.body);
-        b_fp.hash(hasher);
-    }
-
-    fn hash_expr_for(&mut self, hasher: &mut Xxh3, efl: &syn::ExprForLoop) {
-        "ExprFor".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Kw("for"));
-        let pat_fp = self.hash_pat(&efl.pat);
-        pat_fp.hash(hasher);
-        let it_fp = self.hash_expr(&efl.expr);
-        it_fp.hash(hasher);
-        let body_fp = self.hash_block(&efl.body);
-        body_fp.hash(hasher);
-    }
-
-    fn hash_expr_loop(&mut self, hasher: &mut Xxh3, el: &syn::ExprLoop) {
-        "ExprLoop".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Kw("loop"));
-        let b_fp = self.hash_block(&el.body);
-        b_fp.hash(hasher);
-    }
-
-    fn hash_expr_return(&mut self, hasher: &mut Xxh3, er: &syn::ExprReturn) {
-        "ExprReturn".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Kw("return"));
-        if let Some(inner) = &er.expr {
-            let i_fp = self.hash_expr(inner);
-            i_fp.hash(hasher);
-        }
-    }
-
-    fn hash_expr_break(&mut self, hasher: &mut Xxh3, eb: &syn::ExprBreak) {
-        "ExprBreak".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Kw("break"));
-        if let Some(inner) = &eb.expr {
-            let i_fp = self.hash_expr(inner);
-            i_fp.hash(hasher);
-        }
-    }
-
-    fn hash_expr_continue(&mut self, hasher: &mut Xxh3) {
-        "ExprContinue".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Kw("continue"));
-    }
-
-    fn hash_expr_reference(&mut self, hasher: &mut Xxh3, er: &syn::ExprReference) {
-        "ExprRef".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Op("&"));
-        if er.mutability.is_some() {
-            self.feed_token(hasher, &NormalizedToken::Kw("mut"));
-        }
-        let inner_fp = self.hash_expr(&er.expr);
-        inner_fp.hash(hasher);
-    }
-
-    fn hash_expr_paren(&mut self, hasher: &mut Xxh3, ep: &syn::ExprParen) {
-        "ExprParen".hash(hasher);
-        let inner_fp = self.hash_expr(&ep.expr);
-        inner_fp.hash(hasher);
-    }
-
-    /// Hash a sub-expression sequence (Tuple / Array elements) with
-    /// a caller-supplied discriminator.
-    fn hash_expr_seq(
-        &mut self,
-        hasher: &mut Xxh3,
-        discriminator: &'static str,
-        elems: &syn::punctuated::Punctuated<syn::Expr, syn::token::Comma>,
-    ) {
-        discriminator.hash(hasher);
-        for elem in elems {
-            let e_fp = self.hash_expr(elem);
-            e_fp.hash(hasher);
-        }
-    }
-
-    fn hash_expr_cast(&mut self, hasher: &mut Xxh3, ec: &syn::ExprCast) {
-        "ExprCast".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Kw("as"));
-        let inner_fp = self.hash_expr(&ec.expr);
-        inner_fp.hash(hasher);
-        let ty_fp = self.hash_type(&ec.ty);
-        ty_fp.hash(hasher);
-    }
-
-    fn hash_expr_range(&mut self, hasher: &mut Xxh3, er: &syn::ExprRange) {
-        "ExprRange".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Op(".."));
-        if let Some(start) = &er.start {
-            let s_fp = self.hash_expr(start);
-            s_fp.hash(hasher);
-        }
-        if let Some(end) = &er.end {
-            let e_fp = self.hash_expr(end);
-            e_fp.hash(hasher);
-        }
-    }
-
-    fn hash_expr_try(&mut self, hasher: &mut Xxh3, et: &syn::ExprTry) {
-        "ExprTry".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Op("?"));
-        let inner_fp = self.hash_expr(&et.expr);
-        inner_fp.hash(hasher);
-    }
-
-    fn hash_expr_await(&mut self, hasher: &mut Xxh3, ea: &syn::ExprAwait) {
-        "ExprAwait".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Kw("await"));
-        let inner_fp = self.hash_expr(&ea.base);
-        inner_fp.hash(hasher);
-    }
-
-    fn hash_expr_async(&mut self, hasher: &mut Xxh3, ea: &syn::ExprAsync) {
-        "ExprAsync".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Modifier("async"));
-        let b_fp = self.hash_block(&ea.block);
-        b_fp.hash(hasher);
-    }
-
-    fn hash_expr_unsafe(&mut self, hasher: &mut Xxh3, eu: &syn::ExprUnsafe) {
-        "ExprUnsafe".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Modifier("unsafe"));
-        let b_fp = self.hash_block(&eu.block);
-        b_fp.hash(hasher);
-    }
-
-    fn hash_expr_macro(&mut self, hasher: &mut Xxh3, em: &syn::ExprMacro) {
-        "ExprMacro".hash(hasher);
-        let m_fp = self.hash_macro(&em.mac);
-        m_fp.hash(hasher);
-    }
-
-    /// Form-boundary: the closure body is attributed to its own
-    /// form, not this one. Emit only the opaque marker. The walker's
-    /// caller is responsible for capturing the closure as a separate
-    /// form via a follow-up pass.
-    fn hash_expr_closure(&mut self, hasher: &mut Xxh3) {
-        "ExprClosure".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Closure);
-    }
-
-    fn hash_expr_struct(&mut self, hasher: &mut Xxh3, es: &syn::ExprStruct) {
-        "ExprStruct".hash(hasher);
-        let path_fp = self.hash_path(&es.path);
-        path_fp.hash(hasher);
-        for field in &es.fields {
-            let f_fp = self.hash_expr(&field.expr);
-            f_fp.hash(hasher);
-        }
-    }
-
-    fn hash_expr_repeat(&mut self, hasher: &mut Xxh3, er: &syn::ExprRepeat) {
-        "ExprRepeat".hash(hasher);
-        let inner_fp = self.hash_expr(&er.expr);
-        inner_fp.hash(hasher);
-        let len_fp = self.hash_expr(&er.len);
-        len_fp.hash(hasher);
-    }
-
-    fn hash_expr_let(&mut self, hasher: &mut Xxh3, el: &syn::ExprLet) {
-        "ExprLet".hash(hasher);
-        self.feed_token(hasher, &NormalizedToken::Kw("let"));
-        let pat_fp = self.hash_pat(&el.pat);
-        pat_fp.hash(hasher);
-        let e_fp = self.hash_expr(&el.expr);
-        e_fp.hash(hasher);
-    }
-
-    fn hash_arm(&mut self, arm: &syn::Arm) -> u64 {
-        let mut hasher = Xxh3::new();
-        "MatchArm".hash(&mut hasher);
-        let pat_fp = self.hash_pat(&arm.pat);
-        pat_fp.hash(&mut hasher);
-        if let Some((_, guard)) = &arm.guard {
-            self.feed_token(&mut hasher, &NormalizedToken::Kw("if"));
-            let g_fp = self.hash_expr(guard);
-            g_fp.hash(&mut hasher);
-        }
-        let body_fp = self.hash_expr(&arm.body);
-        body_fp.hash(&mut hasher);
-        let fp = hasher.finish();
-        self.fingerprint_set.insert(fp);
-        fp
-    }
-
-    fn hash_macro(&mut self, mac: &syn::Macro) -> u64 {
-        let mut hasher = Xxh3::new();
-        "MacroCall".hash(&mut hasher);
-        let name = mac
-            .path
-            .segments
-            .last()
-            .map(|s| s.ident.to_string())
-            .unwrap_or_default();
-        self.record_identifier(name.clone());
-        self.feed_token(&mut hasher, &NormalizedToken::MacroCall(name));
-        // Per ADR: macro arguments are NOT walked at v0.1.
-        let fp = hasher.finish();
-        self.fingerprint_set.insert(fp);
-        fp
-    }
-
-    fn lit_to_token(lit: &syn::Lit) -> NormalizedToken {
-        match lit {
-            syn::Lit::Int(li) => li
-                .base10_parse::<i128>()
-                .map_or(NormalizedToken::LitInt(0), NormalizedToken::LitInt),
-            syn::Lit::Float(lf) => {
-                let bits = lf.base10_parse::<f64>().map_or(0, f64::to_bits);
-                NormalizedToken::LitFloat(bits)
-            }
-            syn::Lit::Str(ls) => NormalizedToken::LitStr(ls.value()),
-            syn::Lit::Bool(lb) => NormalizedToken::LitBool(lb.value),
-            syn::Lit::Char(lc) => NormalizedToken::LitChar(lc.value()),
-            syn::Lit::Byte(lb) => NormalizedToken::LitByte(lb.value()),
-            syn::Lit::ByteStr(lbs) => NormalizedToken::LitByteStr(lbs.value()),
-            _ => NormalizedToken::LitStr(String::new()),
-        }
-    }
-
-    fn feed_token<H: Hasher>(&mut self, hasher: &mut H, token: &NormalizedToken) {
-        token.hash_into(hasher);
+    fn leaf(&mut self, node: &mut Xxh3, token: &NormalizedToken) {
+        token.hash_into(node);
         // Per O8 node_count table: each placeholder, ident, type
         // reference, literal, operator, keyword, lifetime, and macro
         // counts as one leaf.
         self.node_count = self.node_count.saturating_add(1);
+    }
+
+    fn seal(&mut self, node: Xxh3) -> u64 {
+        let fp = node.finish();
+        self.fingerprint_set.insert(fp);
+        fp
     }
 
     fn record_identifier(&mut self, id: String) {
@@ -1252,91 +390,6 @@ impl FormEmitter {
         // walk-order is preserved per O11. The v0.1 comparison engine
         // doesn't read identifier_set; v0.2+ rename-signal does.
         self.identifier_set.push(id);
-    }
-}
-
-fn binop_symbol(op: &syn::BinOp) -> &'static str {
-    match op {
-        syn::BinOp::Add(_) => "+",
-        syn::BinOp::Sub(_) => "-",
-        syn::BinOp::Mul(_) => "*",
-        syn::BinOp::Div(_) => "/",
-        syn::BinOp::Rem(_) => "%",
-        syn::BinOp::And(_) => "&&",
-        syn::BinOp::Or(_) => "||",
-        syn::BinOp::BitXor(_) => "^",
-        syn::BinOp::BitAnd(_) => "&",
-        syn::BinOp::BitOr(_) => "|",
-        syn::BinOp::Shl(_) => "<<",
-        syn::BinOp::Shr(_) => ">>",
-        syn::BinOp::Eq(_) => "==",
-        syn::BinOp::Lt(_) => "<",
-        syn::BinOp::Le(_) => "<=",
-        syn::BinOp::Ne(_) => "!=",
-        syn::BinOp::Ge(_) => ">=",
-        syn::BinOp::Gt(_) => ">",
-        syn::BinOp::AddAssign(_) => "+=",
-        syn::BinOp::SubAssign(_) => "-=",
-        syn::BinOp::MulAssign(_) => "*=",
-        syn::BinOp::DivAssign(_) => "/=",
-        syn::BinOp::RemAssign(_) => "%=",
-        syn::BinOp::BitXorAssign(_) => "^=",
-        syn::BinOp::BitAndAssign(_) => "&=",
-        syn::BinOp::BitOrAssign(_) => "|=",
-        syn::BinOp::ShlAssign(_) => "<<=",
-        syn::BinOp::ShrAssign(_) => ">>=",
-        _ => "?op",
-    }
-}
-
-fn unop_symbol(op: &syn::UnOp) -> &'static str {
-    match op {
-        syn::UnOp::Deref(_) => "*",
-        syn::UnOp::Not(_) => "!",
-        syn::UnOp::Neg(_) => "-",
-        _ => "?unop",
-    }
-}
-
-fn lifetime_token(lt: &syn::Lifetime) -> NormalizedToken {
-    if lt.ident == "static" {
-        NormalizedToken::LifetimeStatic
-    } else {
-        NormalizedToken::Lifetime
-    }
-}
-
-/// Is this path a single-segment, snake-case identifier (treated as a
-/// local-variable reference)?
-///
-/// Per O5 ADR § Typed placeholders: local variable identifiers collapse
-/// to `Var`. The v0.1 heuristic is "single-segment path with first
-/// character lowercase or underscore, no `PathArguments`." This catches
-/// `x`, `_foo`, `bar_baz` but not `Some`, `MyType::new`, or
-/// `foo::<i32>()`. False-positives (e.g., a single-segment lowercase fn
-/// reference) are accepted at v0.1 because (a) typical fn references
-/// in expression position are method calls (`receiver.method()`) which
-/// route through `Expr::MethodCall`, and (b) free-fn calls usually use
-/// at least a path (`crate_root::foo()`) or are intra-module which is
-/// rare in well-organized code. Returns the segment name when the path
-/// qualifies, otherwise `None`.
-fn single_seg_local(path: &syn::Path) -> Option<String> {
-    if path.leading_colon.is_some() {
-        return None;
-    }
-    if path.segments.len() != 1 {
-        return None;
-    }
-    let seg = &path.segments[0];
-    if !matches!(seg.arguments, syn::PathArguments::None) {
-        return None;
-    }
-    let name = seg.ident.to_string();
-    let first = name.chars().next()?;
-    if first.is_ascii_lowercase() || first == '_' {
-        Some(name)
-    } else {
-        None
     }
 }
 
@@ -1427,29 +480,6 @@ fn impl_self_ty_last_segment(ty: &syn::Type) -> Option<String> {
         return tp.path.segments.last().map(|s| s.ident.to_string());
     }
     None
-}
-
-fn span_from_pm(start: PmSpan, end: PmSpan) -> Span {
-    let s = start.start();
-    let e = end.end();
-    // proc_macro2 returns 1-indexed lines and 0-indexed columns —
-    // matches our LineColumn convention exactly. Without the
-    // `span-locations` feature these would silently be 0/0; the
-    // CI `proc-macro2 span-locations enforcement` job rejects deps
-    // that omit the feature.
-    let start_lc = LineColumn::new(
-        u32::try_from(s.line).unwrap_or(1),
-        u32::try_from(s.column).unwrap_or(0),
-    );
-    let end_lc = LineColumn::new(
-        u32::try_from(e.line).unwrap_or(1),
-        u32::try_from(e.column).unwrap_or(0),
-    );
-    Span::try_new(start_lc, end_lc).unwrap_or_else(|_| {
-        // Defensive: if proc-macro2 ever returns inverted positions,
-        // fall back to a single-position span at start.
-        Span::try_new(start_lc, start_lc).expect("self-referential span is always valid")
-    })
 }
 
 fn lines_in_span(span: &Span) -> u32 {
