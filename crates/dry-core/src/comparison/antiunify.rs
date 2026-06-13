@@ -437,10 +437,7 @@ fn scalar_hole_kind(nodes: &[&NormalizedTree]) -> HoleKind {
 
 /// Whether a node label names a block / statement-group construct.
 fn is_block_label(label: &str) -> bool {
-    label == "Block"
-        || label.starts_with("ExprBlock")
-        || label.starts_with("Block")
-        || label.starts_with("Stmt")
+    label.starts_with("ExprBlock") || label.starts_with("Block") || label.starts_with("Stmt")
 }
 
 /// If every node shares one label and is internal, emit a `Fixed` node
@@ -936,9 +933,9 @@ fn all_same_label(nodes: &[&NormalizedTree]) -> bool {
     nodes.iter().all(|n| &n.label == first)
 }
 
-/// Every node is internal (`leaf.is_none()`).
+/// Every node is internal (not a leaf).
 fn all_internal(nodes: &[&NormalizedTree]) -> bool {
-    nodes.iter().all(|n| n.leaf.is_none())
+    nodes.iter().all(|n| !n.is_leaf())
 }
 
 /// Every node has the first node's child count.
