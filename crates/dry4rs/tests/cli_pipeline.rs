@@ -460,12 +460,17 @@ fn report_html_emits_single_file_with_valid_data_island() {
     );
 
     // The island decodes to the wire envelope, tagged REPORT mode with the
-    // bare-reporter capabilities.
+    // SHOWCASE capabilities (dry-rs#149) — every view the frontend now
+    // renders is advertised true (template skeleton + substitution grid +
+    // d-slider + scope banner), not just the PR13 overview/clusters pair.
     let envelope = decode_data_island(&stdout);
     assert_eq!(envelope["schema_version"], 1);
     assert_eq!(envelope["mode"], "report");
     assert_eq!(envelope["capabilities"]["overview"], true);
-    assert_eq!(envelope["capabilities"]["substitution_grid"], false);
+    assert_eq!(envelope["capabilities"]["clusters"], true);
+    assert_eq!(envelope["capabilities"]["substitution_grid"], true);
+    assert_eq!(envelope["capabilities"]["d_slider"], true);
+    assert_eq!(envelope["capabilities"]["scope_banner"], true);
     // The fixture surfaces a cluster; the truthful gate carries it.
     assert!(
         envelope["result"]["matches"]

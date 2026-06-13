@@ -1159,14 +1159,16 @@ fn print_json_envelope<N: NormalizerPort>(
     }
 }
 
-/// Render + print the self-contained single-file HTML explorer (dry-rs#147).
+/// Render + print the self-contained single-file HTML explorer (dry-rs#147,
+/// showcase dry-rs#149).
 ///
 /// Builds the same run-loop envelope the JSON path emits, tags it with the
 /// REPORT-mode presentation hints (`mode` + `capabilities`), and renders the
-/// vanilla single-file page. PR13 always emits [`Mode::Report`] with the
-/// bare-reporter [`Capabilities::report`] (overview + clusters); the
-/// `explore` subcommand + the richer capabilities flip on in later PRs of
-/// epic #111.
+/// vanilla single-file page. Emits [`Mode::Report`] with the SHOWCASE
+/// [`Capabilities::showcase`] (overview + clusters + template skeleton +
+/// substitution grid + d-slider + scope banner — every view the frontend
+/// renders as of dry-rs#149); the `explore` subcommand flips `mode` to
+/// [`Mode::Explore`] in a later PR of epic #111.
 fn print_html<N: NormalizerPort>(
     config: &AnalysisConfig,
     normalizer: &N,
@@ -1174,7 +1176,7 @@ fn print_html<N: NormalizerPort>(
     view: Option<ViewProjection>,
 ) {
     let envelope = build_run_envelope(config, normalizer, report, view)
-        .with_presentation(Mode::Report, Capabilities::report());
+        .with_presentation(Mode::Report, Capabilities::showcase());
     match html::render(&envelope) {
         Ok(page) => print!("{page}"),
         Err(err) => eprintln!("error: failed to render HTML report: {err}"),
