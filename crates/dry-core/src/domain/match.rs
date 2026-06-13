@@ -152,7 +152,7 @@ impl Match {
     /// - **`rename_count`** = the number of *pure-rename holes* in `H`.
     ///   A pure-rename hole is one where every member binds a single,
     ///   structurally-identical subtree — the same fold `fp` across all
-    ///   members ([`Divergence::distinct`] `== 1`) — but the bound
+    ///   members ([`crate::domain::Divergence::distinct`] `== 1`) — but the bound
     ///   subtrees differ by lexeme (`> 1` distinct lexeme). The LGG
     ///   surfaces these as holes precisely because the alpha-equivalent
     ///   rename collapses to one structural `fp` while carrying a
