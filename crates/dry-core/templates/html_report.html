@@ -409,10 +409,17 @@
     const els = (sub && sub.elements) || [];
     if (!els.length) return h("td", null, h("span", { class: "absent" }, "<absent>"));
     // Mark a cell divergent when its (single) element fp is not the modal.
+    // Guard on a KNOWN modal: when `distinct_values` is empty modalFp is
+    // null, and `e.fp !== null` would falsely mark every scalar cell
+    // divergent — so only apply divergent styling when a modal exists.
     const modal = modalFp(hole);
+    const hasModal = modal !== null && modal !== undefined;
     const td = h("td", null);
     for (const e of els) {
-      const cls = els.length === 1 && e.fp !== modal ? "variadic-elem divergent" : "variadic-elem";
+      const cls =
+        hasModal && els.length === 1 && e.fp !== modal
+          ? "variadic-elem divergent"
+          : "variadic-elem";
       appendKids(td, h("span", { class: cls }, e.lexeme ?? ""));
     }
     return td;
@@ -557,7 +564,15 @@
             if (revealed) return;
             revealed = true;
             const grid = substitutionGrid(m);
-            if (grid) note.parentNode.insertBefore(grid, note.nextSibling);
+            if (grid) {
+              note.parentNode.insertBefore(grid, note.nextSibling);
+              // Re-apply the active d-threshold so a lazily-revealed grid
+              // honors a d the user already moved before clicking reveal
+              // (otherwise it shows all columns until the next slider input).
+              const range = card.querySelector('.d-slider input[type="range"]');
+              const d = range ? parseInt(range.value, 10) || 0 : 0;
+              applyDFilter(card, template.holes || [], d);
+            }
             btn.disabled = true;
             btn.textContent = "Grid shown";
           });
