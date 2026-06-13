@@ -39,6 +39,7 @@
 
 mod normalizer;
 mod token;
+mod tree;
 mod visitor;
 mod walker;
 
