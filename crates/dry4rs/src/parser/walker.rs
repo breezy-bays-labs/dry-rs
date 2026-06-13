@@ -103,9 +103,10 @@ pub(super) struct FormParts<'a> {
     /// `mod foo { mod bar { … } }` segments. A fn inside
     /// `mod a { mod b { fn f() {} } }` has `module_path == ["a", "b"]`
     /// (no `"f"`, no impl/trait-type segment), powering
-    /// [`StructuralLocation`](dry_core::domain::StructuralLocation)-based
-    /// module scoping in the comparison engine. Empty for a form at the
-    /// crate root.
+    /// [`StructuralLocation`]-based module scoping in the comparison
+    /// engine. Empty for a form at the crate root.
+    ///
+    /// [`StructuralLocation`]: dry_core::domain::StructuralLocation
     pub module_path: Vec<String>,
     /// Production / test classification.
     pub kind: FormKind,
