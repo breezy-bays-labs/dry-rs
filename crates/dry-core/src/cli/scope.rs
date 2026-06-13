@@ -149,6 +149,19 @@ mod tests {
         }
     }
 
+    /// All 32 `ResolvedScope` combinations (5 boolean axes), bit-
+    /// decomposed so the truth-table tests stay flat (no deep loop
+    /// nesting that would trip the CC ladder).
+    fn scope_combos() -> impl Iterator<Item = ResolvedScope> {
+        (0u8..32).map(|b| ResolvedScope {
+            within_crate: b & 1 != 0,
+            across_crate: b & 2 != 0,
+            within_module: b & 4 != 0,
+            across_module: b & 8 != 0,
+            crate_aware: b & 16 != 0,
+        })
+    }
+
     #[test]
     fn default_is_all_true_and_crate_aware() {
         let s = ResolvedScope::default();
@@ -177,28 +190,13 @@ mod tests {
         let b = loc(Some("crate_b"), &["bar"]);
         let c = loc(Some("crate_a"), &["foo"]);
         let pairs = [(&a, &b), (&a, &c), (&b, &c)];
-        for wc in [true, false] {
-            for ac in [true, false] {
-                for wm in [true, false] {
-                    for am in [true, false] {
-                        for ca in [true, false] {
-                            let s = ResolvedScope {
-                                within_crate: wc,
-                                across_crate: ac,
-                                within_module: wm,
-                                across_module: am,
-                                crate_aware: ca,
-                            };
-                            for (x, y) in pairs {
-                                assert_eq!(
-                                    s.allows(x, y),
-                                    s.allows(y, x),
-                                    "allows must be symmetric for {s:?}"
-                                );
-                            }
-                        }
-                    }
-                }
+        for s in scope_combos() {
+            for (x, y) in pairs {
+                assert_eq!(
+                    s.allows(x, y),
+                    s.allows(y, x),
+                    "allows must be symmetric for {s:?}"
+                );
             }
         }
     }
