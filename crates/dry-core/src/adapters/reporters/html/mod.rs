@@ -18,15 +18,15 @@
 //! `mode` / `capabilities` are absent (it MUST NOT throw on a missing
 //! optional field).
 //!
-//! ## Single injection contract — base64 island, no `|safe`
+//! ## Single injection contract — base64 island, default escaping
 //!
 //! There is exactly ONE template interpolation of report data — the
-//! base64-encoded envelope (`{{ payload_b64 }}`). Base64's alphabet
+//! base64-encoded envelope (`payload_b64`). Base64's alphabet
 //! (`[A-Za-z0-9+/=]`) contains zero HTML-special characters, so askama's
-//! DEFAULT escaping is a byte-level no-op and NO `|safe` directive is
-//! needed: the island can never carry a `</script>` break-out, and there is
+//! DEFAULT escaping is a byte-level no-op and NO escape-bypass filter is
+//! needed: the island can never carry a close-script break-out, and there is
 //! no raw-injection surface for a code-review bot to flag. Every OTHER
-//! template variable (`title`, `subtitle`, the `<noscript>` fields) is
+//! template variable (`title`, `subtitle`, the noscript fields) is
 //! auto-escaped by askama's default — so config-sourced `title` / `subtitle`
 //! (echoed from the analyzed repo's `dry.toml`, untrusted) cannot inject
 //! markup. Presentation is entirely client-side: the JS base64-decodes the
@@ -116,8 +116,8 @@ pub fn render(envelope: &Envelope) -> Result<String, HtmlError> {
     // Single injection contract: the entire envelope is serialized to JSON
     // (compact — the page is machine-consumed by the JS) and base64-encoded.
     // Base64's `[A-Za-z0-9+/=]` alphabet has zero HTML-special chars, so the
-    // island injects with askama's DEFAULT escaping (a no-op) — no `|safe`,
-    // no `</script>` break-out possible, no raw-injection surface.
+    // island injects with askama's DEFAULT escaping (a no-op) — no
+    // escape-bypass filter, no close-script break-out, no raw-injection surface.
     let payload_b64 = BASE64.encode(serde_json::to_string(envelope)?);
     let view = build_view(envelope, payload_b64);
     let mut out = view.render()?;
@@ -190,14 +190,15 @@ struct HtmlReport {
     /// per-tier table rows.
     tiers: Vec<TierView>,
     /// The base64-encoded serialized [`Envelope`] injected into `#dry-data`.
-    /// Injected with askama's DEFAULT escaping (NO `|safe`): base64's
-    /// `[A-Za-z0-9+/=]` alphabet has zero HTML-special chars, so escaping is
-    /// a byte-level no-op and the island can never carry a `</script>`
-    /// break-out. Every OTHER template variable (`title`, `subtitle`, the
-    /// `<noscript>` fields) is likewise auto-escaped, so config-sourced
-    /// `title` / `subtitle` (echoed from the analyzed repo's `dry.toml`,
-    /// untrusted) cannot inject markup. The JS base64-decodes this island
-    /// (`atob` + `TextDecoder`, UTF-8-safe) and parses the JSON client-side.
+    /// Injected with askama's DEFAULT escaping (no escape-bypass filter):
+    /// base64's `[A-Za-z0-9+/=]` alphabet has zero HTML-special chars, so
+    /// escaping is a byte-level no-op and the island can never carry a
+    /// close-script break-out. Every OTHER template variable (`title`,
+    /// `subtitle`, the noscript fields) is likewise auto-escaped, so
+    /// config-sourced `title` / `subtitle` (echoed from the analyzed repo's
+    /// `dry.toml`, untrusted) cannot inject markup. The JS base64-decodes
+    /// this island (`atob` + `TextDecoder`, UTF-8-safe) and parses the JSON
+    /// client-side.
     payload_b64: String,
 }
 

@@ -5,12 +5,14 @@
    a dry-data island. The page reads result.* from the island and renders
    the overview, cluster list, cluster detail, and tier/score filters client
    side. No framework, no build step, no external assets. This is the BASIC
-   reference frontend; Claude Design polishes later. HTML-escaping is ON
-   (askama default for .html); the ONLY raw injection is the JSON payload
-   (`{{ payload|safe }}`), which is pre-sanitized in Rust (sanitize_island
-   neutralizes any embedded close-script sequence). Config-sourced values
-   (title, subtitle) are auto-escaped so they cannot inject markup. The
-   script body deliberately uses no askama delimiter sequences, so the
+   reference frontend; Claude Design polishes later. SECURITY: HTML-escaping
+   is ON everywhere (askama default for .html) and NO escape-bypass filter is
+   used. The data island is base64-encoded in Rust, so its alphabet has zero
+   HTML-special chars and escaping it is a no-op (a close-script break-out is
+   impossible). Config-sourced values (title, subtitle) are auto-escaped so
+   they cannot inject markup. The client JS builds DOM via createElement +
+   textContent only (no raw-markup sink), so user data is inert there too.
+   The script body deliberately uses no askama delimiter sequences, so the
    engine treats it as literal text.
 -#}
 <!doctype html>
@@ -132,12 +134,13 @@
   </noscript>
 </main>
 
-{#- The single injection: the full JSON envelope, base64-encoded in Rust.
-   NO `|safe` — base64's [A-Za-z0-9+/=] alphabet has zero HTML-special
-   chars, so askama's default escaping is a byte-level no-op and the island
-   can never carry a </script> break-out. The JS base64-decodes + JSON-parses
-   it client-side. Every other template value (title, subtitle, <noscript>
-   fields) gets askama's default HTML escaping. -#}
+{#- The single injection: the full JSON envelope, base64-encoded in Rust,
+   injected with askama's DEFAULT escaping (no escape-bypass filter).
+   Base64's [A-Za-z0-9+/=] alphabet has zero HTML-special chars, so escaping
+   it is a byte-level no-op and the island can never carry a close-script
+   break-out. The JS base64-decodes plus JSON-parses it client-side. Every
+   other template value (title, subtitle, noscript fields) gets askama's
+   default HTML escaping. -#}
 <script id="dry-data" type="application/json">{{ payload_b64 }}</script>
 
 <script type="module">
