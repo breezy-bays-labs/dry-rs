@@ -25,9 +25,15 @@
 //!   types preserve as `Type(<name>)`, type parameters collapse to
 //!   `TypeParam`, lifetimes collapse to `Lifetime` (except `'static`),
 //!   literals preserve verbatim, macros are opaque `MacroCall(<name>)`.
-//! - **`FormKind::Test` detection** — `#[test]` attribute OR enclosing
-//!   `#[cfg(test)] mod` context. `FormKind::Doctest` is reserved at
-//!   v0.1; no extraction.
+//! - **`FormKind::Test` detection** (dry-rs#108) — a form is test code
+//!   when ANY of: a recognised test-framework attribute is present
+//!   (`#[test]` / `#[tokio::test]`-style, cucumber `#[given]` /
+//!   `#[when]` / `#[then]`, `#[rstest]`, `#[test_case]`); an enclosing
+//!   `#[cfg(test)] mod`; OR the source file lives under a Cargo
+//!   integration-test root (`tests/` / `benches/`). The path heuristic
+//!   is Cargo-specific and lives in the adapter (`normalizer`), seeded
+//!   into the walk; the attribute / module signals live in the walker.
+//!   `FormKind::Doctest` is reserved at v0.1; no extraction.
 //! - **Skip-on-parse-error** — `syn::parse_file` errors become
 //!   `NormalizeError::Parse`; no panic.
 
