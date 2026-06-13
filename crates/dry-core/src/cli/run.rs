@@ -621,10 +621,8 @@ fn emit_warnings(outcome: &SourceOutcome) {
 ///
 /// Returns parallel arrays `(forms, paths)` indexed identically:
 /// `paths[i]` is the source [`FilePath`] of `forms[i]`. The CLI run
-/// loop threads both into
-/// [`compare_with_paths_scoped`](crate::comparison::compare_with_paths_scoped)
-/// so the emitted matches carry real paths on each
-/// [`crate::domain::FormRef`].
+/// loop threads both into [`compare_with_paths_scoped`] so the emitted
+/// matches carry real paths on each [`crate::domain::FormRef`].
 fn normalize_files<N: NormalizerPort>(
     normalizer: &N,
     outcome: &SourceOutcome,
