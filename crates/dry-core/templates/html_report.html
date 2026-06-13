@@ -1,0 +1,272 @@
+{#-
+   HTML reporter template (dry-rs 147, epic 111). A self-contained single
+   file vanilla explorer: inline style (CSS), an inline ES-module script
+   (presentation), and ONE payload injection of the full JSON envelope into
+   a dry-data island. The page reads result.* from the island and renders
+   the overview, cluster list, cluster detail, and tier/score filters client
+   side. No framework, no build step, no external assets. This is the BASIC
+   reference frontend; Claude Design polishes later. The payload is
+   pre-sanitized in Rust (sanitize_island neutralizes any embedded close-
+   script sequence) and the no-JS overview uses only trusted shared-helper
+   values. The script body deliberately uses no askama delimiter sequences,
+   so the engine treats it as literal text.
+-#}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="dry-rs html reporter">
+{#- Inline empty favicon keeps the page truly self-contained: no external
+   request (and no console 404) for a favicon when opened standalone. -#}
+<link rel="icon" href="data:,">
+<title>{{ title }}</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d; --fg: #e6edf3;
+    --muted: #8b949e; --auto: #f85149; --review: #d29922; --advisory: #58a6ff;
+    --accent: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  header { padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0; font-size: 1.25rem; }
+  header .subtitle { color: var(--muted); margin-top: .25rem; }
+  main { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+  section { margin-bottom: 2rem; }
+  h2 { font-size: 1rem; border-bottom: 1px solid var(--border); padding-bottom: .4rem; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .cards { display: grid; gap: .75rem; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: .85rem 1rem; }
+  .card .meta { color: var(--muted); font-size: .85rem; }
+  .card ul { margin: .5rem 0 0; padding-left: 1.1rem; }
+  .card li { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; }
+  .badge { display: inline-block; padding: .05rem .45rem; border-radius: 999px; font-size: .75rem; font-weight: 600; }
+  .tier-auto_refactor { color: var(--auto); }
+  .tier-review_first { color: var(--review); }
+  .tier-advisory { color: var(--advisory); }
+  .badge.tier-auto_refactor { background: rgba(248,81,73,.15); }
+  .badge.tier-review_first { background: rgba(210,153,34,.15); }
+  .badge.tier-advisory { background: rgba(88,166,255,.15); }
+  .filters { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
+  .filters label { color: var(--muted); }
+  .empty { color: var(--muted); font-style: italic; }
+  noscript .panel { margin-top: 1rem; }
+  .stat { display: inline-block; margin-right: 1.5rem; }
+  .stat b { font-size: 1.4rem; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <h1>{{ title }}</h1>
+  {%- if let Some(sub) = subtitle %}
+  <div class="subtitle">{{ sub }}</div>
+  {%- endif %}
+</header>
+<main>
+  <section id="overview" aria-label="overview">
+    <h2>Overview</h2>
+    <div class="panel" data-overview-fallback>Loading overview…</div>
+  </section>
+
+  <section id="cluster-controls">
+    <div class="filters">
+      <label>Tier
+        <select id="filter-tier">
+          <option value="">all</option>
+          <option value="auto_refactor">auto_refactor</option>
+          <option value="review_first">review_first</option>
+          <option value="advisory">advisory</option>
+        </select>
+      </label>
+      <label>Min score
+        <input id="filter-score" type="number" min="0" max="1" step="0.01" value="0">
+      </label>
+      <span id="cluster-count" class="meta"></span>
+    </div>
+  </section>
+
+  <section id="clusters" aria-label="clusters">
+    <h2>Clusters</h2>
+    <div id="cluster-list" class="cards"></div>
+  </section>
+
+  <noscript>
+    <section>
+      <h2>Overview (no-JavaScript fallback)</h2>
+      <div class="panel">
+        <p>
+          <span class="stat"><b>{{ total_matches }}</b> matches</span>
+          <span class="stat"><b>{{ total_forms }}</b> forms</span>
+          <span class="stat">worst <b>{{ "{:.2}"|format(worst_overall) }}</b></span>
+        </p>
+        {%- if tiers.is_empty() %}
+        <p class="empty">No matches above threshold.</p>
+        {%- else %}
+        <table>
+          <thead><tr><th>Tier</th><th class="num">Matches</th><th class="num">Worst</th></tr></thead>
+          <tbody>
+          {%- for t in tiers %}
+            <tr>
+              <td class="tier-{{ t.tier.as_str() }}">{{ t.tier.as_str() }}</td>
+              <td class="num">{{ t.count }}</td>
+              <td class="num">{{ "{:.2}"|format(t.worst) }}</td>
+            </tr>
+          {%- endfor %}
+          </tbody>
+        </table>
+        {%- endif %}
+        <p class="meta">Enable JavaScript for the interactive cluster explorer.</p>
+      </div>
+    </section>
+  </noscript>
+</main>
+
+{#- The single injection: the full JSON envelope, pre-sanitized in Rust. -#}
+<script id="dry-data" type="application/json">{{ payload }}</script>
+
+<script type="module">
+  // Vanilla single-file explorer. Reads the `#dry-data` island, renders the
+  // overview + cluster views from `result.*` (the truthful gate). Degrades
+  // gracefully when optional fields (mode / capabilities / scope / template)
+  // are absent — every access is guarded, nothing throws on a missing key.
+  const TIER_ORDER = ["auto_refactor", "review_first", "advisory"];
+  const el = (id) => document.getElementById(id);
+  const esc = (s) =>
+    String(s).replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  function loadData() {
+    const node = el("dry-data");
+    if (!node) return null;
+    try {
+      return JSON.parse(node.textContent || "{}");
+    } catch (e) {
+      console.error("dry-rs: failed to parse #dry-data island", e);
+      return null;
+    }
+  }
+
+  // Column convention: 0-based in the wire data, displayed +1 (end-inclusive,
+  // line 1-based) — matching the text / markdown / annotations surfaces.
+  function formLabel(form) {
+    const span = form.span || {};
+    const start = span.start || {};
+    const line = start.line ?? 0;
+    const col = (start.column ?? 0) + 1;
+    return esc(form.file) + ":" + line + ":" + col;
+  }
+
+  function tierBadge(tier) {
+    return '<span class="badge tier-' + esc(tier) + '">' + esc(tier) + "</span>";
+  }
+
+  function renderOverview(env) {
+    const result = env.result || {};
+    const summary = result.summary || {};
+    const matches = result.matches || [];
+    const byTier = summary.by_tier || {};
+    let worst = 0;
+    for (const m of matches) worst = Math.max(worst, m.score ?? 0);
+
+    let rows = "";
+    for (const tier of TIER_ORDER) {
+      const count = byTier[tier];
+      if (!count) continue;
+      let tierWorst = 0;
+      for (const m of matches) if (m.tier === tier) tierWorst = Math.max(tierWorst, m.score ?? 0);
+      rows +=
+        '<tr><td class="tier-' + esc(tier) + '">' + esc(tier) + "</td>" +
+        '<td class="num">' + count + "</td>" +
+        '<td class="num">' + tierWorst.toFixed(2) + "</td></tr>";
+    }
+
+    const table = rows
+      ? '<table><thead><tr><th>Tier</th><th class="num">Matches</th><th class="num">Worst</th></tr></thead><tbody>' +
+        rows + "</tbody></table>"
+      : '<p class="empty">No matches above threshold.</p>';
+
+    const modeNote = env.mode ? ' · mode <code>' + esc(env.mode) + "</code>" : "";
+
+    el("overview").innerHTML =
+      "<h2>Overview</h2>" +
+      '<div class="panel">' +
+        '<p><span class="stat"><b>' + matches.length + "</b> matches</span>" +
+        '<span class="stat"><b>' + (summary.total_forms ?? 0) + "</b> forms</span>" +
+        '<span class="stat">worst <b>' + worst.toFixed(2) + "</b></span>" + modeNote + "</p>" +
+        table +
+      "</div>";
+  }
+
+  function tierRank(tier) {
+    const i = TIER_ORDER.indexOf(tier);
+    return i === -1 ? TIER_ORDER.length : i;
+  }
+
+  function renderClusters(env) {
+    const matches = (env.result && env.result.matches) || [];
+    const tierFilter = el("filter-tier").value;
+    const minScore = parseFloat(el("filter-score").value) || 0;
+
+    const visible = matches
+      .map((m, i) => ({ m, i }))
+      .filter(({ m }) => (!tierFilter || m.tier === tierFilter) && (m.score ?? 0) >= minScore)
+      .sort((a, b) =>
+        tierRank(a.m.tier) - tierRank(b.m.tier) || (b.m.score ?? 0) - (a.m.score ?? 0));
+
+    el("cluster-count").textContent =
+      visible.length + " of " + matches.length + " clusters";
+
+    if (!visible.length) {
+      el("cluster-list").innerHTML = '<p class="empty">No clusters match the filters.</p>';
+      return;
+    }
+
+    el("cluster-list").innerHTML = visible
+      .map(({ m, i }) => {
+        const forms = m.forms || [];
+        const kind = (forms[0] && forms[0].kind) || "unknown";
+        const items = forms.map((f) => "<li>" + formLabel(f) + "</li>").join("");
+        // Showcase fields (later PR): a template/divergence summary slot —
+        // present only when the optional `template` field is populated.
+        const tmpl = m.template
+          ? '<div class="meta">template: ' + ((m.template.holes || []).length) + " holes</div>"
+          : "";
+        return (
+          '<div class="card" id="match-' + i + '">' +
+            "<div>" + tierBadge(m.tier) +
+              " <b>" + (m.score ?? 0).toFixed(2) + "</b>" +
+              ' <span class="meta">· ' + esc(kind) + " · " + forms.length + " forms</span></div>" +
+            tmpl +
+            "<ul>" + items + "</ul>" +
+          "</div>"
+        );
+      })
+      .join("");
+  }
+
+  function main() {
+    const env = loadData();
+    if (!env) {
+      el("overview").innerHTML =
+        "<h2>Overview</h2><div class=\"panel empty\">Could not load report data.</div>";
+      return;
+    }
+    renderOverview(env);
+    renderClusters(env);
+    el("filter-tier").addEventListener("change", () => renderClusters(env));
+    el("filter-score").addEventListener("input", () => renderClusters(env));
+  }
+
+  main();
+</script>
+</body>
+</html>
