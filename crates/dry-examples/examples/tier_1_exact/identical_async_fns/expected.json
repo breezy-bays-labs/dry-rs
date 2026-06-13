@@ -69,11 +69,11 @@
                       "lexeme": "fetch_a",
                       "span": {
                         "end": {
-                          "column": 1,
-                          "line": 13
+                          "column": 16,
+                          "line": 9
                         },
                         "start": {
-                          "column": 6,
+                          "column": 9,
                           "line": 9
                         }
                       }
@@ -87,11 +87,11 @@
                       "lexeme": "fetch_b",
                       "span": {
                         "end": {
-                          "column": 1,
-                          "line": 19
+                          "column": 16,
+                          "line": 15
                         },
                         "start": {
-                          "column": 6,
+                          "column": 9,
                           "line": 15
                         }
                       }
@@ -122,7 +122,7 @@
                           {
                             "children": [],
                             "label": "ident",
-                            "leaf_lexeme": "_",
+                            "leaf_lexeme": "id",
                             "node": "fixed"
                           }
                         ],
@@ -236,7 +236,7 @@
                           {
                             "children": [],
                             "label": "ident",
-                            "leaf_lexeme": "_",
+                            "leaf_lexeme": "key",
                             "node": "fixed"
                           }
                         ],
@@ -256,7 +256,7 @@
                               {
                                 "children": [],
                                 "label": "ident",
-                                "leaf_lexeme": "_",
+                                "leaf_lexeme": "id",
                                 "node": "fixed"
                               }
                             ],
@@ -328,7 +328,7 @@
                               {
                                 "children": [],
                                 "label": "ident",
-                                "leaf_lexeme": "_",
+                                "leaf_lexeme": "key",
                                 "node": "fixed"
                               }
                             ],

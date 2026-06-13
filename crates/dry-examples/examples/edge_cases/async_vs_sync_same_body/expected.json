@@ -69,11 +69,11 @@
                       "lexeme": "async",
                       "span": {
                         "end": {
-                          "column": 1,
-                          "line": 10
+                          "column": 37,
+                          "line": 5
                         },
                         "start": {
-                          "column": 6,
+                          "column": 0,
                           "line": 5
                         }
                       }
@@ -83,11 +83,11 @@
                       "lexeme": "compute_async",
                       "span": {
                         "end": {
-                          "column": 1,
-                          "line": 10
+                          "column": 22,
+                          "line": 5
                         },
                         "start": {
-                          "column": 6,
+                          "column": 9,
                           "line": 5
                         }
                       }
@@ -101,11 +101,11 @@
                       "lexeme": "compute_sync",
                       "span": {
                         "end": {
-                          "column": 1,
-                          "line": 17
+                          "column": 15,
+                          "line": 12
                         },
                         "start": {
-                          "column": 0,
+                          "column": 3,
                           "line": 12
                         }
                       }
@@ -130,7 +130,7 @@
                           {
                             "children": [],
                             "label": "ident",
-                            "leaf_lexeme": "_",
+                            "leaf_lexeme": "x",
                             "node": "fixed"
                           }
                         ],
@@ -196,7 +196,7 @@
                           {
                             "children": [],
                             "label": "ident",
-                            "leaf_lexeme": "_",
+                            "leaf_lexeme": "scaled",
                             "node": "fixed"
                           }
                         ],
@@ -216,7 +216,7 @@
                               {
                                 "children": [],
                                 "label": "ident",
-                                "leaf_lexeme": "_",
+                                "leaf_lexeme": "x",
                                 "node": "fixed"
                               }
                             ],
@@ -256,7 +256,7 @@
                           {
                             "children": [],
                             "label": "ident",
-                            "leaf_lexeme": "_",
+                            "leaf_lexeme": "total",
                             "node": "fixed"
                           }
                         ],
@@ -276,7 +276,7 @@
                               {
                                 "children": [],
                                 "label": "ident",
-                                "leaf_lexeme": "_",
+                                "leaf_lexeme": "scaled",
                                 "node": "fixed"
                               }
                             ],
@@ -328,7 +328,7 @@
                           {
                             "children": [],
                             "label": "ident",
-                            "leaf_lexeme": "_",
+                            "leaf_lexeme": "total",
                             "node": "fixed"
                           }
                         ],

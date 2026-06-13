@@ -33,10 +33,10 @@
             }
           }
         ],
-        "rename_count": 0,
-        "rename_density": 0.0,
+        "rename_count": 2,
+        "rename_density": 0.6666666666666666,
         "score": 0.8571428571428571,
-        "structural_score": 0.8571428571428571,
+        "structural_score": 0.9523809523809524,
         "template": {
           "holes": [
             {
@@ -69,11 +69,11 @@
                       "lexeme": "add_one",
                       "span": {
                         "end": {
-                          "column": 1,
-                          "line": 10
+                          "column": 10,
+                          "line": 6
                         },
                         "start": {
-                          "column": 0,
+                          "column": 3,
                           "line": 6
                         }
                       }
@@ -87,12 +87,124 @@
                       "lexeme": "increment",
                       "span": {
                         "end": {
-                          "column": 1,
-                          "line": 16
+                          "column": 12,
+                          "line": 12
                         },
                         "start": {
-                          "column": 0,
+                          "column": 3,
                           "line": 12
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "value"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 1
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "x",
+                      "span": {
+                        "end": {
+                          "column": 12,
+                          "line": 6
+                        },
+                        "start": {
+                          "column": 11,
+                          "line": 6
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "value",
+                      "span": {
+                        "end": {
+                          "column": 18,
+                          "line": 12
+                        },
+                        "start": {
+                          "column": 13,
+                          "line": 12
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "value"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 2
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "x",
+                      "span": {
+                        "end": {
+                          "column": 18,
+                          "line": 7
+                        },
+                        "start": {
+                          "column": 17,
+                          "line": 7
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "value",
+                      "span": {
+                        "end": {
+                          "column": 22,
+                          "line": 13
+                        },
+                        "start": {
+                          "column": 17,
+                          "line": 13
                         }
                       }
                     }
@@ -114,10 +226,8 @@
                       {
                         "children": [
                           {
-                            "children": [],
-                            "label": "ident",
-                            "leaf_lexeme": "_",
-                            "node": "fixed"
+                            "index": 1,
+                            "node": "hole"
                           }
                         ],
                         "label": "PatIdent",
@@ -182,7 +292,7 @@
                           {
                             "children": [],
                             "label": "ident",
-                            "leaf_lexeme": "_",
+                            "leaf_lexeme": "result",
                             "node": "fixed"
                           }
                         ],
@@ -200,10 +310,8 @@
                           {
                             "children": [
                               {
-                                "children": [],
-                                "label": "ident",
-                                "leaf_lexeme": "_",
-                                "node": "fixed"
+                                "index": 2,
+                                "node": "hole"
                               }
                             ],
                             "label": "ExprLocal",
@@ -254,7 +362,7 @@
                           {
                             "children": [],
                             "label": "ident",
-                            "leaf_lexeme": "_",
+                            "leaf_lexeme": "result",
                             "node": "fixed"
                           }
                         ],

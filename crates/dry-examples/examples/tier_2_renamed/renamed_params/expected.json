@@ -33,10 +33,10 @@
             }
           }
         ],
-        "rename_count": 0,
-        "rename_density": 0.0,
+        "rename_count": 8,
+        "rename_density": 0.8888888888888888,
         "score": 0.8666666666666667,
-        "structural_score": 0.8666666666666667,
+        "structural_score": 0.9851851851851852,
         "template": {
           "holes": [
             {
@@ -69,11 +69,11 @@
                       "lexeme": "distance",
                       "span": {
                         "end": {
-                          "column": 1,
-                          "line": 10
+                          "column": 11,
+                          "line": 6
                         },
                         "start": {
-                          "column": 0,
+                          "column": 3,
                           "line": 6
                         }
                       }
@@ -87,12 +87,460 @@
                       "lexeme": "separation",
                       "span": {
                         "end": {
-                          "column": 1,
-                          "line": 16
+                          "column": 13,
+                          "line": 12
                         },
                         "start": {
-                          "column": 0,
+                          "column": 3,
                           "line": 12
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "ax"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 1
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "x1",
+                      "span": {
+                        "end": {
+                          "column": 14,
+                          "line": 6
+                        },
+                        "start": {
+                          "column": 12,
+                          "line": 6
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "ax",
+                      "span": {
+                        "end": {
+                          "column": 16,
+                          "line": 12
+                        },
+                        "start": {
+                          "column": 14,
+                          "line": 12
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "ay"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 2
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "y1",
+                      "span": {
+                        "end": {
+                          "column": 23,
+                          "line": 6
+                        },
+                        "start": {
+                          "column": 21,
+                          "line": 6
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "ay",
+                      "span": {
+                        "end": {
+                          "column": 25,
+                          "line": 12
+                        },
+                        "start": {
+                          "column": 23,
+                          "line": 12
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "bx"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 3
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "x2",
+                      "span": {
+                        "end": {
+                          "column": 32,
+                          "line": 6
+                        },
+                        "start": {
+                          "column": 30,
+                          "line": 6
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "bx",
+                      "span": {
+                        "end": {
+                          "column": 34,
+                          "line": 12
+                        },
+                        "start": {
+                          "column": 32,
+                          "line": 12
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "by"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 4
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "y2",
+                      "span": {
+                        "end": {
+                          "column": 41,
+                          "line": 6
+                        },
+                        "start": {
+                          "column": 39,
+                          "line": 6
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "by",
+                      "span": {
+                        "end": {
+                          "column": 43,
+                          "line": 12
+                        },
+                        "start": {
+                          "column": 41,
+                          "line": 12
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "bx"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 5
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "x2",
+                      "span": {
+                        "end": {
+                          "column": 15,
+                          "line": 7
+                        },
+                        "start": {
+                          "column": 13,
+                          "line": 7
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "bx",
+                      "span": {
+                        "end": {
+                          "column": 15,
+                          "line": 13
+                        },
+                        "start": {
+                          "column": 13,
+                          "line": 13
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "ax"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 6
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "x1",
+                      "span": {
+                        "end": {
+                          "column": 20,
+                          "line": 7
+                        },
+                        "start": {
+                          "column": 18,
+                          "line": 7
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "ax",
+                      "span": {
+                        "end": {
+                          "column": 20,
+                          "line": 13
+                        },
+                        "start": {
+                          "column": 18,
+                          "line": 13
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "by"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 7
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "y2",
+                      "span": {
+                        "end": {
+                          "column": 15,
+                          "line": 8
+                        },
+                        "start": {
+                          "column": 13,
+                          "line": 8
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "by",
+                      "span": {
+                        "end": {
+                          "column": 15,
+                          "line": 14
+                        },
+                        "start": {
+                          "column": 13,
+                          "line": 14
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "ay"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 8
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "y1",
+                      "span": {
+                        "end": {
+                          "column": 20,
+                          "line": 8
+                        },
+                        "start": {
+                          "column": 18,
+                          "line": 8
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "ay",
+                      "span": {
+                        "end": {
+                          "column": 20,
+                          "line": 14
+                        },
+                        "start": {
+                          "column": 18,
+                          "line": 14
                         }
                       }
                     }
@@ -114,10 +562,8 @@
                       {
                         "children": [
                           {
-                            "children": [],
-                            "label": "ident",
-                            "leaf_lexeme": "_",
-                            "node": "fixed"
+                            "index": 1,
+                            "node": "hole"
                           }
                         ],
                         "label": "PatIdent",
@@ -150,10 +596,8 @@
                       {
                         "children": [
                           {
-                            "children": [],
-                            "label": "ident",
-                            "leaf_lexeme": "_",
-                            "node": "fixed"
+                            "index": 2,
+                            "node": "hole"
                           }
                         ],
                         "label": "PatIdent",
@@ -186,10 +630,8 @@
                       {
                         "children": [
                           {
-                            "children": [],
-                            "label": "ident",
-                            "leaf_lexeme": "_",
-                            "node": "fixed"
+                            "index": 3,
+                            "node": "hole"
                           }
                         ],
                         "label": "PatIdent",
@@ -222,10 +664,8 @@
                       {
                         "children": [
                           {
-                            "children": [],
-                            "label": "ident",
-                            "leaf_lexeme": "_",
-                            "node": "fixed"
+                            "index": 4,
+                            "node": "hole"
                           }
                         ],
                         "label": "PatIdent",
@@ -290,7 +730,7 @@
                           {
                             "children": [],
                             "label": "ident",
-                            "leaf_lexeme": "_",
+                            "leaf_lexeme": "dx",
                             "node": "fixed"
                           }
                         ],
@@ -308,10 +748,8 @@
                           {
                             "children": [
                               {
-                                "children": [],
-                                "label": "ident",
-                                "leaf_lexeme": "_",
-                                "node": "fixed"
+                                "index": 5,
+                                "node": "hole"
                               }
                             ],
                             "label": "ExprLocal",
@@ -320,10 +758,8 @@
                           {
                             "children": [
                               {
-                                "children": [],
-                                "label": "ident",
-                                "leaf_lexeme": "_",
-                                "node": "fixed"
+                                "index": 6,
+                                "node": "hole"
                               }
                             ],
                             "label": "ExprLocal",
@@ -350,7 +786,7 @@
                           {
                             "children": [],
                             "label": "ident",
-                            "leaf_lexeme": "_",
+                            "leaf_lexeme": "dy",
                             "node": "fixed"
                           }
                         ],
@@ -368,10 +804,8 @@
                           {
                             "children": [
                               {
-                                "children": [],
-                                "label": "ident",
-                                "leaf_lexeme": "_",
-                                "node": "fixed"
+                                "index": 7,
+                                "node": "hole"
                               }
                             ],
                             "label": "ExprLocal",
@@ -380,10 +814,8 @@
                           {
                             "children": [
                               {
-                                "children": [],
-                                "label": "ident",
-                                "leaf_lexeme": "_",
-                                "node": "fixed"
+                                "index": 8,
+                                "node": "hole"
                               }
                             ],
                             "label": "ExprLocal",
@@ -424,7 +856,7 @@
                                           {
                                             "children": [],
                                             "label": "ident",
-                                            "leaf_lexeme": "_",
+                                            "leaf_lexeme": "dx",
                                             "node": "fixed"
                                           }
                                         ],
@@ -436,7 +868,7 @@
                                           {
                                             "children": [],
                                             "label": "ident",
-                                            "leaf_lexeme": "_",
+                                            "leaf_lexeme": "dx",
                                             "node": "fixed"
                                           }
                                         ],
@@ -460,7 +892,7 @@
                                           {
                                             "children": [],
                                             "label": "ident",
-                                            "leaf_lexeme": "_",
+                                            "leaf_lexeme": "dy",
                                             "node": "fixed"
                                           }
                                         ],
@@ -472,7 +904,7 @@
                                           {
                                             "children": [],
                                             "label": "ident",
-                                            "leaf_lexeme": "_",
+                                            "leaf_lexeme": "dy",
                                             "node": "fixed"
                                           }
                                         ],
