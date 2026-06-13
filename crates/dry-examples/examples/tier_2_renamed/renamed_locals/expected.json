@@ -33,10 +33,355 @@
             }
           }
         ],
-        "rename_count": null,
-        "rename_density": null,
+        "rename_count": 0,
+        "rename_density": 0.0,
         "score": 0.8571428571428571,
-        "structural_score": null,
+        "structural_score": 0.8571428571428571,
+        "template": {
+          "holes": [
+            {
+              "divergence": {
+                "differing": 1,
+                "distinct": 2,
+                "distinct_values": [
+                  {
+                    "count": 1,
+                    "fp": 413176912872908740,
+                    "lexeme": "area_a"
+                  },
+                  {
+                    "count": 1,
+                    "fp": 16623103139260032188,
+                    "lexeme": "area_b"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 0
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 413176912872908740,
+                      "lexeme": "area_a",
+                      "span": {
+                        "end": {
+                          "column": 1,
+                          "line": 12
+                        },
+                        "start": {
+                          "column": 0,
+                          "line": 6
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 16623103139260032188,
+                      "lexeme": "area_b",
+                      "span": {
+                        "end": {
+                          "column": 1,
+                          "line": 20
+                        },
+                        "start": {
+                          "column": 0,
+                          "line": 14
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "root": {
+            "children": [
+              {
+                "children": [
+                  {
+                    "index": 0,
+                    "node": "hole"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "_",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "PatIdent",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [
+                              {
+                                "children": [],
+                                "label": "ident",
+                                "leaf_lexeme": "f64",
+                                "node": "fixed"
+                              }
+                            ],
+                            "label": "Path",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "TypePath",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "TypedArg",
+                    "node": "fixed"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "_",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "PatIdent",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [
+                              {
+                                "children": [],
+                                "label": "ident",
+                                "leaf_lexeme": "f64",
+                                "node": "fixed"
+                              }
+                            ],
+                            "label": "Path",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "TypePath",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "TypedArg",
+                    "node": "fixed"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "f64",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "Path",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "TypePath",
+                    "node": "fixed"
+                  }
+                ],
+                "label": "Sig",
+                "node": "fixed"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "children": [],
+                        "label": "keyword",
+                        "leaf_lexeme": "let",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "_",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "PatIdent",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "_",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "ExprLocal",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "StmtLet",
+                    "node": "fixed"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [],
+                        "label": "keyword",
+                        "leaf_lexeme": "let",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "_",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "PatIdent",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "_",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "ExprLocal",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "StmtLet",
+                    "node": "fixed"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [],
+                        "label": "keyword",
+                        "leaf_lexeme": "let",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "_",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "PatIdent",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "punct",
+                            "leaf_lexeme": "*",
+                            "node": "fixed"
+                          },
+                          {
+                            "children": [
+                              {
+                                "children": [],
+                                "label": "ident",
+                                "leaf_lexeme": "_",
+                                "node": "fixed"
+                              }
+                            ],
+                            "label": "ExprLocal",
+                            "node": "fixed"
+                          },
+                          {
+                            "children": [
+                              {
+                                "children": [],
+                                "label": "ident",
+                                "leaf_lexeme": "_",
+                                "node": "fixed"
+                              }
+                            ],
+                            "label": "ExprLocal",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "ExprBinary",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "StmtLet",
+                    "node": "fixed"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "println!",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "MacroCall",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "StmtMacro",
+                    "node": "fixed"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "_",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "ExprLocal",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "StmtExpr",
+                    "node": "fixed"
+                  }
+                ],
+                "label": "Block",
+                "node": "fixed"
+              }
+            ],
+            "label": "Form",
+            "node": "fixed"
+          }
+        },
         "tier": "review_first"
       }
     ],

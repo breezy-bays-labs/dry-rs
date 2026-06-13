@@ -33,10 +33,321 @@
             }
           }
         ],
-        "rename_count": null,
-        "rename_density": null,
+        "rename_count": 0,
+        "rename_density": 0.0,
         "score": 0.8823529411764706,
-        "structural_score": null,
+        "structural_score": 0.8823529411764706,
+        "template": {
+          "holes": [
+            {
+              "divergence": {
+                "differing": 1,
+                "distinct": 2,
+                "distinct_values": [
+                  {
+                    "count": 1,
+                    "fp": 6204976026498026816,
+                    "lexeme": "async compute_async"
+                  },
+                  {
+                    "count": 1,
+                    "fp": 9520732535096316574,
+                    "lexeme": "compute_sync"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 0
+              },
+              "kind": "variadic",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 13362870497339596090,
+                      "lexeme": "async",
+                      "span": {
+                        "end": {
+                          "column": 1,
+                          "line": 10
+                        },
+                        "start": {
+                          "column": 6,
+                          "line": 5
+                        }
+                      }
+                    },
+                    {
+                      "fp": 17252994648344072314,
+                      "lexeme": "compute_async",
+                      "span": {
+                        "end": {
+                          "column": 1,
+                          "line": 10
+                        },
+                        "start": {
+                          "column": 6,
+                          "line": 5
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 9520732535096316574,
+                      "lexeme": "compute_sync",
+                      "span": {
+                        "end": {
+                          "column": 1,
+                          "line": 17
+                        },
+                        "start": {
+                          "column": 0,
+                          "line": 12
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "root": {
+            "children": [
+              {
+                "children": [
+                  {
+                    "index": 0,
+                    "node": "hole"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "_",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "PatIdent",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [
+                              {
+                                "children": [],
+                                "label": "ident",
+                                "leaf_lexeme": "i32",
+                                "node": "fixed"
+                              }
+                            ],
+                            "label": "Path",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "TypePath",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "TypedArg",
+                    "node": "fixed"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "i32",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "Path",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "TypePath",
+                    "node": "fixed"
+                  }
+                ],
+                "label": "Sig",
+                "node": "fixed"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "children": [],
+                        "label": "keyword",
+                        "leaf_lexeme": "let",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "_",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "PatIdent",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "punct",
+                            "leaf_lexeme": "*",
+                            "node": "fixed"
+                          },
+                          {
+                            "children": [
+                              {
+                                "children": [],
+                                "label": "ident",
+                                "leaf_lexeme": "_",
+                                "node": "fixed"
+                              }
+                            ],
+                            "label": "ExprLocal",
+                            "node": "fixed"
+                          },
+                          {
+                            "children": [
+                              {
+                                "children": [],
+                                "label": "literal",
+                                "leaf_lexeme": "3",
+                                "node": "fixed"
+                              }
+                            ],
+                            "label": "ExprLit",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "ExprBinary",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "StmtLet",
+                    "node": "fixed"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [],
+                        "label": "keyword",
+                        "leaf_lexeme": "let",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "_",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "PatIdent",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "punct",
+                            "leaf_lexeme": "+",
+                            "node": "fixed"
+                          },
+                          {
+                            "children": [
+                              {
+                                "children": [],
+                                "label": "ident",
+                                "leaf_lexeme": "_",
+                                "node": "fixed"
+                              }
+                            ],
+                            "label": "ExprLocal",
+                            "node": "fixed"
+                          },
+                          {
+                            "children": [
+                              {
+                                "children": [],
+                                "label": "literal",
+                                "leaf_lexeme": "1",
+                                "node": "fixed"
+                              }
+                            ],
+                            "label": "ExprLit",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "ExprBinary",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "StmtLet",
+                    "node": "fixed"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "println!",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "MacroCall",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "StmtMacro",
+                    "node": "fixed"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "_",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "ExprLocal",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "StmtExpr",
+                    "node": "fixed"
+                  }
+                ],
+                "label": "Block",
+                "node": "fixed"
+              }
+            ],
+            "label": "Form",
+            "node": "fixed"
+          }
+        },
         "tier": "review_first"
       }
     ],

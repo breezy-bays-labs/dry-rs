@@ -38,9 +38,11 @@ use crate::adapters::config::{ConfigError, discover_config, load_config};
 use crate::adapters::reporters::json::{Envelope, EnvelopeMeta, ViewProjection};
 use crate::adapters::reporters::{markdown, text};
 use crate::adapters::source::{SourceError, SourceOutcome, SourceWarning, enumerate};
-use crate::comparison::compare_with_paths;
-use crate::domain::{Config, FilePath, Match, Report, Summary};
-use crate::ports::NormalizerPort;
+use crate::comparison::{antiunify, compare_with_paths};
+use crate::domain::{
+    Config, FilePath, Match, NormalizedForm, NormalizedTree, Report, Span, Summary, Template,
+};
+use crate::ports::{NormalizerPort, TreeDeriverPort};
 
 /// Exit-code constant for catastrophic argument / setup failure.
 /// Mirrors clap's standard exit shape (`ExitCode::from(2)` on
@@ -50,10 +52,28 @@ const EXIT_USAGE: u8 = 2;
 /// Generic CLI run loop — the entry point adapter binaries call from
 /// `main()`.
 ///
-/// Generic over `N: NormalizerPort + Default`. The `Default` bound
-/// lets `dry_core::cli::run::<SynNormalizer>(&DRY4RS_META)` construct
-/// the adapter at the binary's call site without forcing the binary
-/// to hand-roll instance construction.
+/// Generic over `N: NormalizerPort + TreeDeriverPort + Default`. The
+/// `Default` bound lets `dry_core::cli::run::<SynNormalizer>(&DRY4RS_META)`
+/// construct the adapter at the binary's call site without forcing the
+/// binary to hand-roll instance construction.
+///
+/// # The `TreeDeriverPort` bound (epic #107, dry-rs#135)
+///
+/// The bound widened additively from `N: NormalizerPort + Default` to
+/// `N: NormalizerPort + TreeDeriverPort + Default` when on-demand tree
+/// re-derivation + anti-unification template attach wired into the run
+/// loop. This is a **compile-time, source-compatible** change: every
+/// existing caller already names a concrete adapter type
+/// (`SynNormalizer`) that implements BOTH ports, so the binary's
+/// `main()` call site is UNCHANGED. The **runtime CLI surface is
+/// unchanged** — no new flag, no new subcommand, no new argument. Only
+/// the generic bound the run loop demands of its type parameter widens.
+/// After detection, the run loop calls [`TreeDeriverPort::derive_tree`]
+/// for cluster members to attach an anti-unification [`Template`] to
+/// each multi-member [`Match`] (see the private `attach_templates`
+/// helper).
+///
+/// [`Template`]: crate::domain::Template
 ///
 /// `meta: &'static AdapterMeta` carries the binary's identity
 /// (`tool_name`, `tool_version`, `about` / `long_about` / `after_help`
@@ -78,7 +98,7 @@ const EXIT_USAGE: u8 = 2;
 /// completion script to stdout and returns `ExitCode::SUCCESS`
 /// without running the analyzer pipeline.
 #[must_use]
-pub fn run<N: NormalizerPort + Default>(meta: &'static AdapterMeta) -> ExitCode {
+pub fn run<N: NormalizerPort + TreeDeriverPort + Default>(meta: &'static AdapterMeta) -> ExitCode {
     meta.validate_or_panic();
     // clap auto-exits with code 2 on arg-parse errors, --help, and
     // --version via `.exit()` inside `try_get_matches`. We use the
@@ -97,7 +117,10 @@ pub fn run<N: NormalizerPort + Default>(meta: &'static AdapterMeta) -> ExitCode 
 /// testability. Production calls go through [`run`], which uses
 /// `build_command(meta) + Args::from_matches`; tests invoke this
 /// directly with a synthesized [`Args`].
-fn run_with_args<N: NormalizerPort + Default>(meta: &AdapterMeta, args: &Args) -> ExitCode {
+fn run_with_args<N: NormalizerPort + TreeDeriverPort + Default>(
+    meta: &AdapterMeta,
+    args: &Args,
+) -> ExitCode {
     let normalizer = N::default();
 
     // `--completions <SHELL>` short-circuits — emit the script and
@@ -180,7 +203,18 @@ fn run_with_args<N: NormalizerPort + Default>(meta: &AdapterMeta, args: &Args) -
     // each emitted `FormRef.file` carries the real source path (not
     // the qualified-name fallback that the library-facing `compare()`
     // synthesizes).
-    let matches = compare_with_paths(&forms, &form_paths, config.threshold);
+    let mut matches = compare_with_paths(&forms, &form_paths, config.threshold);
+
+    // Anti-unification overlay (epic #107, dry-rs#135). For every
+    // MULTI-member match, re-read each cluster member's source file
+    // (members only — no global cache; the normalizer.rs IO boundary
+    // is respected), re-derive each member's ordered `NormalizedTree`
+    // via the second port, run first-order LGG, and attach the
+    // resulting `Template`. Graceful degradation: any re-derive failure
+    // or fingerprint drift leaves `template` as `None` — never a wrong
+    // template, never a panic. Single-member matches carry no template
+    // (a singleton is its own LGG with no divergence to generalize).
+    attach_templates(&mut matches, &normalizer, &forms, &form_paths);
 
     // Build the truthful-gate Report (unfiltered). `result.passed`
     // comes from this; `--top` / `--only-failing` cannot reshape it.
@@ -549,6 +583,182 @@ fn normalize_files<N: NormalizerPort>(
         "normalize_files() must produce parallel forms+paths arrays"
     );
     (forms, paths)
+}
+
+/// Attach an anti-unification [`Template`] to every MULTI-member match
+/// (epic #107, dry-rs#135).
+///
+/// For each match with two or more forms, this re-derives each member's
+/// ordered [`NormalizedTree`] via [`TreeDeriverPort::derive_tree`] —
+/// re-reading the member's source file on demand — runs first-order LGG
+/// over the member trees ([`antiunify`]), and attaches the resulting
+/// template via [`Match::with_template`] (which also derives the three
+/// reserved score slots from the template's holes).
+///
+/// ## IO boundary
+///
+/// The run loop deliberately does NOT retain the per-file source it read
+/// during normalization. This function re-reads the source for cluster-
+/// MEMBER files only, on demand, honoring the `normalizer.rs` IO
+/// boundary (the detection path owns its reads; the overlay owns its
+/// own). Within a single match, each distinct member file is read at
+/// most once (members sharing a file reuse the read), but no source is
+/// cached across matches — clusters are tiny, so re-reads are cheap.
+///
+/// ## Graceful degradation
+///
+/// The decision to attach (or leave `None`) is made by the pure
+/// [`decide_template`]: a member whose source no longer parses, whose
+/// span no longer addresses a form (edited on disk between detection and
+/// re-derive), or whose re-derived tree's top-level fingerprints have
+/// drifted from the form's stored `fingerprint_set` blocks attachment
+/// for the WHOLE match — the template stays `None`. This never attaches
+/// a wrong template and never panics; a degraded match is
+/// byte-identical on the wire to a pre-overlay v0.1 match.
+fn attach_templates<N: TreeDeriverPort>(
+    matches: &mut [Match],
+    tree_deriver: &N,
+    forms: &[NormalizedForm],
+    form_paths: &[FilePath],
+) {
+    // Identity lookup `(file, span) -> fingerprint_set`, mapping each
+    // emitted `FormRef` (file + span) back to the original
+    // `NormalizedForm`'s stored bag. Form identity is `(file, span)`
+    // per the comparison-engine determinism contract.
+    let bag_by_identity = build_bag_lookup(forms, form_paths);
+
+    for m in matches.iter_mut() {
+        // Singletons carry no template — a single tree is its own LGG
+        // with no divergence to generalize. Only multi-member clusters
+        // produce a meaningful template.
+        if m.forms.len() < 2 {
+            continue;
+        }
+        if let Some(template) = derive_match_template(m, tree_deriver, &bag_by_identity) {
+            // `with_template` consumes `self`; swap through a temporary
+            // so we can mutate in place behind the `&mut`.
+            let attached =
+                std::mem::replace(m, Match::new(Vec::new(), 0.0, m.tier)).with_template(template);
+            *m = attached;
+        }
+    }
+}
+
+/// Build the `(file, span) -> fingerprint_set` identity lookup from the
+/// parallel `forms` / `form_paths` arrays. Keyed by the same
+/// `(file, span)` identity the comparison engine stamps onto each
+/// emitted [`crate::domain::FormRef`].
+fn build_bag_lookup<'a>(
+    forms: &'a [NormalizedForm],
+    form_paths: &'a [FilePath],
+) -> std::collections::HashMap<(&'a FilePath, Span), &'a std::collections::HashSet<u64>> {
+    let mut lookup = std::collections::HashMap::with_capacity(forms.len());
+    for (form, path) in forms.iter().zip(form_paths.iter()) {
+        // On a duplicate `(file, span)` key (should not occur — form
+        // identity is unique) the first wins; the fp-gate tolerates
+        // either, since same-identity forms carry the same bag.
+        lookup
+            .entry((path, form.span))
+            .or_insert(&form.fingerprint_set);
+    }
+    lookup
+}
+
+/// Re-derive every member's tree for one multi-member match (I/O) and
+/// decide whether a template attaches (pure).
+///
+/// Returns `Some(template)` only when every member re-derives cleanly
+/// AND passes the fingerprint gate; otherwise `None` (graceful
+/// degradation). The I/O (file reads + `derive_tree`) lives here; the
+/// attach/skip decision is delegated to the pure [`decide_template`].
+fn derive_match_template<N: TreeDeriverPort>(
+    m: &Match,
+    tree_deriver: &N,
+    bag_by_identity: &std::collections::HashMap<(&FilePath, Span), &std::collections::HashSet<u64>>,
+) -> Option<Template> {
+    // Cache reads WITHIN this match only (members frequently share a
+    // file). Dropped when the match is done — no cross-match retention.
+    let mut source_cache: std::collections::HashMap<&FilePath, Option<String>> =
+        std::collections::HashMap::new();
+
+    let mut derived: Vec<Option<DerivedMember<'_>>> = Vec::with_capacity(m.forms.len());
+    for form_ref in &m.forms {
+        let source = source_cache
+            .entry(&form_ref.file)
+            .or_insert_with(|| fs::read_to_string(form_ref.file.as_path()).ok());
+        let member = source.as_ref().and_then(|src| {
+            let tree = tree_deriver.derive_tree(src, form_ref.span).ok()?;
+            let bag = bag_by_identity
+                .get(&(&form_ref.file, form_ref.span))
+                .copied();
+            Some(DerivedMember { tree, bag })
+        });
+        derived.push(member);
+    }
+
+    decide_template(derived)
+}
+
+/// One cluster member after re-derivation: its re-derived tree plus the
+/// stored `fingerprint_set` (bag) of the original detected form (if the
+/// `(file, span)` identity resolved).
+struct DerivedMember<'a> {
+    tree: NormalizedTree,
+    bag: Option<&'a std::collections::HashSet<u64>>,
+}
+
+/// Decide whether a multi-member cluster's template attaches — the
+/// single PURE decision function (no I/O).
+///
+/// Returns `Some(antiunify(member_trees))` only when EVERY member:
+///
+/// 1. re-derived successfully (`Some(_)` — its source parsed and its
+///    span still addresses a form), AND
+/// 2. resolved its stored fingerprint bag (`bag.is_some()`), AND
+/// 3. passes the fingerprint gate ([`tree_top_level_fps_in_bag`]) — the
+///    re-derived tree's top-level subform fingerprints are all present
+///    in the form's stored `fingerprint_set`.
+///
+/// Otherwise returns `None`: a single failing member degrades the whole
+/// match to no-template (never a partial or wrong template). This is the
+/// P3 anti-drift bridge applied at the run-loop boundary — the derived
+/// `root.fp` folds deterministically over the top-level child fps, so
+/// "every top-level child fp is a bag member" is the bag-recoverable
+/// form of "`root.fp` equals the form's stored top-level fold". An
+/// edited-on-disk source produces top-level fps absent from the stored
+/// bag, failing the gate.
+fn decide_template(members: Vec<Option<DerivedMember<'_>>>) -> Option<Template> {
+    let mut trees: Vec<NormalizedTree> = Vec::with_capacity(members.len());
+    for member in members {
+        let DerivedMember { tree, bag } = member?;
+        let bag = bag?;
+        if !tree_top_level_fps_in_bag(&tree, bag) {
+            return None;
+        }
+        trees.push(tree);
+    }
+    Some(antiunify(&trees))
+}
+
+/// Fingerprint gate (pure): whether a re-derived tree's TOP-LEVEL
+/// subform fingerprints are all members of the form's stored
+/// `fingerprint_set` (the bag).
+///
+/// The synthetic `"Form"` root's `fp` is a top-level fold that is NOT a
+/// bag member by itself (it is computed from the children, not sealed
+/// into the bag). Its direct children — the `Attrs?` / `Sig` / `Block`
+/// subform seals — ARE bag members. Because `root.fp` folds
+/// deterministically over those child fps, "every top-level child fp is
+/// in the bag" is exactly equivalent to "`root.fp` equals the form's
+/// stored top-level fold" while staying checkable from the bag alone
+/// (`dry-core` has no access to the adapter's private fold helper). A
+/// child fp absent from the bag means the source changed between
+/// detection and re-derive — the gate fails, the template degrades.
+///
+/// A childless root (degenerate) trivially passes — there is nothing to
+/// contradict the stored bag.
+fn tree_top_level_fps_in_bag(root: &NormalizedTree, bag: &std::collections::HashSet<u64>) -> bool {
+    root.children.iter().all(|child| bag.contains(&child.fp))
 }
 
 /// Build the [`Summary`] aggregator over the unfiltered forms + matches.
@@ -1333,5 +1543,264 @@ mod tests {
             !schema_after.contains("stale schema"),
             "stale schema content should be gone after --force overwrite"
         );
+    }
+
+    // ---- dry-rs#135: template-attach run-loop wiring ----
+    //
+    // These unit tests cover the PURE decision surface
+    // (`decide_template`, `tree_top_level_fps_in_bag`, `build_bag_lookup`,
+    // `attach_templates`) directly. The end-to-end re-derive path (real
+    // syn re-parse + LGG against dry4rs's own clusters) is exercised by
+    // the integration tests in `crates/dry4rs/tests/run_loop_template.rs`
+    // and the self-check snapshot.
+
+    use std::collections::HashSet;
+
+    use crate::domain::{LeafClass, LeafToken, NormalizedTree};
+
+    /// Span helper for tree/form fixtures.
+    fn span_at(line: u32) -> Span {
+        Span::try_new(LineColumn::new(line, 0), LineColumn::new(line + 2, 1)).unwrap()
+    }
+
+    /// A re-derived "Form" root with two top-level subform children whose
+    /// fingerprints are `child_fps`. Mirrors the `SynTreeDeriver` shape
+    /// (synthetic `"Form"` root over `Sig`/`Block` subform seals).
+    fn form_tree(span: Span, child_fps: &[u64]) -> NormalizedTree {
+        let children = child_fps
+            .iter()
+            .enumerate()
+            .map(|(i, &fp)| {
+                NormalizedTree::leaf(
+                    "Subform".to_string(),
+                    fp,
+                    LeafToken::new(LeafClass::Ident, format!("c{i}")),
+                    span,
+                )
+            })
+            .collect();
+        NormalizedTree::new("Form".to_string(), 0xF00D, children, span)
+    }
+
+    fn bag_of(fps: &[u64]) -> HashSet<u64> {
+        fps.iter().copied().collect()
+    }
+
+    #[test]
+    fn tree_top_level_fps_in_bag_passes_when_all_children_present() {
+        let tree = form_tree(span_at(1), &[11, 22]);
+        let bag = bag_of(&[11, 22, 33]); // superset is fine
+        assert!(tree_top_level_fps_in_bag(&tree, &bag));
+    }
+
+    #[test]
+    fn tree_top_level_fps_in_bag_fails_when_a_child_drifted() {
+        // Source edited on disk -> a re-derived top-level fp is absent
+        // from the stored bag.
+        let tree = form_tree(span_at(1), &[11, 99]);
+        let bag = bag_of(&[11, 22]);
+        assert!(!tree_top_level_fps_in_bag(&tree, &bag));
+    }
+
+    #[test]
+    fn tree_top_level_fps_in_bag_childless_root_trivially_passes() {
+        // A degenerate childless root has nothing to contradict the bag.
+        let tree = NormalizedTree::new("Form".to_string(), 0xF00D, Vec::new(), span_at(1));
+        assert!(tree_top_level_fps_in_bag(&tree, &bag_of(&[])));
+    }
+
+    #[test]
+    fn decide_template_attaches_when_all_members_match_bag() {
+        // The MATCH arm: every member re-derived AND fp-gate passes ->
+        // antiunify runs and a template is returned.
+        let bag_a = bag_of(&[11, 22]);
+        let bag_b = bag_of(&[11, 22]);
+        let members = vec![
+            Some(DerivedMember {
+                tree: form_tree(span_at(1), &[11, 22]),
+                bag: Some(&bag_a),
+            }),
+            Some(DerivedMember {
+                tree: form_tree(span_at(10), &[11, 22]),
+                bag: Some(&bag_b),
+            }),
+        ];
+        let template = decide_template(members).expect("template must attach");
+        // The two member trees are structurally identical (same child
+        // fps) -> a hole-free template (LGG of identical trees).
+        assert!(
+            template.holes.is_empty(),
+            "identical members yield a hole-free template, got {} holes",
+            template.holes.len()
+        );
+    }
+
+    #[test]
+    fn decide_template_none_when_a_member_fp_mismatches() {
+        // The fp-MISMATCH arm: one member's re-derived top-level fp is
+        // not in its stored bag (edited on disk) -> whole match degrades
+        // to None.
+        let bag_a = bag_of(&[11, 22]);
+        let bag_b = bag_of(&[11, 22]);
+        let members = vec![
+            Some(DerivedMember {
+                tree: form_tree(span_at(1), &[11, 22]),
+                bag: Some(&bag_a),
+            }),
+            Some(DerivedMember {
+                tree: form_tree(span_at(10), &[11, 999]), // 999 drifted
+                bag: Some(&bag_b),
+            }),
+        ];
+        assert!(
+            decide_template(members).is_none(),
+            "a single fp-drifted member must degrade the whole match to None"
+        );
+    }
+
+    #[test]
+    fn decide_template_none_when_a_member_failed_to_derive() {
+        // The re-derive-FAILURE arm: one member is `None` (parse error or
+        // span no longer addresses a form) -> whole match None.
+        let bag_a = bag_of(&[11, 22]);
+        let members = vec![
+            Some(DerivedMember {
+                tree: form_tree(span_at(1), &[11, 22]),
+                bag: Some(&bag_a),
+            }),
+            None,
+        ];
+        assert!(decide_template(members).is_none());
+    }
+
+    #[test]
+    fn decide_template_none_when_bag_unresolved() {
+        // The bag-MISSING arm: a member re-derived but its (file, span)
+        // identity did not resolve to a stored bag -> None (we cannot
+        // verify the fp gate without the bag, so we refuse to attach).
+        let members = vec![
+            Some(DerivedMember {
+                tree: form_tree(span_at(1), &[11, 22]),
+                bag: None,
+            }),
+            Some(DerivedMember {
+                tree: form_tree(span_at(10), &[11, 22]),
+                bag: None,
+            }),
+        ];
+        assert!(decide_template(members).is_none());
+    }
+
+    #[test]
+    fn build_bag_lookup_keys_on_file_and_span() {
+        let span = span_at(5);
+        let path = FilePath::from(PathBuf::from("src/x.rs"));
+        let form = NormalizedForm::new(FormKind::Production, bag_of(&[7, 8, 9]), span, 3, 2);
+        let forms = vec![form];
+        let paths = vec![path.clone()];
+        let lookup = build_bag_lookup(&forms, &paths);
+        let bag = lookup
+            .get(&(&path, span))
+            .expect("identity (file, span) must resolve");
+        assert!(bag.contains(&7) && bag.contains(&8) && bag.contains(&9));
+        // A different span on the same file does NOT resolve.
+        assert!(!lookup.contains_key(&(&path, span_at(99))));
+    }
+
+    /// A `TreeDeriverPort` stub that returns a fixed tree for any
+    /// `(source, span)` — exercises `attach_templates` without a real
+    /// syn re-parse. Reads happen against real temp files so the IO
+    /// boundary (re-read on demand) is genuinely traversed.
+    struct FixedTreeDeriver {
+        child_fps: Vec<u64>,
+    }
+
+    impl TreeDeriverPort for FixedTreeDeriver {
+        fn derive_tree(&self, _source: &str, span: Span) -> Result<NormalizedTree, NormalizeError> {
+            Ok(form_tree(span, &self.child_fps))
+        }
+    }
+
+    #[test]
+    fn attach_templates_skips_single_member_matches() {
+        // A singleton match is never given a template (no divergence to
+        // generalize); `attach_templates` must leave it untouched.
+        let mut matches = vec![Match::new(
+            vec![make_form_ref("src/a.rs", 1)],
+            1.0,
+            Tier::AutoRefactor,
+        )];
+        let deriver = FixedTreeDeriver {
+            child_fps: vec![11, 22],
+        };
+        attach_templates(&mut matches, &deriver, &[], &[]);
+        assert!(
+            matches[0].template.is_none(),
+            "single-member match must not carry a template"
+        );
+    }
+
+    #[test]
+    fn attach_templates_none_when_member_file_unreadable() {
+        // A multi-member match whose member files do not exist on disk:
+        // the re-read fails -> derive_tree never runs -> template None,
+        // no panic. Exercises the run-loop re-read failure path.
+        let mut matches = vec![Match::new(
+            vec![
+                make_form_ref("/nonexistent/dir/aaa.rs", 1),
+                make_form_ref("/nonexistent/dir/bbb.rs", 1),
+            ],
+            0.9,
+            Tier::ReviewFirst,
+        )];
+        let deriver = FixedTreeDeriver {
+            child_fps: vec![11, 22],
+        };
+        attach_templates(&mut matches, &deriver, &[], &[]);
+        assert!(
+            matches[0].template.is_none(),
+            "unreadable member files must degrade to template None without panicking"
+        );
+    }
+
+    #[test]
+    fn attach_templates_attaches_for_readable_multi_member_match() {
+        // End-to-end of the pure+IO seam with a stub deriver and real
+        // temp files: two members, readable, fp-gate passes -> template
+        // attaches and the reserved score slots derive.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file_a = dir.path().join("a.rs");
+        let file_b = dir.path().join("b.rs");
+        fs::write(&file_a, "fn a() {}").expect("write a");
+        fs::write(&file_b, "fn b() {}").expect("write b");
+
+        let span_a = span_at(1);
+        let span_b = span_at(1);
+        let ref_a = FormRef::new(FilePath::from(file_a.clone()), span_a, FormKind::Production);
+        let ref_b = FormRef::new(FilePath::from(file_b.clone()), span_b, FormKind::Production);
+
+        // Stored forms/paths so the (file, span) bag lookup resolves and
+        // the fp-gate (children [11, 22] subset of bag) passes.
+        let forms = vec![
+            NormalizedForm::new(FormKind::Production, bag_of(&[11, 22]), span_a, 3, 1),
+            NormalizedForm::new(FormKind::Production, bag_of(&[11, 22]), span_b, 3, 1),
+        ];
+        let form_paths = vec![FilePath::from(file_a), FilePath::from(file_b)];
+
+        let mut matches = vec![Match::new(vec![ref_a, ref_b], 0.9, Tier::ReviewFirst)];
+        let deriver = FixedTreeDeriver {
+            child_fps: vec![11, 22],
+        };
+        attach_templates(&mut matches, &deriver, &forms, &form_paths);
+        assert!(
+            matches[0].template.is_some(),
+            "readable, fp-passing multi-member match must carry a template"
+        );
+        // `with_template` derives the reserved slots from the holes.
+        assert!(
+            matches[0].structural_score.is_some(),
+            "structural_score must be derived once a template attaches"
+        );
+        assert!(matches[0].rename_count.is_some());
     }
 }
