@@ -62,7 +62,7 @@ exclude_re = [
     # 296 -> 311 (dry-rs#42 helper extraction) -> 372 (dry-rs#106
     # clustering merge inserted helpers above); the predicate lives in
     # `emit_clusters_for_bucket`. tracked: dry-rs#116
-    "comparison/mod\\.rs:372:.* in emit_clusters_for_bucket",
+    "comparison/mod\\.rs:379:.* in emit_clusters_for_bucket",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # pass2 score-1.0 defensive guard is unreachable by design
     # (`debug_assert!(false, ...)` proves it). Of the five operator
@@ -73,8 +73,8 @@ exclude_re = [
     # Line moved from 361 -> 421 (dry-rs#42) -> 869 (dry-rs#106
     # clustering merge); the guard lives in `resolve_pass2_score`.
     # tracked: dry-rs#116
-    "comparison/mod\\.rs:869:.*: replace < with (==|<=) in resolve_pass2_score",
-    "comparison/mod\\.rs:869:.*: replace - with (\\+|/) in resolve_pass2_score",
+    "comparison/mod\\.rs:876:.*: replace < with (==|<=) in resolve_pass2_score",
+    "comparison/mod\\.rs:876:.*: replace - with (\\+|/) in resolve_pass2_score",
     # NOTE: `replace < with > in resolve_pass2_score` is intentionally
     # NOT excluded — flipping the guard to `>` fires the `debug_assert!`
     # on every non-1.0 Pass-2 score, so existing tests CATCH it. Per the
@@ -89,14 +89,14 @@ exclude_re = [
     # the empty-set policy itself. Line moved from 483 -> 535 (dry-rs#42
     # refactor sweep) -> 983 (dry-rs#106 clustering merge inserted Pass 3
     # helpers above `jaccard`). tracked: dry-rs#116
-    "comparison/mod\\.rs:983:.*: replace \\|\\| with && in jaccard",
+    "comparison/mod\\.rs:990:.*: replace \\|\\| with && in jaccard",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # jaccard `a.len() <= b.len()` optimization invariant; the source
     # comment literally says "semantically equivalent" (iterating the
     # smaller set is a perf choice, the count is identical either way).
     # Line moved from 488 -> 540 (dry-rs#42 refactor sweep) -> 988
     # (dry-rs#106 clustering merge). tracked: dry-rs#116
-    "comparison/mod\\.rs:988:.*: replace <= with > in jaccard",
+    "comparison/mod\\.rs:995:.*: replace <= with > in jaccard",
     # ---- dry-rs#106 clique-carving helpers (dry-rs#116) ----
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # EQUIVALENT: `uf_union` picks the min-index root as the component
@@ -109,7 +109,7 @@ exclude_re = [
     # `< -> ==`. Operator-granular (the three `<`-relational transforms
     # at col 30); the surrounding `!= -> ==` at col 11 is a real merge-
     # guard change and is CAUGHT, so it is NOT excluded. tracked: dry-rs#116
-    "comparison/mod\\.rs:851:30: replace < with (==|>|<=) in uf_union",
+    "comparison/mod\\.rs:858:30: replace < with (==|>|<=) in uf_union",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # EQUIVALENT: `candidate_beats_best`'s `Ordering::Equal` arm is the
     # identity tie-break `ident[&cand] < ident[&best_cand]`. `cand` and
@@ -128,7 +128,7 @@ exclude_re = [
     # behavior and are CAUGHT by
     # `candidate_tie_break_picks_smaller_identity_deterministically`, so
     # they are NOT excluded. tracked: dry-rs#116
-    "comparison/mod\\.rs:818:55: replace < with <= in candidate_beats_best",
+    "comparison/mod\\.rs:825:55: replace < with <= in candidate_beats_best",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # TIMEOUT-DETECTED (NOT an equivalence claim): the FIRST `if p ==
     # root` loop in `uf_find` (line 829, col 14) is the root walk that
@@ -144,7 +144,7 @@ exclude_re = [
     # (only the `== -> !=` at col 14 of the FIRST loop); excluded to
     # keep the green-CI signal clean per the ADR's timeout-detected
     # handling, NOT as an equivalence claim. tracked: dry-rs#116
-    "comparison/mod\\.rs:829:14: replace == with != in uf_find",
+    "comparison/mod\\.rs:836:14: replace == with != in uf_find",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # EQUIVALENT: the SECOND `if p == root` loop in `uf_find` is path
     # compression (a perf optimization). `uf_find`'s RETURN value (the
@@ -158,7 +158,7 @@ exclude_re = [
     # into a genuine infinite loop and is TIMEOUT-DETECTED (see the
     # separate 829 entry directly above), a different line/loop from
     # this path-compression equivalence. tracked: dry-rs#116
-    "comparison/mod\\.rs:836:14: replace == with != in uf_find",
+    "comparison/mod\\.rs:843:14: replace == with != in uf_find",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # TIMEOUT-DETECTED (NOT an equivalence claim): replacing
     # `best_clique_candidate`'s body with `Some(0)` / `Some(1)` makes
@@ -171,6 +171,6 @@ exclude_re = [
     # caught. Operator-granular per return value; `best_clique_candidate
     # -> None` is a real behavior change and is CAUGHT, so it is NOT
     # excluded. tracked: dry-rs#116
-    "comparison/mod\\.rs:772:5: replace best_clique_candidate -> Option<usize> with Some\\(0\\)",
-    "comparison/mod\\.rs:772:5: replace best_clique_candidate -> Option<usize> with Some\\(1\\)",
+    "comparison/mod\\.rs:779:5: replace best_clique_candidate -> Option<usize> with Some\\(0\\)",
+    "comparison/mod\\.rs:779:5: replace best_clique_candidate -> Option<usize> with Some\\(1\\)",
 ]
