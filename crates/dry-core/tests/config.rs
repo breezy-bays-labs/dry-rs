@@ -341,6 +341,111 @@ mod precedence {
         );
     }
 
+    // ---- dry-rs#142: scope CLI flags precedence ----
+    //
+    // The scope axes resolve CLI Some > resolved-config Some > true, and
+    // the merger collapses them into the AnalysisConfig.scope
+    // ResolvedScope the engine consumes (PR 11 wires the consumption).
+
+    #[test]
+    fn scope_defaults_to_all_true_when_neither_cli_nor_config_set() {
+        // No CLI scope flags, no [scope] config -> every axis falls to
+        // the all-true default (the no-op identity that clusters every
+        // pair).
+        let args = parse_test_args(&["report"]).expect("parse args");
+        let analysis = merge_effective_inputs_for_test(&TEST_META, None, &args);
+        assert!(analysis.scope.within_crate);
+        assert!(analysis.scope.across_crate);
+        assert!(analysis.scope.within_module);
+        assert!(analysis.scope.across_module);
+    }
+
+    #[test]
+    fn scope_config_applies_when_cli_unset() {
+        // [scope] within_crate = false; no CLI flag -> config value wins
+        // over the compiled-in true.
+        let mut cfg = dry_core::domain::Config::default();
+        cfg.scope.within_crate = Some(false);
+
+        let args = parse_test_args(&["report"]).expect("parse args");
+        let analysis = merge_effective_inputs_for_test(&TEST_META, Some(&cfg), &args);
+        assert!(
+            !analysis.scope.within_crate,
+            "config [scope] within_crate=false should apply when CLI is unset"
+        );
+        // Other axes still default to true.
+        assert!(analysis.scope.across_crate);
+    }
+
+    #[test]
+    fn cli_no_within_crate_overrides_config_true() {
+        // Config sets within_crate = true; CLI --no-within-crate MUST
+        // win and resolve the axis to false.
+        let mut cfg = dry_core::domain::Config::default();
+        cfg.scope.within_crate = Some(true);
+
+        let args = parse_test_args(&["--no-within-crate", "report"]).expect("parse args");
+        let analysis = merge_effective_inputs_for_test(&TEST_META, Some(&cfg), &args);
+        assert!(
+            !analysis.scope.within_crate,
+            "CLI --no-within-crate should override config within_crate=true"
+        );
+    }
+
+    #[test]
+    fn cli_within_crate_overrides_config_false() {
+        // Config sets within_crate = false; CLI --within-crate MUST win
+        // and resolve the axis to true.
+        let mut cfg = dry_core::domain::Config::default();
+        cfg.scope.within_crate = Some(false);
+
+        let args = parse_test_args(&["--within-crate", "report"]).expect("parse args");
+        let analysis = merge_effective_inputs_for_test(&TEST_META, Some(&cfg), &args);
+        assert!(
+            analysis.scope.within_crate,
+            "CLI --within-crate should override config within_crate=false"
+        );
+    }
+
+    #[test]
+    fn scope_precedence_chain_per_axis() {
+        // One assertion per precedence rung, all four axes covered:
+        // - within_crate: CLI Some(false) over config Some(true) -> false
+        // - across_crate: config Some(false), no CLI -> false
+        // - within_module: CLI Some(true) over config Some(false) -> true
+        // - across_module: neither CLI nor config -> default true
+        let mut cfg = dry_core::domain::Config::default();
+        cfg.scope.within_crate = Some(true);
+        cfg.scope.across_crate = Some(false);
+        cfg.scope.within_module = Some(false);
+
+        let args = parse_test_args(&["--no-within-crate", "--within-module", "report"])
+            .expect("parse args");
+        let analysis = merge_effective_inputs_for_test(&TEST_META, Some(&cfg), &args);
+
+        assert!(!analysis.scope.within_crate, "CLI false beats config true");
+        assert!(!analysis.scope.across_crate, "config false, CLI unset");
+        assert!(analysis.scope.within_module, "CLI true beats config false");
+        assert!(analysis.scope.across_module, "neither set -> default true");
+    }
+
+    #[test]
+    fn scope_per_language_override_applies_through_merger() {
+        // The cascade ([rust] shadows [scope]) flows into the merger:
+        // [scope] within_crate = true, [rust] within_crate = false, no
+        // CLI -> the per-language false wins.
+        let mut cfg = dry_core::domain::Config::default();
+        cfg.scope.within_crate = Some(true);
+        cfg.rust.within_crate = Some(false);
+
+        let args = parse_test_args(&["report"]).expect("parse args");
+        let analysis = merge_effective_inputs_for_test(&TEST_META, Some(&cfg), &args);
+        assert!(
+            !analysis.scope.within_crate,
+            "[rust] within_crate=false should shadow [scope] within_crate=true"
+        );
+    }
+
     #[test]
     fn n65_first_positional_path_drives_analysis_root_compute() {
         // analysis_paths surfaces the first positional path; the

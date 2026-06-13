@@ -141,6 +141,23 @@ pub struct AnalysisConfig {
     /// [`title`](Self::title); sourced from `[output].subtitle` or a
     /// per-language override.
     pub subtitle: Option<String>,
+    /// Fully-resolved relatedness-scoping predicate (dry-rs#142).
+    ///
+    /// Built by [`crate::cli::merge_effective_inputs`] from the
+    /// precedence chain CLI `Option<bool>` > cascade-resolved
+    /// `[scope]` / `[rust]` / `[typescript]` > compiled-in `true` (the
+    /// no-op identity). The comparison engine consumes this predicate to
+    /// prune candidate pairs by crate / module boundary; PR 11
+    /// (dry-rs build-plan) threads it through `compare_with` via
+    /// `CompareCtx`. Defaults to [`ResolvedScope::default`] (all axes
+    /// allowed, crate-aware) so an unscoped run clusters every pair
+    /// exactly as the pre-scoping engine did.
+    ///
+    /// The `crate_aware` runtime flag stays `true` here (the
+    /// [`ResolvedScope::default`] value); the run loop adjusts it once
+    /// it knows whether ANY form's crate-id was resolvable this run
+    /// (PR 11).
+    pub scope: ResolvedScope,
 }
 
 impl Default for AnalysisConfig {
@@ -155,6 +172,7 @@ impl Default for AnalysisConfig {
             threshold_mode: ThresholdMode::Default,
             title: None,
             subtitle: None,
+            scope: ResolvedScope::default(),
         }
     }
 }
@@ -240,6 +258,14 @@ impl AnalysisConfig {
     #[must_use]
     pub fn with_subtitle<S: Into<String>>(mut self, subtitle: S) -> Self {
         self.subtitle = Some(subtitle.into());
+        self
+    }
+
+    /// Set the resolved relatedness-scoping predicate; returns `self`
+    /// for chaining. Built by the precedence merger (dry-rs#142).
+    #[must_use]
+    pub const fn with_scope(mut self, scope: ResolvedScope) -> Self {
+        self.scope = scope;
         self
     }
 }
