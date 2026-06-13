@@ -5,7 +5,12 @@
 //! [`Fingerprint`], [`Match`], [`Score`], [`Span`], [`FilePath`],
 //! [`FormKind`], [`Tier`], [`Severity`], [`Report`], [`Summary`].
 //! It also carries the ordered-tree IR the anti-unification pass
-//! operates over: [`NormalizedTree`], [`LeafToken`], [`LeafClass`].
+//! operates over ([`NormalizedTree`], [`LeafToken`], [`LeafClass`]) and
+//! the anti-unification result types that pass produces ([`Template`],
+//! [`TemplateNode`], [`Hole`], [`HoleKind`], [`Substitution`],
+//! [`SubElement`], [`Divergence`], [`DistinctValue`]) — POD here in the
+//! domain so [`Match`] can carry a [`Template`] without `domain`
+//! depending on the `comparison` engine that fills it.
 //!
 //! Per the hexagonal layering ADR (`ops/decisions/dry-rs/adr-hexagonal-layout.md`,
 //! filed in PR 2), this module must not import external crates other
@@ -38,6 +43,7 @@ mod report;
 mod score;
 mod span;
 mod summary;
+mod template;
 mod tree;
 
 pub use config::{Config, GateConfig, LanguageConfig, OutputConfig, WalkConfig};
@@ -49,4 +55,8 @@ pub use report::Report;
 pub use score::{Score, ScoreError};
 pub use span::{LineColumn, Span, SpanError};
 pub use summary::Summary;
+pub use template::{
+    DistinctValue, Divergence, Hole, HoleId, HoleKind, SubElement, Substitution, Template,
+    TemplateNode,
+};
 pub use tree::{LeafClass, LeafToken, NormalizedTree};
