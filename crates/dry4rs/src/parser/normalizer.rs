@@ -3,10 +3,40 @@
 //! See the parent module docs (`crate::parser`) and the O5 ADR for the
 //! full rule set. This module is the implementation site.
 
+use std::path::Path;
+
 use dry_core::domain::{FilePath, NormalizedForm};
 use dry_core::ports::{NormalizeError, NormalizerPort, PlaceholderPolicy};
 
 use super::walker::walk_file;
+
+/// Cargo integration-test root directory names. A source file with any
+/// of these as a path component is integration-test code — all of its
+/// forms classify as [`dry_core::domain::FormKind::Test`] regardless of
+/// `#[test]` markers (dry-rs#108).
+///
+/// This Cargo-convention heuristic lives in the dry4rs adapter, NOT in
+/// `dry-core`: it is Rust/Cargo-specific (dry4ts has no `tests/`
+/// convention), so the language-agnostic core stays free of it.
+const INTEGRATION_TEST_ROOTS: &[&str] = &["tests", "benches"];
+
+/// Does `path` live under a Cargo integration-test root (`tests/` or
+/// `benches/`)?
+///
+/// Matches on a PATH COMPONENT (so `src/tests_helpers.rs` is NOT a
+/// match — `tests_helpers` is not the `tests` component), and works
+/// regardless of separator style: `Path::components` normalises both
+/// `/` and `\` on the respective platforms, and we additionally split
+/// raw components on backslashes so a Windows-style path captured on a
+/// Unix host (or vice versa) still classifies correctly (see global
+/// memory: Rust emits backslashes on Windows runners).
+fn is_integration_test_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        let raw = component.as_os_str().to_string_lossy();
+        raw.split(['/', '\\'])
+            .any(|segment| INTEGRATION_TEST_ROOTS.contains(&segment))
+    })
+}
 
 /// The Rust adapter that converts Rust source into [`NormalizedForm`]s
 /// for the comparison engine.
@@ -65,13 +95,20 @@ impl NormalizerPort for SynNormalizer {
     fn normalize(
         &self,
         source: &str,
-        _path: &FilePath,
+        path: &FilePath,
     ) -> Result<Vec<NormalizedForm>, NormalizeError> {
         let file = syn::parse_file(source).map_err(|err| NormalizeError::Parse {
             message: err.to_string(),
             span: None,
         })?;
-        Ok(walk_file(&file))
+        // Path-based integration-test classification (dry-rs#108): every
+        // form in a `tests/` / `benches/` file is test-harness code,
+        // even without `#[test]` markers (cucumber step modules, BDD
+        // world fixtures). Seed the walk's test-context flag accordingly;
+        // attribute-based detection (`#[test]`, `#[given]`, …) still
+        // applies on top inside the walker.
+        let in_test_file = is_integration_test_path(path.as_path());
+        Ok(walk_file(&file, in_test_file))
     }
 
     /// The v0.1 placeholder policy — opaque, versioned default.
@@ -180,6 +217,52 @@ mod tests {
         // Locks the wire-envelope `language` value for the Rust adapter.
         let n = SynNormalizer::new();
         assert_eq!(n.language(), "rust");
+    }
+
+    #[test]
+    fn integration_test_path_detection(/* dry-rs#108 */) {
+        use std::path::Path;
+
+        use super::is_integration_test_path;
+
+        // Positive: a path component named `tests` / `benches`.
+        assert!(is_integration_test_path(Path::new(
+            "crates/foo/tests/it.rs"
+        )));
+        assert!(is_integration_test_path(Path::new(
+            "crates/foo/benches/bench.rs"
+        )));
+        assert!(is_integration_test_path(Path::new(
+            "crates/foo/tests/bdd_world/steps.rs"
+        )));
+        // Negative: ordinary src code.
+        assert!(!is_integration_test_path(Path::new(
+            "crates/foo/src/lib.rs"
+        )));
+        // Negative: `tests` as a substring of a file/dir name, not a
+        // standalone component.
+        assert!(!is_integration_test_path(Path::new(
+            "crates/foo/src/tests_helpers.rs"
+        )));
+        assert!(!is_integration_test_path(Path::new(
+            "crates/foo/src/integration_benches.rs"
+        )));
+    }
+
+    #[test]
+    fn normalize_seeds_test_kind_for_tests_tree(/* dry-rs#108 */) {
+        // A plain helper fn (no `#[test]`) under `tests/` classifies as
+        // Test via the path heuristic; the same source under `src/`
+        // stays Production.
+        let n = SynNormalizer::new();
+        let in_tests = n
+            .normalize("fn helper() {}", &path("crates/foo/tests/it.rs"))
+            .unwrap();
+        assert_eq!(in_tests[0].kind, dry_core::domain::FormKind::Test);
+        let in_src = n
+            .normalize("fn helper() {}", &path("crates/foo/src/lib.rs"))
+            .unwrap();
+        assert_eq!(in_src[0].kind, dry_core::domain::FormKind::Production);
     }
 
     #[test]

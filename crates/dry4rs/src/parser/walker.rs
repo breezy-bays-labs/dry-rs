@@ -44,9 +44,21 @@ use super::token::NormalizedToken;
 /// `ImplItemFn`, `TraitItemFn` with default body, and `ExprClosure`
 /// emit forms; everything else contributes fingerprints to the
 /// enclosing form (or is a container that recurses into nested forms).
-pub fn walk_file(file: &syn::File) -> Vec<NormalizedForm> {
+///
+/// `in_test_file` seeds the walk's test-context flag (dry-rs#108): when
+/// `true`, every form classifies as [`FormKind::Test`] regardless of
+/// `#[test]` markers, because the source lives under a Cargo
+/// integration-test root (`tests/` / `benches/`) — cucumber step
+/// modules, BDD world fixtures, and rstest helpers all carry no
+/// `#[test]` attribute yet are test-harness code. Attribute-based
+/// detection (`#[test]`, `#[given]`, …) still applies on top inside the
+/// walk. The path heuristic that resolves `in_test_file` lives in the
+/// dry4rs adapter (Cargo-specific); the walker only consumes the
+/// resolved boolean, keeping path-convention knowledge out of the
+/// shared traversal.
+pub fn walk_file(file: &syn::File, in_test_file: bool) -> Vec<NormalizedForm> {
     let mut walker = Walker::new();
-    walker.visit_items(&file.items, &[], false);
+    walker.visit_items(&file.items, &[], in_test_file);
     walker.into_forms()
 }
 
@@ -1369,13 +1381,40 @@ fn mod_is_cfg_test(item_mod: &syn::ItemMod) -> bool {
     })
 }
 
-/// Does the attribute list carry a `#[test]` or `#[tokio::test]`-style
-/// test attribute?
+/// Known test-framework attribute names whose presence marks a form as
+/// [`FormKind::Test`] (dry-rs#108).
+///
+/// The set is deliberately conservative — only attributes that are
+/// *unambiguously* test-harness markers in the Rust ecosystem:
+///
+/// - `test` — matches the std `#[test]`, `#[tokio::test]`,
+///   `#[async_std::test]`, and any `*::test` form (the last path
+///   segment is `test`).
+/// - `given` / `when` / `then` — cucumber-rs step definitions
+///   (`cucumber::given`, etc.). These carry NO `#[test]` marker, so
+///   without this list they leaked into the production lane (the
+///   originating bug: a 9-member cluster of `#[given]` steps in
+///   mokumo's BDD world files classified as production).
+/// - `rstest` — the rstest fixture/parameterized-test attribute.
+/// - `test_case` — the test-case parameterized-test attribute.
+///
+/// Matching is on the LAST path segment so namespaced forms
+/// (`cucumber::given`, `rstest::rstest`) are recognised. A production
+/// fn whose *name* resembles a step verb is unaffected — only the
+/// attribute triggers reclassification.
+const TEST_FRAMEWORK_ATTRS: &[&str] = &["test", "given", "when", "then", "rstest", "test_case"];
+
+/// Does the attribute list carry a recognised test-framework attribute?
+///
+/// Recognises `#[test]` / `#[tokio::test]`-style attributes plus the
+/// cucumber / rstest / `test_case` markers enumerated in
+/// [`TEST_FRAMEWORK_ATTRS`] (dry-rs#108).
 fn has_test_attr(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|attr| {
-        let path = attr.path();
-        // Match `test`, `*::test`, or any path ending in `test`.
-        path.segments.last().is_some_and(|seg| seg.ident == "test")
+        attr.path()
+            .segments
+            .last()
+            .is_some_and(|seg| TEST_FRAMEWORK_ATTRS.iter().any(|name| seg.ident == *name))
     })
 }
 
@@ -1424,10 +1463,14 @@ fn lines_in_span(span: &Span) -> u32 {
 mod tests {
     use super::*;
 
-    /// Helper: parse source + walk it, returning emitted forms.
+    /// Helper: parse source + walk it (NOT in an integration-test file),
+    /// returning emitted forms. The `in_test_file = false` seed isolates
+    /// attribute / `#[cfg(test)]`-based classification from the
+    /// path-based heuristic (which the normalizer integration tests
+    /// exercise separately).
     fn forms_of(source: &str) -> Vec<NormalizedForm> {
         let file = syn::parse_file(source).expect("parse fixture must succeed");
-        walk_file(&file)
+        walk_file(&file, false)
     }
 
     #[test]
@@ -1531,6 +1574,52 @@ mod tests {
         let forms = forms_of("#[tokio::test] async fn t() {}");
         assert_eq!(forms.len(), 1);
         assert_eq!(forms[0].kind, FormKind::Test);
+    }
+
+    #[test]
+    fn cucumber_given_attribute_makes_form_kind_test() {
+        // Cucumber step definitions (#[given]/#[when]/#[then]) carry no
+        // #[test] marker but ARE test-harness code (dry-rs#108).
+        let forms = forms_of(r#"#[given("a precondition")] fn a_precondition() {}"#);
+        assert_eq!(forms.len(), 1);
+        assert_eq!(forms[0].kind, FormKind::Test);
+    }
+
+    #[test]
+    fn cucumber_when_attribute_makes_form_kind_test() {
+        let forms = forms_of(r#"#[when("an action occurs")] fn an_action() {}"#);
+        assert_eq!(forms.len(), 1);
+        assert_eq!(forms[0].kind, FormKind::Test);
+    }
+
+    #[test]
+    fn cucumber_then_attribute_makes_form_kind_test() {
+        let forms = forms_of(r#"#[then("an outcome holds")] fn an_outcome() {}"#);
+        assert_eq!(forms.len(), 1);
+        assert_eq!(forms[0].kind, FormKind::Test);
+    }
+
+    #[test]
+    fn rstest_attribute_makes_form_kind_test() {
+        let forms = forms_of("#[rstest] fn parameterized() {}");
+        assert_eq!(forms.len(), 1);
+        assert_eq!(forms[0].kind, FormKind::Test);
+    }
+
+    #[test]
+    fn test_case_attribute_makes_form_kind_test() {
+        let forms = forms_of(r"#[test_case(1 => 2)] fn doubles(n: i32) -> i32 { n * 2 }");
+        assert_eq!(forms.len(), 1);
+        assert_eq!(forms[0].kind, FormKind::Test);
+    }
+
+    #[test]
+    fn production_fn_named_like_a_step_stays_production() {
+        // A plain production fn whose name resembles a step verb must
+        // NOT be reclassified — only the ATTRIBUTE triggers test kind.
+        let forms = forms_of("fn given_up() {}");
+        assert_eq!(forms.len(), 1);
+        assert_eq!(forms[0].kind, FormKind::Production);
     }
 
     #[test]

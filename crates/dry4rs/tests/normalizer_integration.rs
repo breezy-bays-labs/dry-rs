@@ -23,6 +23,14 @@ fn normalize(src: &str) -> Vec<dry4rs::domain::NormalizedForm> {
         .expect("fixture must parse")
 }
 
+/// Normalize `src` as if it lived at `p` — exercises the path-based
+/// integration-test classification (dry-rs#108).
+fn normalize_at(src: &str, p: &str) -> Vec<dry4rs::domain::NormalizedForm> {
+    SynNormalizer::new()
+        .normalize(src, &path(p))
+        .expect("fixture must parse")
+}
+
 #[test]
 fn attr_name_is_not_recorded_in_identifier_set() {
     // O11 contract: attribute names are NOT renameable identifiers;
@@ -755,4 +763,82 @@ fn if_let_expression_walks_pattern() {
     "#;
     let forms = normalize(src);
     assert_eq!(forms.len(), 1);
+}
+
+// --- dry-rs#108: integration-test classification -------------------
+//
+// Two detection paths fold into `FormKind::Test`:
+//   1. PATH-based — any file under a Cargo `tests/` or `benches/`
+//      integration root is test code, even without `#[test]` markers
+//      (cucumber step modules, BDD world fixtures, rstest helpers).
+//   2. ATTRIBUTE-based — known test-framework attributes classify a
+//      form as test regardless of its path (covered in
+//      `parser::walker::tests` unit tests + asserted here at the trait
+//      surface for the cucumber case).
+
+#[test]
+fn fn_under_tests_root_is_test_kind_even_without_test_attr() {
+    // PATH heuristic: a plain helper fn in an integration-test file has
+    // no `#[test]` and no enclosing `#[cfg(test)]`, yet it is test code.
+    let forms = normalize_at("fn helper() {}", "crates/foo/tests/it.rs");
+    assert_eq!(forms.len(), 1);
+    assert_eq!(forms[0].kind, FormKind::Test);
+}
+
+#[test]
+fn fn_under_benches_root_is_test_kind() {
+    // PATH heuristic: `benches/` is also a Cargo integration target.
+    let forms = normalize_at("fn bench_body() {}", "crates/foo/benches/bench.rs");
+    assert_eq!(forms.len(), 1);
+    assert_eq!(forms[0].kind, FormKind::Test);
+}
+
+#[test]
+fn fn_under_src_stays_production() {
+    // PATH heuristic must NOT over-reach: ordinary `src/` code is
+    // production. (A bare `src/lib.rs` fn with no test markers.)
+    let forms = normalize_at("fn business_logic() {}", "crates/foo/src/lib.rs");
+    assert_eq!(forms.len(), 1);
+    assert_eq!(forms[0].kind, FormKind::Production);
+}
+
+#[test]
+fn file_with_tests_in_name_but_not_a_dir_component_stays_production() {
+    // PATH heuristic keys on a PATH COMPONENT named `tests`/`benches`,
+    // not a substring — `src/tests_helpers.rs` is still production.
+    let forms = normalize_at("fn util() {}", "crates/foo/src/tests_helpers.rs");
+    assert_eq!(forms.len(), 1);
+    assert_eq!(forms[0].kind, FormKind::Production);
+}
+
+#[test]
+fn cucumber_step_in_tests_tree_is_test_kind() {
+    // The exact mokumo scenario from dry-rs#108: a cucumber step def
+    // (`#[given]`) inside a BDD world file under `tests/`. BOTH paths
+    // would classify it; this pins the trait-surface behavior.
+    let src = r#"#[given("a migration plan")] fn a_migration_plan() {}"#;
+    let forms = normalize_at(src, "crates/kikan/tests/bdd_world/steps.rs");
+    assert_eq!(forms.len(), 1);
+    assert_eq!(forms[0].kind, FormKind::Test);
+}
+
+#[test]
+fn cucumber_step_outside_tests_tree_is_still_test_via_attribute() {
+    // ATTRIBUTE path alone (no `tests/` component): a `#[when]` step in
+    // a `src/` file is still test-harness code.
+    let src = r#"#[when("the engine boots")] fn the_engine_boots() {}"#;
+    let forms = normalize_at(src, "crates/kikan/src/steps.rs");
+    assert_eq!(forms.len(), 1);
+    assert_eq!(forms[0].kind, FormKind::Test);
+}
+
+#[test]
+fn windows_style_tests_path_is_test_kind() {
+    // Path-component detection must survive backslash separators on
+    // Windows runners (see global memory: Rust emits backslashes on
+    // Windows). A `FilePath` built from a backslash path must still
+    // recognise the `tests` component.
+    let forms = normalize_at("fn helper() {}", r"crates\foo\tests\it.rs");
+    assert_eq!(forms.len(), 1);
+    assert_eq!(forms[0].kind, FormKind::Test);
 }
