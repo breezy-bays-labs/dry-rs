@@ -164,7 +164,7 @@ fn build_view(envelope: &Envelope, payload: String) -> HtmlReport {
 /// `<noscript>` overview (per-tier counts). The template owns all CSS / JS /
 /// layout; this struct supplies only semantic data.
 #[derive(Template)]
-#[template(path = "html_report.html", escape = "none")]
+#[template(path = "html_report.html")]
 struct HtmlReport {
     /// Page + overview heading. Falls back to "Duplication Report" when
     /// `[output].title` (and the `Envelope.title` echo) is unset.
@@ -180,12 +180,16 @@ struct HtmlReport {
     /// One entry per non-empty tier, canonical order — the `<noscript>`
     /// per-tier table rows.
     tiers: Vec<TierView>,
-    /// The serialized [`Envelope`] injected into `#dry-data`. `escape =
-    /// "none"` on the template passes it through verbatim; the `</script>`
-    /// break-out is neutralized in the template via the JSON-island idiom
-    /// (the value sits inside a `type="application/json"` script the
-    /// browser does not execute, and serde escapes `/` is unnecessary
-    /// because the closing tag is split — see the template comment).
+    /// The serialized [`Envelope`] injected into `#dry-data`. This is the
+    /// SOLE `|safe` (raw) injection in the template — every other variable
+    /// (`title`, `subtitle`, the `<noscript>` fields) is auto-escaped by
+    /// askama's default HTML escaping, so config-sourced `title` /
+    /// `subtitle` (echoed from the analyzed repo's `dry.toml`, untrusted)
+    /// cannot inject markup. `payload` is marked `|safe` because it is
+    /// already pre-sanitized by [`sanitize_island`] (which rewrites `</` to
+    /// `<\/`, neutralizing the `</script>` break-out) AND because
+    /// HTML-escaping JSON would corrupt it — the value lives inside a
+    /// `type="application/json"` island the browser parses, not executes.
     payload: String,
 }
 
@@ -292,6 +296,62 @@ mod tests {
         assert_eq!(parsed["result"]["matches"].as_array().unwrap().len(), 2);
         assert_eq!(parsed["capabilities"]["overview"], true);
         assert_eq!(parsed["capabilities"]["substitution_grid"], false);
+    }
+
+    #[test]
+    fn render_escapes_untrusted_title_and_subtitle() {
+        // SECURITY REGRESSION (Qodo XSS): `title` / `subtitle` echo the
+        // analyzed repo's `[output].title` / `[output].subtitle` from its
+        // `dry.toml` — attacker-controllable when analyzing an untrusted
+        // repo. They MUST be HTML-escaped (askama default) so a config like
+        // `title = "<script>alert(1)</script>"` cannot inject markup into
+        // the generated report (critical for the CI-artifact / Pages REPORT
+        // surface). Only the pre-sanitized JSON payload is `|safe`.
+        let mut env = Envelope::new(report_with_matches(), fixed_meta())
+            .with_presentation(Mode::Report, Capabilities::report());
+        env.title = Some("<script>alert(1)</script>".to_string());
+        env.subtitle = Some("<b>xss</b>".to_string());
+        let html = render(&env).unwrap();
+
+        // The `<` / `>` of the untrusted title + subtitle are entity-encoded
+        // by askama's default HTML escaping (askama 0.16 emits NUMERIC
+        // entities — `&#60;` / `&#62;` — which render as inert text exactly
+        // like `&lt;` / `&gt;`). Assert the markup-significant chars are
+        // encoded in BOTH the <title> and the <h1>/subtitle positions.
+        let lt = "&#60;"; // `<`
+        let gt = "&#62;"; // `>`
+        assert!(
+            html.contains(&format!("{lt}script{gt}alert(1){lt}/script{gt}")),
+            "title must be HTML-escaped: {html}"
+        );
+        assert!(
+            html.contains(&format!("{lt}b{gt}xss{lt}/b{gt}")),
+            "subtitle must be HTML-escaped: {html}"
+        );
+        // No ACTIVE markup may appear in the rendered document. The full
+        // `<script>…</script>` / `<b>…</b>` pairs must be absent: the
+        // template positions render them entity-encoded, and the JSON
+        // island's copy has its `</script>` neutralized to `<\/script>` by
+        // `sanitize_island`, so the closing-tag form never appears raw.
+        assert!(
+            !html.contains("<script>alert(1)</script>"),
+            "raw <script>…</script> must never appear: {html}"
+        );
+        assert!(
+            !html.contains("<b>xss</b>"),
+            "raw <b>…</b> must never appear: {html}"
+        );
+
+        // The `|safe` payload still round-trips as valid raw JSON.
+        let open = "type=\"application/json\">";
+        let start = html.find(open).expect("island open tag") + open.len();
+        let end = start + html[start..].find("</script>").expect("island close");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&html[start..end]).expect("payload must be valid JSON");
+        assert_eq!(parsed["schema_version"], 1);
+        // The untrusted title survives in the JSON payload as data (the JS
+        // reads it via JSON.parse + esc() before any DOM write).
+        assert_eq!(parsed["title"], "<script>alert(1)</script>");
     }
 
     #[test]
