@@ -19,9 +19,23 @@
 #   - No `copy_target = true` (CI uses `--in-place`; the setting is
 #     irrelevant under `--in-place` and adds disk pressure on local
 #     `-j N` runs).
-#   - No `minimum_test_timeout` floor (the baseline test time is
-#     ~3s; cargo-mutants's auto-derived 20s timeout is comfortable
-#     for every mutant in the comparison module).
+#   - `minimum_test_timeout = 120` floor (dry-rs#116). The dry-rs#106
+#     clustering merge added Pass-3 helpers whose whole-function /
+#     return-value mutants disable hash-bucket clustering or the
+#     sliding-window break, routing duplicate-heavy `comparison_proptest`
+#     inputs into the O(N^2) path. Under cargo-mutants's default
+#     `-j N` parallelism (N = CPU count) those test runs are CPU-starved
+#     and overran the auto-derived ~28s timeout even though they fail
+#     fast in isolation (verified: the full `dry-core` suite under
+#     `pass2_sliding_window /->%` FAILS in ~1s un-contended, but timed
+#     out under `-j 10`). The 120s floor lets the starved-but-finite
+#     mutants complete and be CAUGHT honestly, so the only residual
+#     timeouts are the genuine `grow_clique` infinite loops
+#     (`best_clique_candidate -> Some(0)/Some(1)`), which are classified
+#     below. Preferring a higher floor over blanket timeout-excludes
+#     keeps ~20 otherwise-killable mutants from being silently masked.
+
+minimum_test_timeout = 120
 
 # Per-line exclude regexes for mutants that survive by design or for
 # a documented reason. Anchored on `file:line:` so the regex matches
@@ -83,4 +97,43 @@ exclude_re = [
     # Line moved from 488 -> 540 (dry-rs#42 refactor sweep) -> 988
     # (dry-rs#106 clustering merge). tracked: dry-rs#116
     "comparison/mod\\.rs:988:.*: replace <= with > in jaccard",
+    # ---- dry-rs#106 clique-carving helpers (dry-rs#116) ----
+    # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
+    # EQUIVALENT: `uf_union` picks the min-index root as the component
+    # representative (`if ra < rb`). Its sole consumer,
+    # `component_size_by_node`, COUNTS nodes per component; the count is
+    # identical regardless of WHICH node is the representative root.
+    # Flipping `<` to `==`/`>`/`<=` only changes the representative, never
+    # the partition or any component size, so no test can distinguish
+    # them. Verified: the full `dry-core` suite (352 tests) PASSES under
+    # `< -> ==`. Operator-granular (the three `<`-relational transforms
+    # at col 30); the surrounding `!= -> ==` at col 11 is a real merge-
+    # guard change and is CAUGHT, so it is NOT excluded. tracked: dry-rs#116
+    "comparison/mod\\.rs:851:30: replace < with (==|>|<=) in uf_union",
+    # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
+    # EQUIVALENT: the SECOND `if p == root` loop in `uf_find` is path
+    # compression (a perf optimization). `uf_find`'s RETURN value (the
+    # root) is computed in the FIRST loop; the second loop only rewrites
+    # `parent` entries to point at the already-found root. Flipping its
+    # `==` to `!=` changes only how much compression happens, never the
+    # returned root, so component sizes and all downstream output are
+    # unchanged. Verified: the full `dry-core` suite PASSES under this
+    # mutant. Anchored to col 14 of line 836 (the path-compression loop)
+    # — the FIRST `== -> !=` at line 829 col 14 corrupts the root walk
+    # and is CAUGHT, so it is NOT excluded. tracked: dry-rs#116
+    "comparison/mod\\.rs:836:14: replace == with != in uf_find",
+    # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
+    # TIMEOUT-DETECTED (NOT an equivalence claim): replacing
+    # `best_clique_candidate`'s body with `Some(0)` / `Some(1)` makes
+    # `grow_clique`'s `while let Some(cand) = best_clique_candidate(..)`
+    # loop push the same node forever — a genuine infinite loop.
+    # cargo-mutants catches it via the timeout path; excluded to keep the
+    # green-CI signal clean per the ADR's timeout-detected handling. These
+    # are the ONLY residual timeouts after the `minimum_test_timeout = 120`
+    # floor (above) lets every starved-but-finite mutant complete and be
+    # caught. Operator-granular per return value; `best_clique_candidate
+    # -> None` is a real behavior change and is CAUGHT, so it is NOT
+    # excluded. tracked: dry-rs#116
+    "comparison/mod\\.rs:772:5: replace best_clique_candidate -> Option<usize> with Some\\(0\\)",
+    "comparison/mod\\.rs:772:5: replace best_clique_candidate -> Option<usize> with Some\\(1\\)",
 ]
