@@ -40,7 +40,7 @@ use crate::adapters::reporters::{markdown, text};
 use crate::adapters::source::{SourceError, SourceOutcome, SourceWarning, enumerate};
 use crate::comparison::{antiunify, compare_with_paths};
 use crate::domain::{
-    Config, FilePath, Match, NormalizedForm, NormalizedTree, Report, Span, Summary,
+    Config, FilePath, Match, NormalizedForm, NormalizedTree, Report, Span, Summary, Template,
 };
 use crate::ports::{NormalizerPort, TreeDeriverPort};
 
@@ -70,7 +70,8 @@ const EXIT_USAGE: u8 = 2;
 /// the generic bound the run loop demands of its type parameter widens.
 /// After detection, the run loop calls [`TreeDeriverPort::derive_tree`]
 /// for cluster members to attach an anti-unification [`Template`] to
-/// each multi-member [`Match`] (see [`attach_templates`]).
+/// each multi-member [`Match`] (see the private `attach_templates`
+/// helper).
 ///
 /// [`Template`]: crate::domain::Template
 ///
@@ -674,7 +675,7 @@ fn derive_match_template<N: TreeDeriverPort>(
     m: &Match,
     tree_deriver: &N,
     bag_by_identity: &std::collections::HashMap<(&FilePath, Span), &std::collections::HashSet<u64>>,
-) -> Option<crate::domain::Template> {
+) -> Option<Template> {
     // Cache reads WITHIN this match only (members frequently share a
     // file). Dropped when the match is done — no cross-match retention.
     let mut source_cache: std::collections::HashMap<&FilePath, Option<String>> =
@@ -726,7 +727,7 @@ struct DerivedMember<'a> {
 /// form of "`root.fp` equals the form's stored top-level fold". An
 /// edited-on-disk source produces top-level fps absent from the stored
 /// bag, failing the gate.
-fn decide_template(members: &[Option<DerivedMember<'_>>]) -> Option<crate::domain::Template> {
+fn decide_template(members: &[Option<DerivedMember<'_>>]) -> Option<Template> {
     let mut trees: Vec<NormalizedTree> = Vec::with_capacity(members.len());
     for member in members {
         let DerivedMember { tree, bag } = member.as_ref()?;
