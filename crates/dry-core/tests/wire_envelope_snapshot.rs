@@ -99,6 +99,15 @@ fn wire_envelope_omits_view_delta_diagnostics_when_unused() {
     // wire shape MUST omit them entirely (skip_serializing_if), not
     // emit them as `null` — that is the contract the ADR's
     // forward-compat table relies on.
+    //
+    // The same omission contract holds for the later additive fields
+    // (`title` / `subtitle`, dry-rs#78; `scope`, dry-rs#124): when the
+    // library-facing `Envelope::new` constructor leaves every additive
+    // field `None`, the serialized object is byte-identical to the v0.1
+    // snapshot. This is the explicit all-additive-fields-None case the
+    // build plan calls for — the run loop populates `scope`, but the
+    // constructor path (used by reporter unit tests + library callers)
+    // omits it.
     let json = render(&Report::empty_passed(), fixed_meta()).unwrap();
     assert!(
         !json.contains("\"view\""),
@@ -111,6 +120,18 @@ fn wire_envelope_omits_view_delta_diagnostics_when_unused() {
     assert!(
         !json.contains("\"diagnostics\""),
         "diagnostics must be absent at v0.1, got: {json}"
+    );
+    assert!(
+        !json.contains("\"title\""),
+        "title must be omitted when None, got: {json}"
+    );
+    assert!(
+        !json.contains("\"subtitle\""),
+        "subtitle must be omitted when None, got: {json}"
+    );
+    assert!(
+        !json.contains("\"scope\""),
+        "scope must be omitted when None (v0.1 byte-identical-when-off), got: {json}"
     );
 }
 

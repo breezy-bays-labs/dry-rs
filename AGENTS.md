@@ -316,6 +316,24 @@ pub struct Match {
   not serialized on the wire, not a clap value enum. Decoupled from
   `display_name` (human-readable text) — `language` is matched on
   by `EffectiveConfig::resolve` without string compares.
+- **`Envelope.scope: Option<ScopeApplied>` (dry-rs#124)** is the
+  relatedness-scoping echo, appended at the END of `Envelope` (after
+  `subtitle`) with `#[serde(skip_serializing_if = "Option::is_none")]`
+  so the v0.1 snapshot stays byte-identical when the run loop does not
+  populate it (the library-facing `Envelope::new` constructor leaves it
+  `None`; the CLI run loop always sets it). `ScopeApplied` is a result
+  struct (NO `#[non_exhaustive]`) carrying five `bool`s —
+  `within_crate` / `across_crate` / `within_module` / `across_module`
+  + the runtime `crate_aware` flag — a flat projection of
+  `cli::ResolvedScope`. `clippy::struct_excessive_bools` is allowed
+  (orthogonal axes, the user's mental model, NOT a bitflag candidate —
+  same rationale as `ResolvedScope`). Do NOT suggest collapsing the
+  five bools into a bitflag/enum, and do NOT suggest dropping
+  `skip_serializing_if`. The comparison engine consumes the predicate
+  through an internal `CompareCtx { resolver, scope }`; the public
+  facades `compare()` / `compare_with_paths()` stay the stable entry
+  points (default all-true scope = no-op), and the scoped run-loop entry
+  is `compare_with_paths_scoped(forms, paths, threshold, scope)`.
 
 ### `#[non_exhaustive]` discipline — enums YES, structs NO
 

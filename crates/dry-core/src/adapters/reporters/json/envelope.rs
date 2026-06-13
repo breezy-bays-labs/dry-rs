@@ -189,6 +189,51 @@ pub struct Envelope {
     /// behavior.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subtitle: Option<String>,
+    /// Resolved relatedness-scoping facts applied to this run (dry-rs#124,
+    /// Track B). Echoes the four scope axes plus the runtime `crate_aware`
+    /// flag the comparison engine pruned with, so reporters / the HTML
+    /// explorer can render a read-only scope banner without re-deriving
+    /// the predicate. Additive, declared at the END of the struct;
+    /// omitted from the wire when `None` so a run that does not populate
+    /// it stays byte-identical to the v0.1 snapshot. The run loop always
+    /// supplies it once scoping is wired (dry-rs#124); `None` is the
+    /// pre-scoping / unit-test default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ScopeApplied>,
+}
+
+/// The relatedness-scoping facts the comparison engine applied this run
+/// (dry-rs#124, Track B), echoed onto the wire as `Envelope.scope`.
+///
+/// A flat snapshot of the resolved predicate
+/// ([`crate::cli::ResolvedScope`]): the four orthogonal axes plus the
+/// runtime `crate_aware` flag (whether ANY form's crate-id was resolvable
+/// this run). Reporters and the HTML explorer read it to render a
+/// read-only scope banner — when `crate_aware == false` the two crate
+/// toggles are gray (the crate axis no-ops, since no crate-id was
+/// derivable).
+///
+/// Result struct (AGENTS.md `#[non_exhaustive]` discipline — structs NO):
+/// no `#[non_exhaustive]`; evolves via construction. Five `bool`s map 1:1
+/// to the locked `[scope]` config knobs + [`crate::cli::ResolvedScope`];
+/// `clippy::struct_excessive_bools` is allowed here for the same reason
+/// as on `ResolvedScope` — the orthogonal axes are the user's mental
+/// model, not a bitflag candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct ScopeApplied {
+    /// Whether same-crate / same-package pairs were allowed to cluster.
+    pub within_crate: bool,
+    /// Whether cross-crate / cross-package pairs were allowed to cluster.
+    pub across_crate: bool,
+    /// Whether same-module pairs were allowed to cluster.
+    pub within_module: bool,
+    /// Whether cross-module pairs were allowed to cluster.
+    pub across_module: bool,
+    /// Whether ANY form's crate-id was resolvable this run. When `false`,
+    /// the two crate axes were no-ops (always-allowed) so a single-dir
+    /// run never dropped every pair.
+    pub crate_aware: bool,
 }
 
 impl Envelope {
@@ -217,6 +262,7 @@ impl Envelope {
             diagnostics: None,
             title: None,
             subtitle: None,
+            scope: None,
         }
     }
 }
