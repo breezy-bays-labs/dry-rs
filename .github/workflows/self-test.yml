@@ -91,7 +91,7 @@ jobs:
         with:
           shared-key: dry-rs
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2
+      - uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2
         with:
           tool: cargo-nextest@0.9
       # The self-check integration test spawns the dry4rs binary
@@ -175,7 +175,7 @@ jobs:
         # Header value (the HTML-comment dedup marker) mirrors the body
         # H2 above so the sticky stays visually identifiable on the PR.
         if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2.9.4
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
         with:
           header: "dry-rs · production-code DRY scorecard"
           path: dry-self-scorecard-comment.md
@@ -251,7 +251,7 @@ jobs:
         # See `dry-self-scorecard`'s sticky step for the skip-on-main +
         # header-as-dedup-marker rationale.
         if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2.9.4
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
         with:
           header: "dry-rs · corpus measurement"
           path: dry-corpus-scorecard-comment.md
@@ -276,10 +276,10 @@ jobs:
         with:
           shared-key: dry-rs
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2
+      - uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2
         with:
           tool: cargo-nextest@0.9
-      - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2
+      - uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2
         with:
           tool: cargo-llvm-cov@0.6
 
@@ -314,7 +314,7 @@ jobs:
       # refactored the CC>15 hotspots and flipped this gate from
       # measurement-only to production-code real).
       - name: Run crap4rs scorecard (production-code CC ladder)
-        uses: breezy-bays-labs/crap-rs/.github/actions/scorecard@34b05488be45dbdeb5a10199a2a2ef1863517758 # crap4rs-v0.6.0
+        uses: breezy-bays-labs/crap-rs/.github/actions/scorecard@7c05007eaf2d90e95e5b865e8850896d59436a77 # crap4rs-v0.6.0
         with:
           language: rust
           coverage: lcov.info

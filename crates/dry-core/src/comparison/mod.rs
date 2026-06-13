@@ -1908,4 +1908,871 @@ mod tests {
         assert_eq!(uncapped.len(), 1, "uncapped carving emits one 4-clique");
         assert_eq!(uncapped[0].forms.len(), 4);
     }
+
+    // --- Pass 3 clustering-helper mutation hardening (dry-rs#116) ---
+
+    /// Build the four-form 4-clique fixture (component size 4, every
+    /// pair 9/11 ≈ 0.818) used by the component-cap boundary tests.
+    fn four_clique_forms() -> Vec<NormalizedForm> {
+        (0..4u64)
+            .map(|u| make_form(&(1..=9).chain([100 + u]).collect::<Vec<_>>(), 10))
+            .collect()
+    }
+
+    #[test]
+    fn carve_cliques_component_cap_is_a_strict_greater_than_boundary() {
+        // Pins the EXACT `>` in `carve_cliques`' oversize guard
+        // (`component_size[&e.i] > component_cap`). The component here
+        // has exactly 4 nodes.
+        //
+        // - cap == size (4): correct `4 > 4` is false -> the component
+        //   is carved into ONE 4-clique. The `> -> >=` mutant
+        //   (`4 >= 4` true) and the `> -> ==` mutant (`4 == 4` true)
+        //   both cap it and passthrough six binary edges instead.
+        // - cap == size + 1 (5): correct `4 > 5` is false -> carved
+        //   (one 4-clique). The `> -> <` mutant (`4 < 5` true) caps it
+        //   and passes through six binary edges.
+        //
+        // Together the two caps kill all three `carve_cliques`
+        // relational mutants without ever excluding the boundary.
+        let forms = four_clique_forms();
+        let claimed: HashSet<usize> = HashSet::new();
+        let edges = pass2_sliding_window(&forms, 0.8, &claimed);
+        assert_eq!(edges.len(), 6, "4-clique has six edges");
+
+        // cap == component size -> NOT capped -> one 4-clique.
+        let mut at_boundary: Vec<Match> = Vec::new();
+        emit_pass2_clusters(
+            &forms,
+            &SyntheticPathResolver,
+            0.8,
+            &edges,
+            4,
+            &mut at_boundary,
+        );
+        assert_eq!(
+            at_boundary.len(),
+            1,
+            "cap == size (4) must NOT cap; `>` is strict, got {at_boundary:?}"
+        );
+        assert_eq!(at_boundary[0].forms.len(), 4);
+
+        // cap == component size + 1 -> NOT capped -> one 4-clique.
+        let mut above_boundary: Vec<Match> = Vec::new();
+        emit_pass2_clusters(
+            &forms,
+            &SyntheticPathResolver,
+            0.8,
+            &edges,
+            5,
+            &mut above_boundary,
+        );
+        assert_eq!(
+            above_boundary.len(),
+            1,
+            "cap > size must NOT cap; the `< -> cap` mutant would passthrough, \
+             got {above_boundary:?}"
+        );
+        assert_eq!(above_boundary[0].forms.len(), 4);
+    }
+
+    #[test]
+    fn carve_cliques_skips_nodes_already_assigned_to_a_clique() {
+        // Pins the `||` in `carve_cliques`' membership guard
+        // (`clique_of.contains_key(&e.i) || clique_of.contains_key(&e.j)`)
+        // and, jointly, `best_clique_candidate`'s skip guard.
+        //
+        // Two disjoint triangles share NO elements, so they form two
+        // separate 3-cliques. After the first triangle is carved, its
+        // three nodes are in `clique_of`; the second triangle carves
+        // independently. The `|| -> &&` mutant only skips an edge when
+        // BOTH endpoints are already assigned, which lets an already-
+        // carved node re-seed a spurious overlapping clique — changing
+        // the emitted match count.
+        //
+        // Triangle 1: {1..=10}, {1..=9,11}, {1..=9,12} (all 9/11).
+        // Triangle 2: {21..=30}, {21..=29,31}, {21..=29,32} (all 9/11).
+        let forms = two_disjoint_triangles();
+        let matches = compare(&forms, 0.8);
+        assert_eq!(
+            matches.len(),
+            2,
+            "two disjoint triangles must carve into exactly two 3-cliques, got {matches:?}"
+        );
+        assert!(
+            matches.iter().all(|m| m.forms.len() == 3),
+            "each clique must hold all three triangle members: {matches:?}"
+        );
+    }
+
+    #[test]
+    fn min_intra_clique_score_returns_the_weakest_pair_not_a_constant() {
+        // Pins `min_intra_clique_score` against the const-return
+        // mutants (`-> 0.0`, `-> 1.0`, `-> -1.0`) and the
+        // `clique[pos + 1..]` range arithmetic.
+        //
+        // A 3-clique with heterogeneous pair scores: the cluster score
+        // MUST equal the minimum pair (not 0.0/1.0/-1.0, and not a
+        // value poisoned by a bogus self-pair from a `+ -> *`/`+ -> -`
+        // range mutation, which would panic on the missing diagonal
+        // `adj[&a][&a]`).
+        //
+        // A = {1..=19, 20}, B = {1..=19, 21}, C = {1..=19}:
+        //   A-C = B-C = 19/20 = 0.95; A-B = 19/21 ≈ 0.905 (the min).
+        let a: Vec<u64> = (1..=19).chain([20]).collect();
+        let b: Vec<u64> = (1..=19).chain([21]).collect();
+        let c: Vec<u64> = (1..=19).collect();
+        let forms = vec![make_form(&a, 20), make_form(&b, 20), make_form(&c, 19)];
+        let matches = compare(&forms, 0.85);
+        assert_eq!(matches.len(), 1, "expected one 3-clique, got {matches:?}");
+        assert_eq!(matches[0].forms.len(), 3);
+        // Exactly the weakest pair (19/21) — rules out every const
+        // return AND a self-pair-poisoned min.
+        assert!(
+            (matches[0].score - 19.0 / 21.0).abs() < 1e-12,
+            "cluster score must be the min pair 19/21 ≈ 0.9048, got {}",
+            matches[0].score
+        );
+        assert_eq!(matches[0].tier, Tier::ReviewFirst);
+    }
+
+    #[test]
+    fn residual_binary_match_members_ordered_by_identity() {
+        // Pins the `<=` in `emit_residual_matches`' member-ordering
+        // (`ident[&e.i] <= ident[&e.j]`). A single below-clique edge
+        // emits as ONE residual binary match whose `forms[0]` is the
+        // smaller identity. Distinct file identities (a.rs < b.rs) make
+        // the order observable; the `<= -> >` mutant flips forms[0]
+        // and forms[1].
+        //
+        // Two near-duplicate forms (Jaccard 4/5 = 0.8) — one residual
+        // edge, no clique. The input order is REVERSED relative to the
+        // file identities (index 0 -> b.rs, index 1 -> a.rs) so the
+        // helper must reorder by identity, not pass input order through.
+        let forms = vec![make_form(&[1, 2, 3, 4], 4), make_form(&[1, 2, 3, 4, 5], 5)];
+        let paths = vec![
+            FilePath::from(std::path::PathBuf::from("b.rs")),
+            FilePath::from(std::path::PathBuf::from("a.rs")),
+        ];
+        let matches = compare_with_paths(&forms, &paths, 0.7);
+        assert_eq!(matches.len(), 1, "one residual binary match expected");
+        let files: Vec<String> = matches[0]
+            .forms
+            .iter()
+            .map(|f| f.file.to_string())
+            .collect();
+        assert_eq!(
+            files,
+            vec!["a.rs".to_string(), "b.rs".to_string()],
+            "residual members must be identity-ordered (a.rs before b.rs)"
+        );
+    }
+
+    #[test]
+    fn min_edge_into_clique_drives_member_selection_not_a_constant() {
+        // Pins `min_edge_into_clique` against `-> None` and the
+        // const-`Some(_)` mutants. The greedy growth admits the
+        // candidate maximizing the MINIMUM edge into the clique; if the
+        // function returned a constant or `None`, growth would either
+        // reject every candidate (`None` -> no 3-clique forms) or admit
+        // on a bogus uniform score (admitting a non-adjacent node and
+        // inflating the clique).
+        //
+        // Seed/grow a 3-clique {A,B,C} (all pairs 19/21 ≈ 0.905). A
+        // fourth form D shares only {1..=18} with each, so every D-edge
+        // is below threshold and D has NO adjacency. A `-> None` mutant
+        // blocks A and C from joining the seed (only a residual pair
+        // survives). A const `Some(1.0)` mutant ignores real adjacency
+        // and would admit D too (a 4-form clique).
+        //
+        // A = {1..=18, 19, 20}, B = {1..=18, 19, 21},
+        // C = {1..=18, 19, 22}, D = {1..=18, 40, 41}:
+        //   A-B, A-C, B-C = 19/21 ≈ 0.905 (>= 0.85);
+        //   D shares only {1..=18} (18 elts) with each of A/B/C:
+        //   D-A = 18/(20+20-18) = 18/22 ≈ 0.818 < 0.85 -> no edge.
+        let a: Vec<u64> = (1..=18).chain([19, 20]).collect();
+        let b: Vec<u64> = (1..=18).chain([19, 21]).collect();
+        let c: Vec<u64> = (1..=18).chain([19, 22]).collect();
+        let d: Vec<u64> = (1..=18).chain([40, 41]).collect();
+        let forms = vec![
+            make_form(&a, 20),
+            make_form(&b, 20),
+            make_form(&c, 20),
+            make_form(&d, 20),
+        ];
+        let matches = compare(&forms, 0.85);
+        // Exactly one 3-clique {A,B,C}; D shares no >= threshold edge.
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected one 3-clique with D excluded, got {matches:?}"
+        );
+        assert_eq!(
+            matches[0].forms.len(),
+            3,
+            "min_edge_into_clique must admit A and C onto the seed, but not D: {matches:?}"
+        );
+        assert!(
+            (matches[0].score - 19.0 / 21.0).abs() < 1e-12,
+            "clique min score must be 19/21, got {}",
+            matches[0].score
+        );
+    }
+
+    #[test]
+    fn candidate_beats_best_is_deterministic_on_ties() {
+        // Pins `candidate_beats_best` against `-> true`, `-> false`,
+        // and the `<` identity tie-break
+        // (`ident[&cand] < ident[&best_cand]`). In a triangle the seed
+        // edge's two extension candidates tie on minimum edge (all
+        // 9/11), so the tie-break MUST pick the smaller identity
+        // deterministically AND identically across input permutations.
+        //
+        // Triangle (all pairs 9/11) with distinct file identities. The
+        // emitted members are identity-sorted; the permutation-stability
+        // check is what pins the tie-break: a `-> true` mutant admits
+        // whichever candidate the `BTreeMap` scan reaches first (still
+        // identity-stable here since adj keys are ordered), but a
+        // `-> false` mutant never updates `best` and yields `None` from
+        // `best_clique_candidate` (the clique never grows past the seed
+        // pair) -> two matches instead of one. The `< -> ==/<=/>` tie-
+        // break mutants flip member order under permutation.
+        let paths = vec![
+            FilePath::from(std::path::PathBuf::from("a.rs")),
+            FilePath::from(std::path::PathBuf::from("b.rs")),
+            FilePath::from(std::path::PathBuf::from("c.rs")),
+        ];
+        let forward = compare_with_paths(&triangle_forms(), &paths, 0.8);
+        assert_eq!(
+            forward.len(),
+            1,
+            "triangle must be one 3-clique (a `candidate_beats_best -> false` \
+             mutant would never grow the seed), got {forward:?}"
+        );
+        let files: Vec<String> = forward[0]
+            .forms
+            .iter()
+            .map(|f| f.file.to_string())
+            .collect();
+        assert_eq!(
+            files,
+            vec!["a.rs", "b.rs", "c.rs"],
+            "clique members must be identity-ordered deterministically"
+        );
+
+        // Permuting the input must not change the emitted member set —
+        // the tie-break derives from identity, not input index.
+        let permuted_paths = vec![paths[2].clone(), paths[0].clone(), paths[1].clone()];
+        let pf = triangle_forms();
+        let permuted_forms = vec![pf[2].clone(), pf[0].clone(), pf[1].clone()];
+        let backward = compare_with_paths(&permuted_forms, &permuted_paths, 0.8);
+        assert_eq!(backward.len(), 1);
+        let back_files: Vec<String> = backward[0]
+            .forms
+            .iter()
+            .map(|f| f.file.to_string())
+            .collect();
+        assert_eq!(files, back_files, "tie-break must be permutation-stable");
+    }
+
+    #[test]
+    fn edge_absorbed_distinguishes_same_clique_from_cross_clique() {
+        // Pins `edge_absorbed`'s match (`(Some(a), Some(b)) => a == b`):
+        // the `delete match arm` mutant and the `== -> !=` mutant.
+        //
+        // Two disjoint triangles -> two cliques (ids 0 and 1). Within a
+        // triangle every edge is absorbed (a == b, same clique) and
+        // must NOT re-emit as a residual. The `== -> !=` mutant treats
+        // same-clique edges as residuals (emitting six spurious binary
+        // matches); the deleted arm collapses to the wildcard `false`,
+        // also re-emitting every intra-clique edge as a residual.
+        // Correct output: exactly two 3-form matches, zero binary
+        // residuals.
+        let forms = two_disjoint_triangles();
+        let matches = compare(&forms, 0.8);
+        assert_eq!(
+            matches.len(),
+            2,
+            "absorbed intra-clique edges must NOT re-emit as residuals, got {matches:?}"
+        );
+        assert!(
+            matches.iter().all(|m| m.forms.len() == 3),
+            "every emitted match must be a 3-clique, no binary residuals: {matches:?}"
+        );
+    }
+
+    #[test]
+    fn union_find_partitions_two_small_components_independently() {
+        // Pins `uf_find` (`-> 0`, `-> 1`, the two `== -> !=`) and
+        // `uf_union`'s `!= -> ==` against a TWO-component input.
+        //
+        // `component_size_by_node` is the only consumer of union-find,
+        // and the size feeds the cap check. Two disjoint triangles form
+        // two separate 3-node components. With a component cap of 3:
+        //   - Correct union-find: each component has size 3, `3 > 3` is
+        //     false -> BOTH carve into 3-cliques (two matches).
+        //   - A broken `uf_find`/`uf_union` that COLLAPSES the two
+        //     components into one (`-> 0`/`-> 1` makes every node share
+        //     a root; a corrupted root walk or skipped merge miscounts)
+        //     yields a phantom 6-node "component" -> `6 > 3` true ->
+        //     capped -> passthrough of all six intra-triangle edges as
+        //     binary matches.
+        //
+        // Six binary residuals vs two 3-cliques is the observable
+        // difference. Exercises `emit_pass2_clusters` directly so the
+        // cap is controllable (the production cap is 512).
+        let forms = two_disjoint_triangles();
+        let claimed: HashSet<usize> = HashSet::new();
+        let edges = pass2_sliding_window(&forms, 0.8, &claimed);
+        // Each triangle contributes three edges; the two are disjoint.
+        assert_eq!(edges.len(), 6, "two triangles contribute six edges total");
+
+        // Cap exactly at the per-component size (3). Correct union-find
+        // keeps the components separate, so neither is capped.
+        let mut out: Vec<Match> = Vec::new();
+        emit_pass2_clusters(&forms, &SyntheticPathResolver, 0.8, &edges, 3, &mut out);
+        assert_eq!(
+            out.len(),
+            2,
+            "correct union-find keeps two size-3 components uncapped -> two 3-cliques; \
+             a collapsed/miscounted partition would cap a phantom size-6 component into \
+             six binary residuals, got {out:?}"
+        );
+        assert!(
+            out.iter().all(|m| m.forms.len() == 3),
+            "each component must carve into a 3-clique: {out:?}"
+        );
+    }
+
+    #[test]
+    fn union_find_must_merge_a_triangle_into_one_oversize_component() {
+        // Pins `uf_union`'s `!= -> ==` merge guard (and reinforces
+        // `uf_find`) from the UNDER-count direction. The two-component
+        // test above catches collapse (over-count -> spurious cap);
+        // this one catches a union-find that fails to MERGE.
+        //
+        // A single triangle is ONE component of size 3. With a cap of
+        // 2:
+        //   - Correct union-find merges all three nodes -> size 3,
+        //     `3 > 2` true -> capped -> three binary residuals.
+        //   - The `!= -> ==` mutant skips every real merge, so each
+        //     node stays its own size-1 component -> `1 > 2` false ->
+        //     NOT capped -> one 3-clique. (Likewise a `uf_find`
+        //     corruption that mis-roots nodes undercounts here.)
+        //
+        // One 3-clique vs three binary residuals is the observable
+        // difference. Exercises `emit_pass2_clusters` directly to drive
+        // the cap below the real component size.
+        let forms = triangle_forms();
+        let claimed: HashSet<usize> = HashSet::new();
+        let edges = pass2_sliding_window(&forms, 0.8, &claimed);
+        assert_eq!(edges.len(), 3, "triangle has three edges");
+
+        let mut out: Vec<Match> = Vec::new();
+        emit_pass2_clusters(&forms, &SyntheticPathResolver, 0.8, &edges, 2, &mut out);
+        assert_eq!(
+            out.len(),
+            3,
+            "correct union-find merges the triangle into one size-3 component, which \
+             exceeds cap 2 -> three binary residuals; a non-merging union-find would \
+             leave size-1 components uncapped -> one 3-clique, got {out:?}"
+        );
+        assert!(
+            out.iter().all(|m| m.forms.len() == 2),
+            "an over-cap component passes through as binary residuals: {out:?}"
+        );
+    }
+
+    /// Two element-disjoint triangles (six forms): forms 0–2 share
+    /// `{1..=9}` (+ one unique element each) and forms 3–5 share
+    /// `{21..=29}` (+ one unique element each). Every intra-triangle
+    /// pair is 9/11 ≈ 0.818; every cross-triangle pair is 0.0. Used by
+    /// the union-find / edge-absorbed / membership-guard mutation tests
+    /// where TWO independent components are the discriminating input.
+    fn two_disjoint_triangles() -> Vec<NormalizedForm> {
+        let sets: Vec<Vec<u64>> = vec![
+            (1..=10).collect(),
+            (1..=9).chain([11]).collect(),
+            (1..=9).chain([12]).collect(),
+            (21..=30).collect(),
+            (21..=29).chain([31]).collect(),
+            (21..=29).chain([32]).collect(),
+        ];
+        sets.iter().map(|s| make_form(s, 10)).collect()
+    }
+
+    // --- Candidate-selection coverage requiring TWO simultaneous growth
+    //     candidates (dry-rs#116, second hardening pass) ---
+    //
+    // The triangle/two-triangle fixtures above only ever present ONE
+    // growth candidate after the seed edge, so `candidate_beats_best`'s
+    // comparison arms and `min_edge_into_clique`'s real return value are
+    // never exercised. These fixtures are "K4 minus one edge": a seed
+    // pair plus two competing candidates NOT adjacent to each other,
+    // forcing the greedy to choose between them.
+
+    /// K4-minus-edge with UNEQUAL candidate worsts. Seed P-Q is the
+    /// strongest edge; H fits the seed at 0.925, L at 0.857; H-L is
+    /// below threshold (0.837) so only one of them can join. The greedy
+    /// must admit H (higher minimum edge) and reject L.
+    ///
+    /// P = {1..=36, 901, 902}, Q = {1..=36, 901, 903},
+    /// H = {1..=35, 901, 902, 903, 910}, L = {3..=36, 901, 902, 903,
+    /// 920, 921, 922}:
+    ///   P-Q 0.949 (seed), P-H = Q-H 0.925, P-L = Q-L 0.857,
+    ///   H-L 0.837 (< 0.85, no edge).
+    fn k4_minus_edge_unequal() -> Vec<NormalizedForm> {
+        let p: Vec<u64> = (1..=36).chain([901, 902]).collect();
+        let q: Vec<u64> = (1..=36).chain([901, 903]).collect();
+        let h: Vec<u64> = (1..=35).chain([901, 902, 903, 910]).collect();
+        let l: Vec<u64> = (3..=36).chain([901, 902, 903, 920, 921, 922]).collect();
+        vec![
+            make_form(&p, 20),
+            make_form(&q, 20),
+            make_form(&h, 20),
+            make_form(&l, 20),
+        ]
+    }
+
+    #[test]
+    fn greedy_admits_higher_worst_candidate_and_rejects_the_disconnected_one() {
+        // Kills `min_edge_into_clique -> Some(0.0/1.0/-1.0)` (a constant
+        // return would admit L despite the missing H-L edge -> a 4-form
+        // cluster), `candidate_beats_best -> true` and the `< -> ==/>/<=`
+        // ranking mutants (which would admit L over H -> wrong member
+        // set), and `best_clique_candidate -> None`.
+        //
+        // Correct carving: seed {P,Q}; admit H (worst 0.925 > L's 0.857);
+        // L is not adjacent to H so it cannot join -> clique {P,Q,H}
+        // scored by its weakest pair (0.925). L emits as residual pairs.
+        let paths = vec![
+            FilePath::from(std::path::PathBuf::from("p.rs")),
+            FilePath::from(std::path::PathBuf::from("q.rs")),
+            FilePath::from(std::path::PathBuf::from("h.rs")),
+            FilePath::from(std::path::PathBuf::from("l.rs")),
+        ];
+        let matches = compare_with_paths(&k4_minus_edge_unequal(), &paths, 0.85);
+
+        // Exactly one 3-clique {P,Q,H}; L is not a clique member.
+        let cliques: Vec<&Match> = matches.iter().filter(|m| m.forms.len() == 3).collect();
+        assert_eq!(
+            cliques.len(),
+            1,
+            "expected exactly one 3-clique, got {matches:?}"
+        );
+        let members: Vec<String> = cliques[0]
+            .forms
+            .iter()
+            .map(|f| f.file.to_string())
+            .collect();
+        assert_eq!(
+            members,
+            vec!["h.rs", "p.rs", "q.rs"],
+            "clique must be {{P,Q,H}} (H, the higher-worst candidate), not L: {matches:?}"
+        );
+        assert!(
+            (cliques[0].score - 0.925).abs() < 1e-9,
+            "clique min score must be 0.925 (P-H/Q-H), got {}",
+            cliques[0].score
+        );
+        // L surfaces only as residual binary matches (with P and Q).
+        assert!(
+            matches.iter().any(|m| {
+                let f: Vec<String> = m.forms.iter().map(|x| x.file.to_string()).collect();
+                m.forms.len() == 2 && f.contains(&"l.rs".to_string())
+            }),
+            "L must emit as a residual pair, not be dropped or absorbed: {matches:?}"
+        );
+    }
+
+    /// K4-minus-edge with EQUAL candidate worsts (the tie case). Seed
+    /// P-Q strongest; the two candidates H and L each fit the seed at
+    /// the SAME minimum edge (0.895); H-L is below threshold (0.813) so
+    /// only one can join. The greedy ties on the minimum edge, so the
+    /// identity tie-break (`ident[&cand] < ident[&best_cand]`) decides
+    /// which one is admitted.
+    ///
+    /// A large shared core (`1..=100`) gives the headroom to keep H and
+    /// L equally close to the seed while still pulling them apart from
+    /// each other: H drops the core's tail (`93..=100`), L drops its head
+    /// (`1..=8`), and each adds a private 2-element tail.
+    ///
+    /// P = {1..=100, 901, 902}, Q = {1..=100, 901, 903},
+    /// H = {1..=92, 901, 902, 903, 940, 941},
+    /// L = {9..=100, 901, 902, 903, 950, 951}:
+    ///   P-Q 0.981 (seed), P-H = Q-H = P-L = Q-L 0.895 (tie),
+    ///   H-L 0.813 (< 0.85, no edge).
+    fn k4_minus_edge_tie() -> (Vec<NormalizedForm>, Vec<FilePath>) {
+        let p: Vec<u64> = (1..=100).chain([901, 902]).collect();
+        let q: Vec<u64> = (1..=100).chain([901, 903]).collect();
+        let h: Vec<u64> = (1..=92).chain([901, 902, 903, 940, 941]).collect();
+        let l: Vec<u64> = (9..=100).chain([901, 902, 903, 950, 951]).collect();
+        let forms = vec![
+            make_form(&p, 20),
+            make_form(&q, 20),
+            make_form(&h, 20),
+            make_form(&l, 20),
+        ];
+        let paths = vec![
+            FilePath::from(std::path::PathBuf::from("p.rs")),
+            FilePath::from(std::path::PathBuf::from("q.rs")),
+            FilePath::from(std::path::PathBuf::from("h_candidate.rs")),
+            FilePath::from(std::path::PathBuf::from("l_candidate.rs")),
+        ];
+        (forms, paths)
+    }
+
+    #[test]
+    fn candidate_tie_break_picks_smaller_identity_deterministically() {
+        // Kills the `818 < -> ==/>/<=` identity tie-break mutants AND
+        // `candidate_beats_best -> true`. With H and L tied on minimum
+        // edge into the seed {P,Q}, the tie-break admits the smaller
+        // identity. `h_candidate.rs` < `l_candidate.rs`, so H joins and
+        // the clique is {P,Q,H}. A flipped tie-break (`>`/`<=`/`==`)
+        // would admit L instead; `-> true` admits whichever the BTreeMap
+        // scan reaches last.
+        let (forms, paths) = k4_minus_edge_tie();
+        let matches = compare_with_paths(&forms, &paths, 0.85);
+        let cliques: Vec<&Match> = matches.iter().filter(|m| m.forms.len() == 3).collect();
+        assert_eq!(cliques.len(), 1, "expected one 3-clique, got {matches:?}");
+        let members: Vec<String> = cliques[0]
+            .forms
+            .iter()
+            .map(|f| f.file.to_string())
+            .collect();
+        assert_eq!(
+            members,
+            vec!["h_candidate.rs", "p.rs", "q.rs"],
+            "tie-break must admit the smaller identity (h_candidate < l_candidate): {matches:?}"
+        );
+
+        // Permuting input order must not change the admitted member —
+        // the tie-break is identity-driven, never input-index-driven.
+        let permuted_forms = vec![
+            forms[3].clone(),
+            forms[2].clone(),
+            forms[1].clone(),
+            forms[0].clone(),
+        ];
+        let permuted_paths = vec![
+            paths[3].clone(),
+            paths[2].clone(),
+            paths[1].clone(),
+            paths[0].clone(),
+        ];
+        let permuted = compare_with_paths(&permuted_forms, &permuted_paths, 0.85);
+        let pcliques: Vec<&Match> = permuted.iter().filter(|m| m.forms.len() == 3).collect();
+        assert_eq!(pcliques.len(), 1);
+        let pmembers: Vec<String> = pcliques[0]
+            .forms
+            .iter()
+            .map(|f| f.file.to_string())
+            .collect();
+        assert_eq!(
+            members, pmembers,
+            "tie-break must be permutation-stable, not input-order-dependent"
+        );
+    }
+
+    #[test]
+    fn best_clique_candidate_skips_a_node_already_in_the_growing_clique() {
+        // Kills `774 || -> &&` (the `clique_of.contains_key(&cand) ||
+        // clique.contains(&cand)` skip guard). During growth a node
+        // already in the CURRENT clique (`clique.contains`, but not yet
+        // in `clique_of`) must be skipped. With `&&`, a current member
+        // would only be skipped if ALSO in `clique_of` — letting the
+        // grower re-examine an already-admitted node, changing the
+        // emitted clique or duplicating a member.
+        //
+        // Use the unequal K4-minus-edge: after admitting H onto {P,Q},
+        // the next scan of `adj[&P].keys()` re-encounters Q and H (both
+        // current members), which MUST be skipped via `clique.contains`.
+        let paths = vec![
+            FilePath::from(std::path::PathBuf::from("p.rs")),
+            FilePath::from(std::path::PathBuf::from("q.rs")),
+            FilePath::from(std::path::PathBuf::from("h.rs")),
+            FilePath::from(std::path::PathBuf::from("l.rs")),
+        ];
+        let matches = compare_with_paths(&k4_minus_edge_unequal(), &paths, 0.85);
+        let cliques: Vec<&Match> = matches.iter().filter(|m| m.forms.len() >= 3).collect();
+        assert_eq!(
+            cliques.len(),
+            1,
+            "exactly one clique, with each member present once, got {matches:?}"
+        );
+        let mut members: Vec<String> = cliques[0]
+            .forms
+            .iter()
+            .map(|f| f.file.to_string())
+            .collect();
+        let unique: std::collections::HashSet<&String> = members.iter().collect();
+        assert_eq!(
+            unique.len(),
+            members.len(),
+            "no clique member may appear twice (the skip guard must reject \
+             current members): {members:?}"
+        );
+        members.sort();
+        assert_eq!(members, vec!["h.rs", "p.rs", "q.rs"]);
+    }
+
+    #[test]
+    fn residual_pair_members_ordered_by_identity_in_a_chain() {
+        // Kills `722 <= -> >` (the residual member-ordering in
+        // `emit_residual_matches`). A chain A-B-C where A-B is the
+        // strongest edge seeds the 2-clique {A,B}; B-C is then a
+        // cross-clique RESIDUAL (B is in clique 0, C is unassigned) and
+        // flows through `emit_residual_matches`'s `ident[&e.i] <=
+        // ident[&e.j]` ordering. With distinct identities the residual's
+        // forms[0] is the smaller identity; the `<= -> >` mutant flips
+        // forms[0] and forms[1].
+        //
+        // A = {1..=19, 100}, B = {1..=19, 101}, C = {3..=19, 101, 300,
+        // 301}:
+        //   A-B 0.905 (strongest -> clique {A,B}),
+        //   B-C 0.818 (residual), A-C 0.739 (< 0.8, no edge).
+        // Identities: B = "b_mid.rs", C = "c_tail.rs" -> residual must
+        // be [b_mid.rs, c_tail.rs].
+        let a: Vec<u64> = (1..=19).chain([100]).collect();
+        let b: Vec<u64> = (1..=19).chain([101]).collect();
+        let c: Vec<u64> = (3..=19).chain([101, 300, 301]).collect();
+        let forms = vec![make_form(&a, 20), make_form(&b, 20), make_form(&c, 20)];
+        let paths = vec![
+            FilePath::from(std::path::PathBuf::from("a_head.rs")),
+            FilePath::from(std::path::PathBuf::from("b_mid.rs")),
+            FilePath::from(std::path::PathBuf::from("c_tail.rs")),
+        ];
+        let matches = compare_with_paths(&forms, &paths, 0.8);
+
+        // One 2-clique {A,B} + one residual pair {B,C}.
+        let residual = matches
+            .iter()
+            .find(|m| {
+                let f: Vec<String> = m.forms.iter().map(|x| x.file.to_string()).collect();
+                f.contains(&"c_tail.rs".to_string())
+            })
+            .expect("B-C residual pair must be emitted");
+        assert_eq!(residual.forms.len(), 2, "B-C is a binary residual");
+        let files: Vec<String> = residual.forms.iter().map(|f| f.file.to_string()).collect();
+        assert_eq!(
+            files,
+            vec!["b_mid.rs", "c_tail.rs"],
+            "residual members must be identity-ordered (b_mid before c_tail): {residual:?}"
+        );
+    }
+
+    /// Overlapping-adjacency fixture for the `best_clique_candidate`
+    /// membership guard (dry-rs#116). A node X is carved into an EARLIER
+    /// clique A, then is adjacent (at a lower score) to every member of
+    /// a LATER-seeded clique B. The `clique_of.contains_key(&cand)` arm
+    /// of the skip guard is the only thing keeping X out of B.
+    ///
+    /// Layout (threshold 0.3): P,Q,X share `1..=20`; X additionally
+    /// carries the bridge `100..=119` that R,S share (`100..=115`). P,Q
+    /// have NO bridge element, so they are NOT adjacent to R,S — X is the
+    /// UNIQUE bridge between the two cliques.
+    ///
+    /// Edge scores (descending):
+    ///   P-Q 0.913 (A seed) > R-S 0.895 (B seed)
+    ///     > P-X = Q-X 0.465 (X joins A) > R-X = S-X 0.372 (X bridges B).
+    ///
+    /// Carving: A={P,Q,X} seeds at P-Q, admits X. R-S then seeds B; X is
+    /// adjacent to both R and S, so it is a growth candidate — but X is
+    /// already in `clique_of` (it was carved into A), so the OR-guard
+    /// skips it and B stays {R,S}. R-X / S-X emit as cross-clique
+    /// residual pairs.
+    fn overlapping_bridge_forms() -> (Vec<NormalizedForm>, Vec<FilePath>) {
+        // pp,qq carry only the A-core; xx (the bridge) carries A-core +
+        // the B-bridge; rr,ss carry only the B-bridge.
+        let pp: Vec<u64> = (1..=20).chain([901, 902]).collect();
+        let qq: Vec<u64> = (1..=20).chain([901, 903]).collect();
+        let xx: Vec<u64> = (1..=20).chain(100..=119).chain([904]).collect();
+        let rr: Vec<u64> = (100..=115).chain([2001, 2002]).collect();
+        let ss: Vec<u64> = (100..=115).chain([2001, 2003]).collect();
+        let forms = vec![
+            make_form(&pp, 22),
+            make_form(&qq, 22),
+            make_form(&xx, 41),
+            make_form(&rr, 18),
+            make_form(&ss, 18),
+        ];
+        let paths = ["p.rs", "q.rs", "x.rs", "r.rs", "s.rs"]
+            .iter()
+            .map(|n| FilePath::from(std::path::PathBuf::from(n)))
+            .collect();
+        (forms, paths)
+    }
+
+    #[test]
+    fn carved_node_is_not_re_admitted_to_a_later_clique() {
+        // Kills `774 || -> &&` (the `clique_of.contains_key(&cand) ||
+        // clique.contains(&cand)` membership skip guard in
+        // `best_clique_candidate`). When B={R,S} grows, X is adjacent to
+        // both members and would join — but X is already carved into A,
+        // so it is in `clique_of` (NOT in the growing clique B). The
+        // correct OR-guard skips X via `clique_of.contains_key`. The
+        // `&&` mutant requires BOTH conditions, so X (in clique_of but
+        // not in B) is NOT skipped -> X is wrongly admitted to B,
+        // appearing in TWO n-ary cliques and stealing the R-X / S-X
+        // residual edges.
+        //
+        // The existing disjoint-triangle / K4-minus-edge fixtures cannot
+        // catch this: they never present a candidate that is in
+        // `clique_of` but absent from the current clique (a candidate
+        // already in the current clique is independently rejected by
+        // `min_edge_into_clique` returning None for the self-edge, which
+        // masks the `&&` flip). Overlapping adjacency is required.
+        let (forms, paths) = overlapping_bridge_forms();
+        let matches = compare_with_paths(&forms, &paths, 0.3);
+
+        let members_of = |m: &Match| -> Vec<String> {
+            let mut v: Vec<String> = m.forms.iter().map(|f| f.file.to_string()).collect();
+            v.sort();
+            v
+        };
+
+        // Exactly one >=3-member clique: {P,Q,X}. The `&&` mutant emits a
+        // SECOND ({R,S,X}).
+        let nary: Vec<Vec<String>> = matches
+            .iter()
+            .filter(|m| m.forms.len() >= 3)
+            .map(members_of)
+            .collect();
+        assert_eq!(
+            nary.len(),
+            1,
+            "exactly one n-ary clique expected ({{P,Q,X}}); the && mutant \
+             also emits {{R,S,X}}: {matches:?}"
+        );
+        assert_eq!(nary[0], vec!["p.rs", "q.rs", "x.rs"]);
+
+        // X (x.rs) must appear in exactly ONE n-ary clique — never two.
+        let xt = "x.rs".to_string();
+        let x_in_nary = matches
+            .iter()
+            .filter(|m| m.forms.len() >= 3 && members_of(m).contains(&xt))
+            .count();
+        assert_eq!(
+            x_in_nary, 1,
+            "a carved node must not be re-admitted to a second clique: {matches:?}"
+        );
+
+        // {R,S} stays a binary clique (not absorbed into {R,S,X}); R-X
+        // and S-X survive as cross-clique residual pairs.
+        let has_pair = |a: &str, b: &str| {
+            matches
+                .iter()
+                .any(|m| m.forms.len() == 2 && members_of(m) == vec![a.to_string(), b.to_string()])
+        };
+        assert!(
+            has_pair("r.rs", "s.rs"),
+            "R-S must remain a binary clique, not grow to {{R,S,X}}: {matches:?}"
+        );
+        assert!(
+            has_pair("r.rs", "x.rs") && has_pair("s.rs", "x.rs"),
+            "R-X and S-X must emit as residual pairs (X absorbed into B \
+             under the mutant would consume them): {matches:?}"
+        );
+    }
+
+    /// Equal-score carving-order fixture (dry-rs#116) for the canonical
+    /// endpoint-pair tie-break in `carving_order`.
+    ///
+    /// Two TOP edges A-D and B-C carry the SAME score (0.9375) — quantized
+    /// Jaccard makes exact ties the common case, and `carving_order`
+    /// breaks the tie on the canonical `(smaller_ident, larger_ident)`
+    /// endpoint pair. The five identities sort `a < b < c < d < m`, so:
+    ///   - correct min-first canonicalization: key(A-D)=(a,d) <
+    ///     key(B-C)=(b,c) because `a < b` -> A-D seeds FIRST.
+    ///   - the `<= -> >` mutant canonicalizes to (larger, smaller):
+    ///     key(A-D)=(d,a), key(B-C)=(c,b); now `c < d` -> B-C seeds first.
+    ///
+    /// Swing node M is adjacent (at 0.3191, below both top edges) to ALL
+    /// of A, B, C, D, and is the ONLY admissible growth candidate for
+    /// whichever top pair seeds first (A,B,C,D are pairwise non-adjacent
+    /// across the two cores). So M joins the FIRST-seeded clique and is
+    /// then locked out of the second:
+    ///   - correct: {A,D,M} 3-clique + {B,C} 2-clique (+ B-M, C-M
+    ///     residuals).
+    ///   - mutant:  {B,C,M} 3-clique + {A,D} 2-clique (+ A-M, D-M
+    ///     residuals).
+    ///
+    /// The 3-clique's membership is the observable difference: M clusters
+    /// with {A,D} iff the canonical pair ordering is correct.
+    fn equal_score_swing_forms() -> (Vec<NormalizedForm>, Vec<FilePath>) {
+        // aa,dd share one core (edge A-D); bb,cc share another (edge
+        // B-C); mm is the swing node bridging both.
+        let aa: Vec<u64> = (1..=30).chain([900]).collect();
+        let dd: Vec<u64> = (1..=30).chain([901]).collect();
+        let bb: Vec<u64> = (50..=79).chain([950]).collect();
+        let cc: Vec<u64> = (50..=79).chain([951]).collect();
+        let mm: Vec<u64> = (1..=15).chain(50..=64).chain([999]).collect();
+        // Input order is aa,bb,cc,dd,mm; filenames sort a<b<c<d<m so the
+        // identity tie-break is filename-driven, independent of index.
+        let forms = vec![
+            make_form(&aa, 31),
+            make_form(&bb, 31),
+            make_form(&cc, 31),
+            make_form(&dd, 31),
+            make_form(&mm, 31),
+        ];
+        let paths = ["a.rs", "b.rs", "c.rs", "d.rs", "m.rs"]
+            .iter()
+            .map(|n| FilePath::from(std::path::PathBuf::from(n)))
+            .collect();
+        (forms, paths)
+    }
+
+    #[test]
+    fn equal_score_carving_seeds_in_canonical_pair_order() {
+        // Kills `620 <= -> >` in `carving_order` (the canonical
+        // endpoint-pair `if a <= b { (a, b) } else { (b, a) }`). Two
+        // equal-score top edges A-D and B-C tie on score; the tie-break
+        // is the canonical (min-ident, max-ident) pair. The `<= -> >`
+        // flip reverses every pair to (max, min), reordering the two
+        // equal-score edges so B-C seeds before A-D. The swing node M
+        // then joins B-C instead of A-D -> a DIFFERENT clustering.
+        //
+        // Verified: passes on HEAD, FAILS under a manual `<= -> >` flip
+        // at line 620 (the 3-clique becomes {B,C,M} instead of {A,D,M}).
+        let (forms, paths) = equal_score_swing_forms();
+        let matches = compare_with_paths(&forms, &paths, 0.3);
+
+        let members_of = |mm: &Match| -> Vec<String> {
+            let mut v: Vec<String> = mm.forms.iter().map(|f| f.file.to_string()).collect();
+            v.sort();
+            v
+        };
+
+        // Exactly one 3-clique, and it MUST be {A,D,M} — the mutant emits
+        // {B,C,M} instead (same shape, different members).
+        let three: Vec<Vec<String>> = matches
+            .iter()
+            .filter(|mm| mm.forms.len() == 3)
+            .map(members_of)
+            .collect();
+        assert_eq!(
+            three.len(),
+            1,
+            "expected exactly one 3-clique, got {matches:?}"
+        );
+        assert_eq!(
+            three[0],
+            vec!["a.rs", "d.rs", "m.rs"],
+            "swing node M must cluster with the canonical-first pair {{A,D}}; \
+             the <=->> mutant flips seeding so M clusters with {{B,C}}: {matches:?}"
+        );
+
+        // The losing pair {B,C} stays a binary clique (M did not absorb
+        // into it).
+        let has_pair = |x: &str, y: &str| {
+            matches.iter().any(|mm| {
+                mm.forms.len() == 2 && members_of(mm) == vec![x.to_string(), y.to_string()]
+            })
+        };
+        assert!(
+            has_pair("b.rs", "c.rs"),
+            "B-C must remain a binary clique (M joined A-D, not B-C): {matches:?}"
+        );
+    }
 }
