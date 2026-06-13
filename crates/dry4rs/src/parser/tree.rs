@@ -189,7 +189,10 @@ fn leaf_class_and_lexeme(token: &NormalizedToken) -> (LeafClass, String) {
         NormalizedToken::LitStr(s) => (LeafClass::Literal, format!("{s:?}")),
         NormalizedToken::LitBool(b) => (LeafClass::Literal, b.to_string()),
         NormalizedToken::LitChar(c) => (LeafClass::Literal, format!("{c:?}")),
-        NormalizedToken::LitByte(b) => (LeafClass::Literal, format!("b{:?}", *b as char)),
+        NormalizedToken::LitByte(b) => {
+            let escaped: String = std::ascii::escape_default(*b).map(|c| c as char).collect();
+            (LeafClass::Literal, format!("b'{escaped}'"))
+        }
         NormalizedToken::LitByteStr(bytes) => {
             (LeafClass::Literal, format!("b\"{} bytes\"", bytes.len()))
         }

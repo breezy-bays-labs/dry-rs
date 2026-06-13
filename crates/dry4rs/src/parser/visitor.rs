@@ -184,12 +184,19 @@ pub(super) fn walk_attrs<S: SubformSink>(sink: &mut S, attrs: &[syn::Attribute])
 /// no sink state, so it lives with the dispatch (shared by every sink).
 pub(super) fn preserved_attr_name(attr: &syn::Attribute) -> Option<String> {
     let last = attr.path().segments.last()?;
-    let name = last.ident.to_string();
-    match name.as_str() {
-        // Preserved (positive list).
-        "test" | "inline" | "cold" | "must_use" | "no_mangle" | "repr" => Some(name),
-        // Stripped (everything else, including the explicit noise list).
-        _ => None,
+    let ident = &last.ident;
+    // Preserved (positive list); compare the syn::Ident directly so the
+    // common stripped case (derive/doc/allow/…) allocates no String.
+    if ident == "test"
+        || ident == "inline"
+        || ident == "cold"
+        || ident == "must_use"
+        || ident == "no_mangle"
+        || ident == "repr"
+    {
+        Some(ident.to_string())
+    } else {
+        None
     }
 }
 
