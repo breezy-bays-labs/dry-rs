@@ -44,7 +44,7 @@
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
-use dry_core::domain::{FormKind, NormalizedForm, Span};
+use dry_core::domain::{FormKind, NormalizedForm, Span, StructuralLocation};
 use xxhash_rust::xxh3::Xxh3;
 
 use super::token::NormalizedToken;
@@ -95,6 +95,18 @@ pub(super) struct FormParts<'a> {
     pub span: Span,
     /// Qualified-name path components.
     pub qpath: Vec<String>,
+    /// Enclosing-module path components — `mod` segments ONLY (dry-rs#141).
+    ///
+    /// Distinct from [`qpath`](FormParts::qpath): `qpath` mixes module,
+    /// impl/trait-type, and fn-name segments (it is the form's fully-
+    /// qualified name); `module_path` carries ONLY the enclosing
+    /// `mod foo { mod bar { … } }` segments. A fn inside
+    /// `mod a { mod b { fn f() {} } }` has `module_path == ["a", "b"]`
+    /// (no `"f"`, no impl/trait-type segment), powering
+    /// [`StructuralLocation`](dry_core::domain::StructuralLocation)-based
+    /// module scoping in the comparison engine. Empty for a form at the
+    /// crate root.
+    pub module_path: Vec<String>,
     /// Production / test classification.
     pub kind: FormKind,
 }
@@ -125,15 +137,27 @@ impl FormVisitor for FormCollector {
 
         let (fingerprint_set, identifier_set, node_count) = emitter.into_parts();
         let line_count = lines_in_span(&parts.span);
-        self.forms.push(NormalizedForm::with_context(
-            parts.kind,
-            fingerprint_set,
-            identifier_set,
-            parts.qpath,
-            parts.span,
-            node_count,
-            line_count,
-        ));
+        // The walker resolves the enclosing-module path (mod segments
+        // only); the crate id is FilePath-vs-analysis-root work the
+        // per-file `normalize(&str, &FilePath)` surface deliberately
+        // cannot see, so it is derived later in the dry-core run loop
+        // and merged onto this same `location` (dry-rs#141).
+        let location = StructuralLocation {
+            crate_id: None,
+            module_path: parts.module_path,
+        };
+        self.forms.push(
+            NormalizedForm::with_context(
+                parts.kind,
+                fingerprint_set,
+                identifier_set,
+                parts.qpath,
+                parts.span,
+                node_count,
+                line_count,
+            )
+            .with_location(location),
+        );
     }
 }
 
@@ -154,43 +178,104 @@ pub(super) fn enumerate_forms<V: FormVisitor>(
     in_test_file: bool,
     visitor: &mut V,
 ) {
-    visit_items(items, &[], in_test_file, visitor);
+    visit_items(items, &WalkPath::ROOT, in_test_file, visitor);
+}
+
+/// The two parallel path accumulators threaded through the form
+/// enumeration (dry-rs#141).
+///
+/// - `qpath` is the form's fully-qualified name: it gains a segment for
+///   EVERY container — modules, impl/trait types, and the form's own
+///   fn name — so reporters can render `crate::Type::method`.
+/// - `module_path` is the enclosing-MODULE path: it gains a segment ONLY
+///   when the walk descends through a `mod foo { … }`. impl blocks,
+///   trait blocks, and fn names never push onto it.
+///
+/// Keeping both in one struct means the enumerator threads ONE borrow
+/// through the recursion, and the "modules only" rule for `module_path`
+/// lives in exactly one place ([`WalkPath::descend_module`]).
+struct WalkPath {
+    /// Fully-qualified-name segments (modules + types + fn name).
+    qpath: Vec<String>,
+    /// Enclosing-module segments only (`mod` descents).
+    module_path: Vec<String>,
+}
+
+impl WalkPath {
+    /// The crate-root accumulator: both paths empty.
+    const ROOT: Self = Self {
+        qpath: Vec::new(),
+        module_path: Vec::new(),
+    };
+
+    /// Descend into a `mod foo { … }`: push `segment` onto BOTH `qpath`
+    /// and `module_path` (a module contributes to the qualified name AND
+    /// the module path).
+    fn descend_module(&self, segment: String) -> Self {
+        let mut next = self.clone_paths();
+        next.qpath.push(segment.clone());
+        next.module_path.push(segment);
+        next
+    }
+
+    /// Descend into an impl/trait type block: push `segment` onto
+    /// `qpath` ONLY (a type segment names the form but is NOT a module).
+    fn descend_type(&self, segment: String) -> Self {
+        let mut next = self.clone_paths();
+        next.qpath.push(segment);
+        next
+    }
+
+    /// Build the per-form `qpath` by appending the fn name to the
+    /// current `qpath`. Does NOT touch `module_path` — a fn name is
+    /// never a module segment.
+    fn form_qpath(&self, fn_name: String) -> Vec<String> {
+        let mut qpath = self.qpath.clone();
+        qpath.push(fn_name);
+        qpath
+    }
+
+    fn clone_paths(&self) -> Self {
+        Self {
+            qpath: self.qpath.clone(),
+            module_path: self.module_path.clone(),
+        }
+    }
 }
 
 fn visit_items<V: FormVisitor>(
     items: &[syn::Item],
-    qpath: &[String],
+    path: &WalkPath,
     in_test_module: bool,
     visitor: &mut V,
 ) {
     for item in items {
-        visit_item(item, qpath, in_test_module, visitor);
+        visit_item(item, path, in_test_module, visitor);
     }
 }
 
 fn visit_item<V: FormVisitor>(
     item: &syn::Item,
-    qpath: &[String],
+    path: &WalkPath,
     in_test_module: bool,
     visitor: &mut V,
 ) {
     match item {
         syn::Item::Fn(item_fn) => {
-            let mut form_qpath: Vec<String> = qpath.to_vec();
-            form_qpath.push(item_fn.sig.ident.to_string());
             visitor.visit_form(FormParts {
                 attrs: &item_fn.attrs,
                 sig: &item_fn.sig,
                 block: &item_fn.block,
                 span: span_for_item_fn(item_fn),
-                qpath: form_qpath,
+                qpath: path.form_qpath(item_fn.sig.ident.to_string()),
+                module_path: path.module_path.clone(),
                 kind: form_kind(in_test_module, &item_fn.attrs),
             });
         }
-        syn::Item::Mod(item_mod) => visit_mod_item(item_mod, qpath, in_test_module, visitor),
-        syn::Item::Impl(item_impl) => visit_impl_item(item_impl, qpath, in_test_module, visitor),
+        syn::Item::Mod(item_mod) => visit_mod_item(item_mod, path, in_test_module, visitor),
+        syn::Item::Impl(item_impl) => visit_impl_item(item_impl, path, in_test_module, visitor),
         syn::Item::Trait(item_trait) => {
-            visit_trait_item(item_trait, qpath, in_test_module, visitor);
+            visit_trait_item(item_trait, path, in_test_module, visitor);
         }
         // Other top-level items (Struct, Enum, Const, Static, Type,
         // Use, ExternCrate, Macro, etc.) don't emit forms at v0.1.
@@ -198,11 +283,12 @@ fn visit_item<V: FormVisitor>(
     }
 }
 
-/// Recurse into a `mod` item, extending the qualified-name path and
+/// Recurse into a `mod` item, extending BOTH path accumulators (a module
+/// segment contributes to the qualified name AND the module path) and
 /// propagating the `#[cfg(test)]` test-module flag.
 fn visit_mod_item<V: FormVisitor>(
     item_mod: &syn::ItemMod,
-    qpath: &[String],
+    path: &WalkPath,
     in_test_module: bool,
     visitor: &mut V,
 ) {
@@ -210,9 +296,8 @@ fn visit_mod_item<V: FormVisitor>(
         return;
     };
     let next_in_test = in_test_module || mod_is_cfg_test(item_mod);
-    let mut child_qpath: Vec<String> = qpath.to_vec();
-    child_qpath.push(item_mod.ident.to_string());
-    visit_items(inner_items, &child_qpath, next_in_test, visitor);
+    let child_path = path.descend_module(item_mod.ident.to_string());
+    visit_items(inner_items, &child_path, next_in_test, visitor);
 }
 
 /// Visit every method inside an `impl` block.
@@ -223,24 +308,25 @@ fn visit_mod_item<V: FormVisitor>(
 /// segment.
 fn visit_impl_item<V: FormVisitor>(
     item_impl: &syn::ItemImpl,
-    qpath: &[String],
+    path: &WalkPath,
     in_test_module: bool,
     visitor: &mut V,
 ) {
-    let mut child_qpath: Vec<String> = qpath.to_vec();
-    if let Some(seg) = impl_self_ty_last_segment(&item_impl.self_ty) {
-        child_qpath.push(seg);
-    }
+    // The impl's Self-type last segment names the form in `qpath` but is
+    // NOT a module — `descend_type` leaves `module_path` untouched.
+    let child_path = match impl_self_ty_last_segment(&item_impl.self_ty) {
+        Some(seg) => path.descend_type(seg),
+        None => path.clone_paths(),
+    };
     for impl_item in &item_impl.items {
         if let syn::ImplItem::Fn(impl_fn) = impl_item {
-            let mut form_qpath: Vec<String> = child_qpath.clone();
-            form_qpath.push(impl_fn.sig.ident.to_string());
             visitor.visit_form(FormParts {
                 attrs: &impl_fn.attrs,
                 sig: &impl_fn.sig,
                 block: &impl_fn.block,
                 span: span_for_impl_item_fn(impl_fn),
-                qpath: form_qpath,
+                qpath: child_path.form_qpath(impl_fn.sig.ident.to_string()),
+                module_path: child_path.module_path.clone(),
                 kind: form_kind(in_test_module, &impl_fn.attrs),
             });
         }
@@ -255,12 +341,13 @@ fn visit_impl_item<V: FormVisitor>(
 /// table; signature-only methods are skipped.
 fn visit_trait_item<V: FormVisitor>(
     item_trait: &syn::ItemTrait,
-    qpath: &[String],
+    path: &WalkPath,
     in_test_module: bool,
     visitor: &mut V,
 ) {
-    let mut child_qpath: Vec<String> = qpath.to_vec();
-    child_qpath.push(item_trait.ident.to_string());
+    // The trait name segments the form's `qpath` but is NOT a module —
+    // `descend_type` leaves `module_path` untouched.
+    let child_path = path.descend_type(item_trait.ident.to_string());
     for trait_item in &item_trait.items {
         let syn::TraitItem::Fn(trait_fn) = trait_item else {
             continue;
@@ -268,14 +355,13 @@ fn visit_trait_item<V: FormVisitor>(
         let Some(block) = &trait_fn.default else {
             continue;
         };
-        let mut form_qpath: Vec<String> = child_qpath.clone();
-        form_qpath.push(trait_fn.sig.ident.to_string());
         visitor.visit_form(FormParts {
             attrs: &trait_fn.attrs,
             sig: &trait_fn.sig,
             block,
             span: span_for_trait_item_fn(trait_fn),
-            qpath: form_qpath,
+            qpath: child_path.form_qpath(trait_fn.sig.ident.to_string()),
+            module_path: child_path.module_path.clone(),
             kind: form_kind(in_test_module, &trait_fn.attrs),
         });
     }
@@ -748,6 +834,83 @@ mod tests {
         );
         // The fn name appears first.
         assert_eq!(form.identifier_set[0], "dup");
+    }
+
+    // ---- module_path accumulator (dry-rs#141) ----
+
+    #[test]
+    fn module_path_is_empty_for_crate_root_fn() {
+        // A top-level fn sits at the crate root: no enclosing module.
+        let forms = forms_of("fn at_root() {}");
+        assert_eq!(forms.len(), 1);
+        assert!(
+            forms[0].location.module_path.is_empty(),
+            "crate-root fn has an empty module_path"
+        );
+    }
+
+    #[test]
+    fn module_path_collects_nested_mod_segments_only() {
+        // The CORE test (dry-rs#141): a fn nested two modules deep — and
+        // inside an impl block — records ONLY the `mod` segments, never
+        // the impl/trait-type segment and never the fn name. A fn inside
+        // `mod a { mod b { ... } }` has module_path == ["a", "b"].
+        let forms = forms_of("mod a { mod b { fn f() {} } }");
+        assert_eq!(forms.len(), 1);
+        assert_eq!(
+            forms[0].location.module_path,
+            vec!["a".to_string(), "b".to_string()],
+            "module_path collects mod segments only"
+        );
+        // The qpath (full qualified name) DOES include the fn name — the
+        // two paths are distinct by design.
+        assert_eq!(
+            forms[0].qualified_name,
+            vec!["a".to_string(), "b".to_string(), "f".to_string()]
+        );
+    }
+
+    #[test]
+    fn module_path_excludes_impl_type_segment() {
+        // An impl-block method inside a module: module_path has the mod
+        // segment ONLY — the impl's Self-type (`Foo`) is in qpath but NOT
+        // in module_path (an impl block is not a module).
+        let forms = forms_of("mod m { struct Foo; impl Foo { fn bar(&self) {} } }");
+        assert_eq!(forms.len(), 1);
+        assert_eq!(
+            forms[0].location.module_path,
+            vec!["m".to_string()],
+            "impl Self-type segment must NOT enter module_path"
+        );
+        // qpath carries module + type + fn: ["m", "Foo", "bar"].
+        assert_eq!(
+            forms[0].qualified_name,
+            vec!["m".to_string(), "Foo".to_string(), "bar".to_string()]
+        );
+    }
+
+    #[test]
+    fn module_path_excludes_trait_type_segment() {
+        // A trait default method inside a module: module_path is the mod
+        // segment only; the trait name is in qpath but not module_path.
+        let forms = forms_of("mod m { trait Greet { fn hi(&self) { let _ = 1; } } }");
+        assert_eq!(forms.len(), 1);
+        assert_eq!(forms[0].location.module_path, vec!["m".to_string()]);
+        assert_eq!(
+            forms[0].qualified_name,
+            vec!["m".to_string(), "Greet".to_string(), "hi".to_string()]
+        );
+    }
+
+    #[test]
+    fn module_path_crate_id_unset_in_walker() {
+        // The walker NEVER resolves crate_id — that is dry-core run-loop
+        // work (FilePath vs analysis roots). Every walked form leaves
+        // crate_id as None; the run loop fills it post-normalize.
+        let forms = forms_of("mod a { fn f() {} }");
+        assert_eq!(forms.len(), 1);
+        assert_eq!(forms[0].location.crate_id, None);
+        assert_eq!(forms[0].location.module_path, vec!["a".to_string()]);
     }
 
     #[test]
