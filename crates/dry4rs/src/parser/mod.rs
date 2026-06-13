@@ -39,6 +39,7 @@
 
 mod normalizer;
 mod token;
+mod visitor;
 mod walker;
 
 pub use normalizer::SynNormalizer;
