@@ -146,9 +146,10 @@ In particular:
   `toml::to_string_pretty` (the latter for the round-trip property
   test).
 - **`askama` IS allowed in `dry-core`** (markdown reporter landed in
-  dry-rs#91; HTML reporter follows at v0.3 in dry-rs#92). The
+  dry-rs#91; HTML reporter landed in dry-rs#147, epic #111). The
   `#[derive(Template)]` macro lives on reporter-side view structs in
-  `dry-core::adapters::reporters::markdown`, NOT in `domain/`. askama
+  `dry-core::adapters::reporters::markdown` /
+  `dry-core::adapters::reporters::html`, NOT in `domain/`. askama
   is a compile-time templating library — it generates rendering code
   from `.md` / `.html` templates under `crates/dry-core/templates/`,
   type-checked against the struct fields. It is in the proc-macro
@@ -334,6 +335,36 @@ pub struct Match {
   facades `compare()` / `compare_with_paths()` stay the stable entry
   points (default all-true scope = no-op), and the scoped run-loop entry
   is `compare_with_paths_scoped(forms, paths, threshold, scope)`.
+- **`Envelope.mode: Option<Mode>` and `Envelope.capabilities:
+  Option<Capabilities>` (dry-rs#147, epic #111)** are the HTML-explorer
+  presentation hints, appended at the END of `Envelope` (AFTER `scope`),
+  EACH `#[serde(default, skip_serializing_if = "Option::is_none")]` so
+  they are OMITTED when `None`. Only the HTML reporter populates them;
+  JSON / text / markdown leave them `None`, keeping the v0.1 wire snapshot
+  byte-identical (the all-additive-fields-None case asserts both omit).
+  Do NOT suggest dropping `skip_serializing_if` (that would break the
+  byte-identical-when-off lock) and do NOT suggest matching the reserved
+  score slots' bare-`#[serde(default)]`-null shape — the omission is
+  deliberate, the same coexisting-serde-shapes rule as `template` /
+  `scope`. `Mode` is an enum (`Report` / `Explore`, `#[non_exhaustive]`,
+  `snake_case` wire tags) — PR13 emits `Mode::Report`; the `explore`
+  subcommand emits `Mode::Explore`. `Capabilities` is a result struct (NO
+  `#[non_exhaustive]`; evolves via `Capabilities::report()` /
+  `Capabilities::new(...)`) carrying five orthogonal feature flags —
+  `overview` / `clusters` / `substitution_grid` / `d_slider` /
+  `scope_banner` — telling the frontend which payload-backed views are
+  renderable. `clippy::struct_excessive_bools` (struct) +
+  `clippy::fn_params_excessive_bools` (the `new` constructor) are allowed
+  — orthogonal flags, the frontend's mental model, NOT a bitflag
+  candidate (same rationale as `ScopeApplied` / `ResolvedScope`). Do NOT
+  suggest collapsing the five bools. `Mode` + `Capabilities` live in
+  `dry-core::adapters::reporters::json::envelope` alongside `ScopeApplied`
+  (serialization-layer companion types, not domain types). The HTML
+  reporter (`dry-core::adapters::reporters::html`) injects the FULL
+  serialized envelope ONCE into a `<script id="dry-data"
+  type="application/json">…</script>` island and renders client-side; the
+  payload is pre-sanitized (`</` → `<\/`) to neutralize the `</script>`
+  break-out. See `ops/decisions/dry-rs/adr-dual-mode-html-reporter.md`.
 
 ### `#[non_exhaustive]` discipline — enums YES, structs NO
 
@@ -343,14 +374,17 @@ pub struct Match {
   anti-unification enums `TemplateNode` and `HoleKind` — dry-rs#132).
   The `Language` enum on `dry-core::cli::adapter_meta` (dry-rs#78) also
   carries `#[non_exhaustive]` — new language variants land additively.
+  The `Mode` enum on `dry-core::adapters::reporters::json::envelope`
+  (dry-rs#147) also carries `#[non_exhaustive]` — new presentation modes
+  land additively.
 - Public **result structs** (`Match`, `Score`, `Span`, `LineColumn`,
   `Fingerprint`, `Report`, `Summary`, `NormalizedForm`, `FormRef`,
   `AdapterMeta`, `Config`, `GateConfig`, `OutputConfig`, `WalkConfig`,
-  `LanguageConfig`, `Envelope`, `AnalysisConfig`, `EffectiveConfig`,
-  `NormalizedTree`, `LeafToken`, plus the anti-unification result
-  structs `Template`, `Hole`, `HoleId`, `Substitution`, `SubElement`,
-  `Divergence`, `DistinctValue` — dry-rs#132) do NOT carry
-  `#[non_exhaustive]`. They evolve via constructor pattern (`Foo::new`,
+  `LanguageConfig`, `Envelope`, `ScopeApplied`, `Capabilities`,
+  `AnalysisConfig`, `EffectiveConfig`, `NormalizedTree`, `LeafToken`,
+  plus the anti-unification result structs `Template`, `Hole`, `HoleId`,
+  `Substitution`, `SubElement`, `Divergence`, `DistinctValue` —
+  dry-rs#132) do NOT carry `#[non_exhaustive]`. They evolve via constructor pattern (`Foo::new`,
   `Foo::try_new`, `Foo::default`, builder methods) and serde versioning
   (`#[serde(default)]`, `#[serde(rename = ...)]`,
   `#[serde(skip_serializing_if = ...)]`).
