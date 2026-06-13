@@ -70,209 +70,236 @@ use super::visitor::{self, SubformSink, span_from_pm};
 /// resolved boolean, keeping path-convention knowledge out of the
 /// shared traversal.
 pub fn walk_file(file: &syn::File, in_test_file: bool) -> Vec<NormalizedForm> {
-    let mut walker = Walker::new();
-    walker.visit_items(&file.items, &[], in_test_file);
-    walker.into_forms()
+    let mut collector = FormCollector { forms: Vec::new() };
+    enumerate_forms(&file.items, in_test_file, &mut collector);
+    collector.forms
 }
 
-/// Internal walker state — accumulates emitted forms across the walk.
-struct Walker {
+/// The three function-shaped bodies that emit a form (per the O5 ADR
+/// form-emission table), enumerated as a uniform `(attrs, sig, block)`
+/// triple plus the form's identity (`span`, `qpath`, `kind`).
+///
+/// This is the SINGLE source of form identity: both the fingerprint
+/// path ([`FormCollector`]) and the PR-4 tree path
+/// ([`super::tree`]) consume the same enumeration, so a tree
+/// re-derived for a span addresses the exact same form the detector
+/// fingerprinted — there is no parallel span-matcher to drift.
+pub(super) struct FormParts<'a> {
+    /// Form attributes (drive the conditional `Attrs` prelude).
+    pub attrs: &'a [syn::Attribute],
+    /// Function signature subform.
+    pub sig: &'a syn::Signature,
+    /// Function body block subform.
+    pub block: &'a syn::Block,
+    /// Form identity span `(fn_token .. block close brace)`.
+    pub span: Span,
+    /// Qualified-name path components.
+    pub qpath: Vec<String>,
+    /// Production / test classification.
+    pub kind: FormKind,
+}
+
+/// A consumer of the shared form enumeration. The enumerator
+/// ([`enumerate_forms`]) decides WHICH function bodies are forms, their
+/// identity span, qpath, and kind; the visitor decides what to BUILD
+/// per form (a [`NormalizedForm`] for the fingerprint path, a
+/// `(Span, NormalizedTree)` for the tree path).
+pub(super) trait FormVisitor {
+    /// Handle one enumerated form.
+    fn visit_form(&mut self, parts: FormParts<'_>);
+}
+
+/// The fingerprint-path [`FormVisitor`]: drives a [`FormEmitter`] over
+/// each form's `(attrs, sig, block)` and accumulates the resulting
+/// [`NormalizedForm`]s.
+struct FormCollector {
     forms: Vec<NormalizedForm>,
 }
 
-impl Walker {
-    fn new() -> Self {
-        Self { forms: Vec::new() }
-    }
-
-    fn into_forms(self) -> Vec<NormalizedForm> {
-        self.forms
-    }
-
-    /// Visit a slice of top-level items inside a (possibly cfg(test))
-    /// module context. The `qpath` carries the parent module's
-    /// qualified-name path components; `in_test_module` propagates the
-    /// `#[cfg(test)]` mod context for `FormKind::Test` detection.
-    fn visit_items(&mut self, items: &[syn::Item], qpath: &[String], in_test_module: bool) {
-        for item in items {
-            self.visit_item(item, qpath, in_test_module);
-        }
-    }
-
-    fn visit_item(&mut self, item: &syn::Item, qpath: &[String], in_test_module: bool) {
-        match item {
-            syn::Item::Fn(item_fn) => self.emit_item_fn(item_fn, qpath, in_test_module),
-            syn::Item::Mod(item_mod) => self.visit_mod_item(item_mod, qpath, in_test_module),
-            syn::Item::Impl(item_impl) => self.visit_impl_item(item_impl, qpath, in_test_module),
-            syn::Item::Trait(item_trait) => {
-                self.visit_trait_item(item_trait, qpath, in_test_module);
-            }
-            // Other top-level items (Struct, Enum, Const, Static,
-            // Type, Use, ExternCrate, Macro, etc.) don't emit forms
-            // at v0.1.
-            _ => {}
-        }
-    }
-
-    /// Recurse into a `mod` item, extending the qualified-name path
-    /// and propagating the `#[cfg(test)]` test-module flag.
-    fn visit_mod_item(&mut self, item_mod: &syn::ItemMod, qpath: &[String], in_test_module: bool) {
-        let Some((_, inner_items)) = &item_mod.content else {
-            return;
-        };
-        let next_in_test = in_test_module || mod_is_cfg_test(item_mod);
-        let mut child_qpath: Vec<String> = qpath.to_vec();
-        child_qpath.push(item_mod.ident.to_string());
-        self.visit_items(inner_items, &child_qpath, next_in_test);
-    }
-
-    /// Visit every method inside an `impl` block.
-    ///
-    /// Computes a qpath suffix for impl members: for
-    /// `impl Type { fn m() {} }` the method's qname is
-    /// `["Type", "m"]` — drop the impl block from the qpath, just
-    /// use the type's last path segment.
-    fn visit_impl_item(
-        &mut self,
-        item_impl: &syn::ItemImpl,
-        qpath: &[String],
-        in_test_module: bool,
-    ) {
-        let mut child_qpath: Vec<String> = qpath.to_vec();
-        if let Some(seg) = impl_self_ty_last_segment(&item_impl.self_ty) {
-            child_qpath.push(seg);
-        }
-        for impl_item in &item_impl.items {
-            if let syn::ImplItem::Fn(impl_fn) = impl_item {
-                self.emit_impl_item_fn(impl_fn, &child_qpath, in_test_module);
-            }
-            // Other ImplItem variants (Const, Type, Macro, Verbatim)
-            // don't emit forms at v0.1.
-        }
-    }
-
-    /// Visit every method inside a `trait` block.
-    ///
-    /// Only methods with a default body emit a form per the form-
-    /// emission table; signature-only methods are skipped.
-    fn visit_trait_item(
-        &mut self,
-        item_trait: &syn::ItemTrait,
-        qpath: &[String],
-        in_test_module: bool,
-    ) {
-        let mut child_qpath: Vec<String> = qpath.to_vec();
-        child_qpath.push(item_trait.ident.to_string());
-        for trait_item in &item_trait.items {
-            let syn::TraitItem::Fn(trait_fn) = trait_item else {
-                continue;
-            };
-            if trait_fn.default.is_some() {
-                self.emit_trait_item_fn(trait_fn, &child_qpath, in_test_module);
-            }
-        }
-    }
-
-    fn emit_item_fn(&mut self, item_fn: &syn::ItemFn, qpath: &[String], in_test_module: bool) {
-        let mut form_qpath: Vec<String> = qpath.to_vec();
-        form_qpath.push(item_fn.sig.ident.to_string());
-        let kind = form_kind(in_test_module, &item_fn.attrs);
-        let span = Self::span_for_item_fn(item_fn);
-
+impl FormVisitor for FormCollector {
+    fn visit_form(&mut self, parts: FormParts<'_>) {
         let mut emitter = FormEmitter::new();
-        emitter.hash_attrs(&item_fn.attrs);
-        visitor::walk_sig(&mut emitter, &item_fn.sig);
-        visitor::walk_block(&mut emitter, &item_fn.block);
+        emitter.hash_attrs(parts.attrs);
+        visitor::walk_sig(&mut emitter, parts.sig);
+        visitor::walk_block(&mut emitter, parts.block);
 
-        self.push_form(emitter, kind, form_qpath, span);
-    }
-
-    fn emit_impl_item_fn(
-        &mut self,
-        impl_fn: &syn::ImplItemFn,
-        qpath: &[String],
-        in_test_module: bool,
-    ) {
-        let mut form_qpath: Vec<String> = qpath.to_vec();
-        form_qpath.push(impl_fn.sig.ident.to_string());
-        let kind = form_kind(in_test_module, &impl_fn.attrs);
-        let span = Self::span_for_impl_item_fn(impl_fn);
-
-        let mut emitter = FormEmitter::new();
-        emitter.hash_attrs(&impl_fn.attrs);
-        visitor::walk_sig(&mut emitter, &impl_fn.sig);
-        visitor::walk_block(&mut emitter, &impl_fn.block);
-
-        self.push_form(emitter, kind, form_qpath, span);
-    }
-
-    fn emit_trait_item_fn(
-        &mut self,
-        trait_fn: &syn::TraitItemFn,
-        qpath: &[String],
-        in_test_module: bool,
-    ) {
-        let Some(block) = &trait_fn.default else {
-            return;
-        };
-        let mut form_qpath: Vec<String> = qpath.to_vec();
-        form_qpath.push(trait_fn.sig.ident.to_string());
-        let kind = form_kind(in_test_module, &trait_fn.attrs);
-        let span = Self::span_for_trait_item_fn(trait_fn);
-
-        let mut emitter = FormEmitter::new();
-        emitter.hash_attrs(&trait_fn.attrs);
-        visitor::walk_sig(&mut emitter, &trait_fn.sig);
-        visitor::walk_block(&mut emitter, block);
-
-        self.push_form(emitter, kind, form_qpath, span);
-    }
-
-    /// Finalise a [`FormEmitter`] into a [`NormalizedForm`] and append
-    /// it. Shared by all three form-emission sites (item / impl / trait
-    /// fn) so the part-extraction and `with_context` plumbing lives in
-    /// one place.
-    fn push_form(
-        &mut self,
-        emitter: FormEmitter,
-        kind: FormKind,
-        form_qpath: Vec<String>,
-        span: Span,
-    ) {
         let (fingerprint_set, identifier_set, node_count) = emitter.into_parts();
-        let line_count = lines_in_span(&span);
-        let form = NormalizedForm::with_context(
-            kind,
+        let line_count = lines_in_span(&parts.span);
+        self.forms.push(NormalizedForm::with_context(
+            parts.kind,
             fingerprint_set,
             identifier_set,
-            form_qpath,
-            span,
+            parts.qpath,
+            parts.span,
             node_count,
             line_count,
-        );
-        self.forms.push(form);
+        ));
     }
+}
 
-    fn span_for_item_fn(item_fn: &syn::ItemFn) -> Span {
-        let start = item_fn.sig.fn_token.span;
-        let end = item_fn.block.brace_token.span.close();
-        span_from_pm(start, end)
+/// Enumerate every form-shaped body in `items`, invoking
+/// `visitor.visit_form` once per form in source order.
+///
+/// Honors the O5 ADR form-emission table — `ItemFn`, `ImplItemFn`,
+/// `TraitItemFn` with a default body — and threads the qualified-name
+/// path + `#[cfg(test)]` test-context flag. `in_test_file` seeds the
+/// walk's test-context (dry-rs#108): when `true`, every form classifies
+/// as [`FormKind::Test`] regardless of `#[test]` markers (the source
+/// lives under a Cargo integration-test root); attribute-based detection
+/// applies on top. Generic over [`FormVisitor`] so the fingerprint path
+/// and the tree path share ONE enumeration (and thus ONE definition of
+/// form identity).
+pub(super) fn enumerate_forms<V: FormVisitor>(
+    items: &[syn::Item],
+    in_test_file: bool,
+    visitor: &mut V,
+) {
+    visit_items(items, &[], in_test_file, visitor);
+}
+
+fn visit_items<V: FormVisitor>(
+    items: &[syn::Item],
+    qpath: &[String],
+    in_test_module: bool,
+    visitor: &mut V,
+) {
+    for item in items {
+        visit_item(item, qpath, in_test_module, visitor);
     }
+}
 
-    fn span_for_impl_item_fn(impl_fn: &syn::ImplItemFn) -> Span {
-        let start = impl_fn.sig.fn_token.span;
-        let end = impl_fn.block.brace_token.span.close();
-        span_from_pm(start, end)
+fn visit_item<V: FormVisitor>(
+    item: &syn::Item,
+    qpath: &[String],
+    in_test_module: bool,
+    visitor: &mut V,
+) {
+    match item {
+        syn::Item::Fn(item_fn) => {
+            let mut form_qpath: Vec<String> = qpath.to_vec();
+            form_qpath.push(item_fn.sig.ident.to_string());
+            visitor.visit_form(FormParts {
+                attrs: &item_fn.attrs,
+                sig: &item_fn.sig,
+                block: &item_fn.block,
+                span: span_for_item_fn(item_fn),
+                qpath: form_qpath,
+                kind: form_kind(in_test_module, &item_fn.attrs),
+            });
+        }
+        syn::Item::Mod(item_mod) => visit_mod_item(item_mod, qpath, in_test_module, visitor),
+        syn::Item::Impl(item_impl) => visit_impl_item(item_impl, qpath, in_test_module, visitor),
+        syn::Item::Trait(item_trait) => {
+            visit_trait_item(item_trait, qpath, in_test_module, visitor);
+        }
+        // Other top-level items (Struct, Enum, Const, Static, Type,
+        // Use, ExternCrate, Macro, etc.) don't emit forms at v0.1.
+        _ => {}
     }
+}
 
-    fn span_for_trait_item_fn(trait_fn: &syn::TraitItemFn) -> Span {
-        let start = trait_fn.sig.fn_token.span;
-        let end = match &trait_fn.default {
-            Some(block) => block.brace_token.span.close(),
-            None => trait_fn.sig.fn_token.span,
+/// Recurse into a `mod` item, extending the qualified-name path and
+/// propagating the `#[cfg(test)]` test-module flag.
+fn visit_mod_item<V: FormVisitor>(
+    item_mod: &syn::ItemMod,
+    qpath: &[String],
+    in_test_module: bool,
+    visitor: &mut V,
+) {
+    let Some((_, inner_items)) = &item_mod.content else {
+        return;
+    };
+    let next_in_test = in_test_module || mod_is_cfg_test(item_mod);
+    let mut child_qpath: Vec<String> = qpath.to_vec();
+    child_qpath.push(item_mod.ident.to_string());
+    visit_items(inner_items, &child_qpath, next_in_test, visitor);
+}
+
+/// Visit every method inside an `impl` block.
+///
+/// Computes a qpath suffix for impl members: for
+/// `impl Type { fn m() {} }` the method's qname is `["Type", "m"]` —
+/// drop the impl block from the qpath, just use the type's last path
+/// segment.
+fn visit_impl_item<V: FormVisitor>(
+    item_impl: &syn::ItemImpl,
+    qpath: &[String],
+    in_test_module: bool,
+    visitor: &mut V,
+) {
+    let mut child_qpath: Vec<String> = qpath.to_vec();
+    if let Some(seg) = impl_self_ty_last_segment(&item_impl.self_ty) {
+        child_qpath.push(seg);
+    }
+    for impl_item in &item_impl.items {
+        if let syn::ImplItem::Fn(impl_fn) = impl_item {
+            let mut form_qpath: Vec<String> = child_qpath.clone();
+            form_qpath.push(impl_fn.sig.ident.to_string());
+            visitor.visit_form(FormParts {
+                attrs: &impl_fn.attrs,
+                sig: &impl_fn.sig,
+                block: &impl_fn.block,
+                span: span_for_impl_item_fn(impl_fn),
+                qpath: form_qpath,
+                kind: form_kind(in_test_module, &impl_fn.attrs),
+            });
+        }
+        // Other ImplItem variants (Const, Type, Macro, Verbatim) don't
+        // emit forms at v0.1.
+    }
+}
+
+/// Visit every method inside a `trait` block.
+///
+/// Only methods with a default body emit a form per the form-emission
+/// table; signature-only methods are skipped.
+fn visit_trait_item<V: FormVisitor>(
+    item_trait: &syn::ItemTrait,
+    qpath: &[String],
+    in_test_module: bool,
+    visitor: &mut V,
+) {
+    let mut child_qpath: Vec<String> = qpath.to_vec();
+    child_qpath.push(item_trait.ident.to_string());
+    for trait_item in &item_trait.items {
+        let syn::TraitItem::Fn(trait_fn) = trait_item else {
+            continue;
         };
-        span_from_pm(start, end)
+        let Some(block) = &trait_fn.default else {
+            continue;
+        };
+        let mut form_qpath: Vec<String> = child_qpath.clone();
+        form_qpath.push(trait_fn.sig.ident.to_string());
+        visitor.visit_form(FormParts {
+            attrs: &trait_fn.attrs,
+            sig: &trait_fn.sig,
+            block,
+            span: span_for_trait_item_fn(trait_fn),
+            qpath: form_qpath,
+            kind: form_kind(in_test_module, &trait_fn.attrs),
+        });
     }
+}
+
+fn span_for_item_fn(item_fn: &syn::ItemFn) -> Span {
+    let start = item_fn.sig.fn_token.span;
+    let end = item_fn.block.brace_token.span.close();
+    span_from_pm(start, end)
+}
+
+fn span_for_impl_item_fn(impl_fn: &syn::ImplItemFn) -> Span {
+    let start = impl_fn.sig.fn_token.span;
+    let end = impl_fn.block.brace_token.span.close();
+    span_from_pm(start, end)
+}
+
+fn span_for_trait_item_fn(trait_fn: &syn::TraitItemFn) -> Span {
+    let start = trait_fn.sig.fn_token.span;
+    let end = match &trait_fn.default {
+        Some(block) => block.brace_token.span.close(),
+        None => trait_fn.sig.fn_token.span,
+    };
+    span_from_pm(start, end)
 }
 
 /// Resolve [`FormKind`] from the test-module context flag plus the form's
@@ -297,9 +324,9 @@ fn form_kind(in_test_module: bool, attrs: &[syn::Attribute]) -> FormKind {
 /// This sink IS the original inline fold — the hashing operations are
 /// reproduced exactly so the refactor is byte-identical on
 /// `fingerprint_set` / `node_count` / `identifier_set`. Form boundaries
-/// (nested fn, closure) are handled by the [`Walker`]'s enumeration, not
-/// the sink: the walker simply never recurses into a nested form's body,
-/// so the dispatch only ever feeds this sink the enclosing form's
+/// (nested fn, closure) are handled by [`enumerate_forms`], not the
+/// sink: the enumeration simply never recurses into a nested form's
+/// body, so the dispatch only ever feeds this sink the enclosing form's
 /// subtree.
 pub(super) struct FormEmitter {
     fingerprint_set: HashSet<u64>,
@@ -330,8 +357,10 @@ impl FormEmitter {
     /// This is a form-level prelude, not a dispatched subform — the
     /// `Attrs` node only seals (inserts its `u64`) when at least one
     /// preserved attribute was seen, so an attribute-free fn never gains
-    /// a phantom fingerprint. It therefore drives the sink primitives
-    /// directly rather than going through [`super::visitor`].
+    /// a phantom fingerprint. The lifecycle lives in the shared
+    /// [`super::visitor::walk_attrs`] (so the fingerprint fold and the
+    /// PR-4 tree builder cannot drift on the "only seal when a preserved
+    /// attr was seen" rule); this method delegates to it.
     ///
     /// Attribute names are NOT recorded into `identifier_set` — the
     /// O11 rename-signal contract uses `identifier_set` for renameable
@@ -340,18 +369,7 @@ impl FormEmitter {
     /// language vocabulary, not a renameable identifier, and including
     /// it would create false rename-diff signal at v0.2+.
     fn hash_attrs(&mut self, attrs: &[syn::Attribute]) {
-        let mut node = self.begin("Attrs");
-        let mut any_preserved = false;
-        for attr in attrs {
-            let Some(name) = preserved_attr_name(attr) else {
-                continue;
-            };
-            any_preserved = true;
-            self.leaf(&mut node, &NormalizedToken::Attr(name));
-        }
-        if any_preserved {
-            self.seal(node);
-        }
+        let _ = visitor::walk_attrs(self, attrs);
     }
 }
 
@@ -390,28 +408,6 @@ impl SubformSink for FormEmitter {
         // walk-order is preserved per O11. The v0.1 comparison engine
         // doesn't read identifier_set; v0.2+ rename-signal does.
         self.identifier_set.push(id);
-    }
-}
-
-/// Should this attribute be preserved in the fingerprint stream?
-///
-/// Per O5 ADR § Attributes: preserve signal (`#[test]`, `#[inline]`,
-/// `#[inline(always)]`, `#[cold]`, `#[must_use]`, `#[no_mangle]`,
-/// `#[repr(...)]`); strip noise (`#[derive(...)]`, `#[doc(...)]`,
-/// `#[allow(...)]`, `#[warn(...)]`, `#[cfg(...)]`,
-/// `#[deprecated(...)]`).
-///
-/// Returns `Some(name)` for preserved attributes where `name` is the
-/// last path segment (e.g., `Some("inline")` for `#[inline(always)]`).
-/// Returns `None` for stripped attributes.
-fn preserved_attr_name(attr: &syn::Attribute) -> Option<String> {
-    let last = attr.path().segments.last()?;
-    let name = last.ident.to_string();
-    match name.as_str() {
-        // Preserved (positive list).
-        "test" | "inline" | "cold" | "must_use" | "no_mangle" | "repr" => Some(name),
-        // Stripped (everything else, including the explicit noise list).
-        _ => None,
     }
 }
 

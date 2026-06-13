@@ -41,10 +41,41 @@
 //! cross-cutting side channel (the O11 rename signal), independent of the
 //! node lifecycle and preserved in walk order.
 
+use std::hash::{Hash, Hasher};
+
 use dry_core::domain::Span;
 use proc_macro2::Span as PmSpan;
+use xxhash_rust::xxh3::Xxh3;
 
 use super::token::NormalizedToken;
+
+/// Fold a form's ordered top-level subform fingerprints into a single
+/// form-level root fingerprint.
+///
+/// A form has no single root in the fingerprint fold: form emission is a
+/// fixed sequence of top-level subforms — the (conditional) `Attrs`
+/// prelude, the `Sig` subform, then the `Block` subform — each sealing
+/// its own `u64` into the form's `fingerprint_set`. This helper composes
+/// those ordered top-level `u64`s into ONE root fingerprint by hashing a
+/// `"Form"` discriminator tag followed by each top-level child `u64`, in
+/// emission order — the SAME `tag`-then-`fold` primitive sequence the
+/// fingerprint fold applies at every other node boundary
+/// ([`super::walker::FormEmitter`]).
+///
+/// It is the single source of truth for the form-level root fold, shared
+/// by the tree builder's synthetic root node and the fingerprint path's
+/// form-fingerprint accessor, so the tree's `root.fp` cannot drift from
+/// the fold — the P3 anti-drift bridge (`derive_tree`'s `root.fp`
+/// equals the form's stored top-level fold) rests on this one function.
+#[must_use]
+pub(super) fn fold_form_fp(top_level: &[u64]) -> u64 {
+    let mut hasher = Xxh3::new();
+    "Form".hash(&mut hasher);
+    for child in top_level {
+        child.hash(&mut hasher);
+    }
+    hasher.finish()
+}
 
 /// A consumer of the generic syn-subtree walk.
 ///
@@ -105,6 +136,68 @@ pub trait SubformSink {
     /// Independent of the node lifecycle — locals, fn/method names, type
     /// names, path segments, and macro names flow here as they are seen.
     fn record_identifier(&mut self, id: String);
+}
+
+/// Walk a form's attribute prelude, driving the sink directly.
+///
+/// This is a FORM-LEVEL prelude, not a dispatched subform: the `Attrs`
+/// node only seals (yields its `Out`) when at least one PRESERVED
+/// attribute is seen, so an attribute-free form never gains a phantom
+/// subform. Stripped attributes (`#[derive(...)]`, `#[doc(...)]`,
+/// `#[allow(...)]`, `#[cfg(...)]`, …) contribute nothing; preserved
+/// attributes (`#[test]`, `#[inline]`, `#[must_use]`, …) each contribute
+/// an `Attr(<name>)` leaf.
+///
+/// Returns `Some(out)` when a preserved attribute was seen (the sealed
+/// `Attrs` subform), `None` otherwise. Shared by every form-emission
+/// site so the "only seal when a preserved attr was seen" rule lives in
+/// ONE place — both the fingerprint fold ([`super::walker::FormEmitter`])
+/// and the tree builder ([`super::tree`]) drive the identical lifecycle.
+pub(super) fn walk_attrs<S: SubformSink>(sink: &mut S, attrs: &[syn::Attribute]) -> Option<S::Out> {
+    let mut node = sink.begin("Attrs");
+    let mut any_preserved = false;
+    for attr in attrs {
+        let Some(name) = preserved_attr_name(attr) else {
+            continue;
+        };
+        any_preserved = true;
+        sink.leaf(&mut node, &NormalizedToken::Attr(name));
+    }
+    if any_preserved {
+        Some(sink.seal(node))
+    } else {
+        None
+    }
+}
+
+/// Should this attribute be preserved in the subform stream?
+///
+/// Per O5 ADR § Attributes: preserve signal (`#[test]`, `#[inline]`,
+/// `#[inline(always)]`, `#[cold]`, `#[must_use]`, `#[no_mangle]`,
+/// `#[repr(...)]`); strip noise (`#[derive(...)]`, `#[doc(...)]`,
+/// `#[allow(...)]`, `#[warn(...)]`, `#[cfg(...)]`,
+/// `#[deprecated(...)]`).
+///
+/// Returns `Some(name)` for preserved attributes where `name` is the
+/// last path segment (e.g. `Some("inline")` for `#[inline(always)]`),
+/// `None` for stripped attributes. A pure syn → vocabulary mapping with
+/// no sink state, so it lives with the dispatch (shared by every sink).
+pub(super) fn preserved_attr_name(attr: &syn::Attribute) -> Option<String> {
+    let last = attr.path().segments.last()?;
+    let ident = &last.ident;
+    // Preserved (positive list); compare the syn::Ident directly so the
+    // common stripped case (derive/doc/allow/…) allocates no String.
+    if ident == "test"
+        || ident == "inline"
+        || ident == "cold"
+        || ident == "must_use"
+        || ident == "no_mangle"
+        || ident == "repr"
+    {
+        Some(ident.to_string())
+    } else {
+        None
+    }
 }
 
 /// Walk a function signature: name + generic params + inputs + return
