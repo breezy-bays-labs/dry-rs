@@ -2582,17 +2582,19 @@ mod tests {
     /// skips it and B stays {R,S}. R-X / S-X emit as cross-clique
     /// residual pairs.
     fn overlapping_bridge_forms() -> (Vec<NormalizedForm>, Vec<FilePath>) {
-        let p: Vec<u64> = (1..=20).chain([901, 902]).collect();
-        let q: Vec<u64> = (1..=20).chain([901, 903]).collect();
-        let x: Vec<u64> = (1..=20).chain(100..=119).chain([904]).collect();
-        let r: Vec<u64> = (100..=115).chain([2001, 2002]).collect();
-        let s: Vec<u64> = (100..=115).chain([2001, 2003]).collect();
+        // pp,qq carry only the A-core; xx (the bridge) carries A-core +
+        // the B-bridge; rr,ss carry only the B-bridge.
+        let pp: Vec<u64> = (1..=20).chain([901, 902]).collect();
+        let qq: Vec<u64> = (1..=20).chain([901, 903]).collect();
+        let xx: Vec<u64> = (1..=20).chain(100..=119).chain([904]).collect();
+        let rr: Vec<u64> = (100..=115).chain([2001, 2002]).collect();
+        let ss: Vec<u64> = (100..=115).chain([2001, 2003]).collect();
         let forms = vec![
-            make_form(&p, 22),
-            make_form(&q, 22),
-            make_form(&x, 41),
-            make_form(&r, 18),
-            make_form(&s, 18),
+            make_form(&pp, 22),
+            make_form(&qq, 22),
+            make_form(&xx, 41),
+            make_form(&rr, 18),
+            make_form(&ss, 18),
         ];
         let paths = ["p.rs", "q.rs", "x.rs", "r.rs", "s.rs"]
             .iter()
@@ -2698,19 +2700,21 @@ mod tests {
     /// The 3-clique's membership is the observable difference: M clusters
     /// with {A,D} iff the canonical pair ordering is correct.
     fn equal_score_swing_forms() -> (Vec<NormalizedForm>, Vec<FilePath>) {
-        let a: Vec<u64> = (1..=30).chain([900]).collect();
-        let d: Vec<u64> = (1..=30).chain([901]).collect();
-        let b: Vec<u64> = (50..=79).chain([950]).collect();
-        let c: Vec<u64> = (50..=79).chain([951]).collect();
-        let m: Vec<u64> = (1..=15).chain(50..=64).chain([999]).collect();
-        // Input order is a,b,c,d,m; filenames sort a<b<c<d<m so the
+        // aa,dd share one core (edge A-D); bb,cc share another (edge
+        // B-C); mm is the swing node bridging both.
+        let aa: Vec<u64> = (1..=30).chain([900]).collect();
+        let dd: Vec<u64> = (1..=30).chain([901]).collect();
+        let bb: Vec<u64> = (50..=79).chain([950]).collect();
+        let cc: Vec<u64> = (50..=79).chain([951]).collect();
+        let mm: Vec<u64> = (1..=15).chain(50..=64).chain([999]).collect();
+        // Input order is aa,bb,cc,dd,mm; filenames sort a<b<c<d<m so the
         // identity tie-break is filename-driven, independent of index.
         let forms = vec![
-            make_form(&a, 31),
-            make_form(&b, 31),
-            make_form(&c, 31),
-            make_form(&d, 31),
-            make_form(&m, 31),
+            make_form(&aa, 31),
+            make_form(&bb, 31),
+            make_form(&cc, 31),
+            make_form(&dd, 31),
+            make_form(&mm, 31),
         ];
         let paths = ["a.rs", "b.rs", "c.rs", "d.rs", "m.rs"]
             .iter()
