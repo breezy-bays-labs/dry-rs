@@ -62,9 +62,10 @@ exclude_re = [
     # 296 -> 311 (dry-rs#42 helper extraction) -> 372 (dry-rs#106
     # clustering merge inserted helpers above) -> 379 (dry-rs#106
     # follow-up) -> 455 (dry-rs#124 CompareCtx + scope sub-partition
-    # helpers inserted above); the predicate lives in
-    # `emit_clusters_for_bucket`. tracked: dry-rs#116
-    "comparison/mod\\.rs:455:.* in emit_clusters_for_bucket",
+    # helpers inserted above) -> 454 (dry-rs#124 rework: ResolvedScope
+    # cli->domain import collapse shifted this -1); the predicate lives
+    # in `emit_clusters_for_bucket`. tracked: dry-rs#116
+    "comparison/mod\\.rs:454:.* in emit_clusters_for_bucket",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # pass2 score-1.0 defensive guard is unreachable by design
     # (`debug_assert!(false, ...)` proves it). Of the five operator
@@ -74,16 +75,19 @@ exclude_re = [
     # granular per the ADR and match ONLY those four — never `< with >`.
     # Line moved from 361 -> 421 (dry-rs#42) -> 869 (dry-rs#106
     # clustering merge) -> 876 (dry-rs#106 follow-up) -> 1079 (dry-rs#124
-    # CompareCtx + scope helpers inserted above); the guard lives in
-    # `resolve_pass2_score`. Both the `<` (col 28) and the `-` (col 15)
-    # now sit on the same source line 1079. tracked: dry-rs#116
-    "comparison/mod\\.rs:1079:.*: replace < with (==|<=) in resolve_pass2_score",
-    "comparison/mod\\.rs:1079:.*: replace - with (\\+|/) in resolve_pass2_score",
+    # CompareCtx + scope helpers) -> 1100 (dry-rs#124 rework: Fix B's
+    # emit_pass1_fast_path extraction inserted ~+21 above); the guard
+    # lives in `resolve_pass2_score`. Both the `<` (col 28) and the `-`
+    # (col 15) now sit on the same source line 1117 (1100 -> 1117 after
+    # the dry-rs#124-rework two-`if` Pass-1 fast-path split inserted ~+17
+    # above). tracked: dry-rs#116
+    "comparison/mod\\.rs:1117:.*: replace < with (==|<=) in resolve_pass2_score",
+    "comparison/mod\\.rs:1117:.*: replace - with (\\+|/) in resolve_pass2_score",
     # NOTE: `replace < with > in resolve_pass2_score` is intentionally
     # NOT excluded — flipping the guard to `>` fires the `debug_assert!`
     # on every non-1.0 Pass-2 score, so existing tests CATCH it. Per the
     # ADR's operator-granularity rule, do NOT re-add a blanket
-    # `comparison/mod\\.rs:1079:.*` exclude: it would silently re-mask
+    # `comparison/mod\\.rs:1117:.*` exclude: it would silently re-mask
     # this killable mutant.
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # jaccard `||` -> `&&` short-circuit: both branches produce 0.0 for
@@ -93,18 +97,20 @@ exclude_re = [
     # the empty-set policy itself. Line moved from 483 -> 535 (dry-rs#42
     # refactor sweep) -> 983 (dry-rs#106 clustering merge inserted Pass 3
     # helpers above `jaccard`) -> 990 (dry-rs#106 follow-up) -> 1193
-    # (dry-rs#124 CompareCtx + scope helpers inserted above).
-    # tracked: dry-rs#116
-    "comparison/mod\\.rs:1193:.*: replace \\|\\| with && in jaccard",
+    # (dry-rs#124 CompareCtx + scope helpers) -> 1214 (dry-rs#124 rework:
+    # Fix B emit_pass1_fast_path extraction) -> 1231 (dry-rs#124 rework:
+    # two-`if` Pass-1 fast-path split). tracked: dry-rs#116
+    "comparison/mod\\.rs:1231:.*: replace \\|\\| with && in jaccard",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # jaccard `a.len() <= b.len()` optimization invariant; the source
     # comment literally says "semantically equivalent" (iterating the
     # smaller set is a perf choice, the count is identical either way).
     # Line moved from 488 -> 540 (dry-rs#42 refactor sweep) -> 988
     # (dry-rs#106 clustering merge) -> 995 (dry-rs#106 follow-up) -> 1198
-    # (dry-rs#124 CompareCtx + scope helpers inserted above).
-    # tracked: dry-rs#116
-    "comparison/mod\\.rs:1198:.*: replace <= with > in jaccard",
+    # (dry-rs#124 CompareCtx + scope helpers) -> 1219 (dry-rs#124 rework:
+    # Fix B emit_pass1_fast_path extraction) -> 1236 (dry-rs#124 rework:
+    # two-`if` Pass-1 fast-path split). tracked: dry-rs#116
+    "comparison/mod\\.rs:1236:.*: replace <= with > in jaccard",
     # ---- dry-rs#106 clique-carving helpers (dry-rs#116) ----
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # EQUIVALENT: `uf_union` picks the min-index root as the component
@@ -117,9 +123,11 @@ exclude_re = [
     # `< -> ==`. Operator-granular (the three `<`-relational transforms
     # at col 30); the surrounding `!= -> ==` at col 11 is a real merge-
     # guard change and is CAUGHT, so it is NOT excluded. Line moved
-    # 858 -> 1061 (dry-rs#124 CompareCtx + scope helpers inserted above);
-    # col 30 unchanged. tracked: dry-rs#116
-    "comparison/mod\\.rs:1061:30: replace < with (==|>|<=) in uf_union",
+    # 858 -> 1061 (dry-rs#124 CompareCtx + scope helpers) -> 1082
+    # (dry-rs#124 rework: Fix B emit_pass1_fast_path extraction) -> 1099
+    # (dry-rs#124 rework: two-`if` Pass-1 split); col 30 unchanged.
+    # tracked: dry-rs#116
+    "comparison/mod\\.rs:1099:30: replace < with (==|>|<=) in uf_union",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # EQUIVALENT: `candidate_beats_best`'s `Ordering::Equal` arm is the
     # identity tie-break `ident[&cand] < ident[&best_cand]`. `cand` and
@@ -138,8 +146,10 @@ exclude_re = [
     # behavior and are CAUGHT by
     # `candidate_tie_break_picks_smaller_identity_deterministically`, so
     # they are NOT excluded. Line moved 825 -> 1028 (dry-rs#124 CompareCtx
-    # + scope helpers inserted above); col 55 unchanged. tracked: dry-rs#116
-    "comparison/mod\\.rs:1028:55: replace < with <= in candidate_beats_best",
+    # + scope helpers) -> 1049 (dry-rs#124 rework: Fix B
+    # emit_pass1_fast_path extraction) -> 1066 (dry-rs#124 rework: two-`if`
+    # Pass-1 split); col 55 unchanged. tracked: dry-rs#116
+    "comparison/mod\\.rs:1066:55: replace < with <= in candidate_beats_best",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # TIMEOUT-DETECTED (NOT an equivalence claim): the FIRST `if p ==
     # root` loop in `uf_find` (line 829, col 14) is the root walk that
@@ -156,8 +166,10 @@ exclude_re = [
     # keep the green-CI signal clean per the ADR's timeout-detected
     # handling, NOT as an equivalence claim. Line moved 829 -> 836
     # (dry-rs#106 follow-up) -> 1039 (dry-rs#124 CompareCtx + scope
-    # helpers inserted above); col 14 unchanged. tracked: dry-rs#116
-    "comparison/mod\\.rs:1039:14: replace == with != in uf_find",
+    # helpers) -> 1060 (dry-rs#124 rework: Fix B emit_pass1_fast_path
+    # extraction) -> 1077 (dry-rs#124 rework: two-`if` Pass-1 split);
+    # col 14 unchanged. tracked: dry-rs#116
+    "comparison/mod\\.rs:1077:14: replace == with != in uf_find",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # EQUIVALENT: the SECOND `if p == root` loop in `uf_find` is path
     # compression (a perf optimization). `uf_find`'s RETURN value (the
@@ -166,14 +178,15 @@ exclude_re = [
     # `==` to `!=` changes only how much compression happens, never the
     # returned root, so component sizes and all downstream output are
     # unchanged. Verified: the full `dry-core` suite PASSES under this
-    # mutant. Anchored to col 14 of line 1046 (the path-compression loop;
+    # mutant. Anchored to col 14 of line 1084 (the path-compression loop;
     # moved 836 -> 843 (dry-rs#106 follow-up) -> 1046 (dry-rs#124
-    # CompareCtx + scope helpers inserted above)) — the FIRST `== -> !=`
-    # at line 1039 col 14 corrupts the root walk into a genuine infinite
-    # loop and is TIMEOUT-DETECTED (see the separate 1039 entry directly
-    # above), a different line/loop from this path-compression
-    # equivalence. tracked: dry-rs#116
-    "comparison/mod\\.rs:1046:14: replace == with != in uf_find",
+    # CompareCtx + scope helpers) -> 1067 (dry-rs#124 rework: Fix B
+    # emit_pass1_fast_path extraction) -> 1084 (dry-rs#124 rework: two-`if`
+    # Pass-1 split)) — the FIRST `== -> !=` at line 1077 col 14 corrupts
+    # the root walk into a genuine infinite loop and is TIMEOUT-DETECTED
+    # (see the separate 1077 entry directly above), a different line/loop
+    # from this path-compression equivalence. tracked: dry-rs#116
+    "comparison/mod\\.rs:1084:14: replace == with != in uf_find",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # TIMEOUT-DETECTED (NOT an equivalence claim): replacing
     # `best_clique_candidate`'s body with `Some(0)` / `Some(1)` makes
@@ -186,7 +199,9 @@ exclude_re = [
     # caught. Operator-granular per return value; `best_clique_candidate
     # -> None` is a real behavior change and is CAUGHT, so it is NOT
     # excluded. Line moved 779 -> 982 (dry-rs#124 CompareCtx + scope
-    # helpers inserted above). tracked: dry-rs#116
-    "comparison/mod\\.rs:982:5: replace best_clique_candidate -> Option<usize> with Some\\(0\\)",
-    "comparison/mod\\.rs:982:5: replace best_clique_candidate -> Option<usize> with Some\\(1\\)",
+    # helpers) -> 1003 (dry-rs#124 rework: Fix B emit_pass1_fast_path
+    # extraction) -> 1020 (dry-rs#124 rework: two-`if` Pass-1 split).
+    # tracked: dry-rs#116
+    "comparison/mod\\.rs:1020:5: replace best_clique_candidate -> Option<usize> with Some\\(0\\)",
+    "comparison/mod\\.rs:1020:5: replace best_clique_candidate -> Option<usize> with Some\\(1\\)",
 ]

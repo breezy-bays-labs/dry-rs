@@ -122,8 +122,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::hash::BuildHasher;
 
-use crate::cli::ResolvedScope;
-use crate::domain::{FilePath, FormRef, LineColumn, Match, NormalizedForm, Tier};
+use crate::domain::{FilePath, FormRef, LineColumn, Match, NormalizedForm, ResolvedScope, Tier};
 
 mod antiunify;
 
@@ -486,6 +485,26 @@ fn emit_clusters_for_bucket(
 ///
 /// EVERY member that participates in any scope-allowed exact pair is
 /// claimed here, so Pass 2 never re-derives a score-1.0 equal-set pair.
+///
+/// ## Fast-path short-circuit (Qodo, dry-rs#124)
+///
+/// Two sequential fast-path gates, cheapest first:
+///
+/// 1. [`ResolvedScope::permits_all`] — O(1). When every axis is `true`
+///    the scope CANNOT disallow any pair, so the default (no-`[scope]`)
+///    run never pays the O(k²) `allows()` scan on a large identical
+///    bucket. This is the Qodo perf fix: the common case is O(1) per
+///    cluster.
+/// 2. [`cluster_is_one_scope_allowed_clique`] — O(k²). Only reached when
+///    the scope IS restricted; confirms a restricted-scope cluster
+///    happens to be wholly mutually-allowed (e.g. an all-same-crate
+///    bucket under `across_crate == false`), so it still emits as one
+///    n-ary match rather than carving.
+///
+/// Both gates route to the same [`emit_pass1_fast_path`]; only when BOTH
+/// fail does the cluster carve. Kept as two `if`s (not one `||`) so each
+/// gate is independently exercised — the cheap O(1) gate is not fused
+/// with the expensive scan.
 fn emit_pass1_cluster(
     forms: &[NormalizedForm],
     ctx: &CompareCtx,
@@ -493,19 +512,17 @@ fn emit_pass1_cluster(
     matches: &mut Vec<Match>,
     claimed: &mut HashSet<usize>,
 ) {
+    // Gate 1 (O(1)): unrestricted scope cannot disallow any pair — take
+    // the fast path without ever running the per-pair scan.
+    if ctx.scope.permits_all() {
+        emit_pass1_fast_path(forms, ctx.resolver, cluster, matches, claimed);
+        return;
+    }
+
+    // Gate 2 (O(k²)): the scope restricts SOMETHING, but this particular
+    // cluster may still be wholly mutually-allowed.
     if cluster_is_one_scope_allowed_clique(forms, ctx.scope, cluster) {
-        // Fast path — the whole equal-set group is mutually
-        // scope-allowed; emit one n-ary score-1.0 match (identical to
-        // the pre-scoping engine, which is what keeps the default-scope
-        // output byte-identical).
-        let forms_refs: Vec<FormRef> = cluster
-            .iter()
-            .map(|&i| form_ref_for(&forms[i], i, ctx.resolver))
-            .collect();
-        matches.push(Match::new(forms_refs, 1.0, Tier::AutoRefactor));
-        for &i in cluster {
-            claimed.insert(i);
-        }
+        emit_pass1_fast_path(forms, ctx.resolver, cluster, matches, claimed);
         return;
     }
 
@@ -526,6 +543,27 @@ fn emit_pass1_cluster(
         matches,
     );
     mark_emitted_members_claimed(&matches[before..], cluster, forms, ctx.resolver, claimed);
+}
+
+/// Emit one n-ary score-1.0 [`Match`] for a whole equal-set cluster and
+/// claim every member — the Pass 1 fast path. Byte-identical to the
+/// pre-scoping engine, which is what keeps the default-scope output
+/// stable.
+fn emit_pass1_fast_path(
+    forms: &[NormalizedForm],
+    resolver: &dyn PathResolver,
+    cluster: &[usize],
+    matches: &mut Vec<Match>,
+    claimed: &mut HashSet<usize>,
+) {
+    let forms_refs: Vec<FormRef> = cluster
+        .iter()
+        .map(|&i| form_ref_for(&forms[i], i, resolver))
+        .collect();
+    matches.push(Match::new(forms_refs, 1.0, Tier::AutoRefactor));
+    for &i in cluster {
+        claimed.insert(i);
+    }
 }
 
 /// True when every pair in an equal-set cluster is scope-allowed — the
