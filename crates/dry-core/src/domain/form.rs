@@ -26,6 +26,62 @@ use serde::{Deserialize, Serialize};
 
 use super::{FilePath, FormKind, Span};
 
+/// Structural address of a form within the source tree — which crate /
+/// package it lives in and the module path leading to it.
+///
+/// `StructuralLocation` is an *additive* enrichment on
+/// [`NormalizedForm`]: it carries no weight in Jaccard similarity (the
+/// comparison engine never reads it) and exists purely so reporters and
+/// downstream consumers can group / scope matches by structural origin
+/// (e.g. "all duplication inside `crate::foo::bar`"). It is a result
+/// struct, so — per the `#[non_exhaustive]` discipline in the
+/// nested-envelope ADR — it does NOT carry `#[non_exhaustive]`; it
+/// evolves via constructors and serde versioning.
+///
+/// Both fields are language-agnostic:
+///
+/// - `crate_id` — the crate (Rust) or package (TS) the form belongs to.
+///   `None` when the adapter has no notion of a crate boundary for this
+///   form, or has not yet populated it.
+/// - `module_path` — path components of the enclosing module
+///   (`["foo", "bar"]`), rendered by reporters with the per-language
+///   separator. Empty when the form sits at the crate root or the
+///   adapter does not populate it.
+///
+/// The default value (no crate, empty module path) is the "unknown
+/// location" sentinel. [`StructuralLocation::is_default`] powers the
+/// `skip_serializing_if` on [`NormalizedForm::location`] so a form with
+/// no known location omits the `location` key entirely — keeping the
+/// v0.1 wire snapshot byte-identical for adapters that do not yet emit
+/// structural locations.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StructuralLocation {
+    /// Crate (Rust) or package (TS) the form belongs to; `None` when
+    /// the adapter has no crate notion for this form or has not
+    /// populated it. Omitted from the wire when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crate_id: Option<String>,
+    /// Path components of the enclosing module (`["foo", "bar"]`), not a
+    /// separator-joined string — reporters render with `::` (Rust) or
+    /// `.` (TS). Omitted from the wire when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub module_path: Vec<String>,
+}
+
+impl StructuralLocation {
+    /// True when this is the "unknown location" sentinel — no crate and
+    /// an empty module path. Used by the `skip_serializing_if` on
+    /// [`NormalizedForm::location`] to omit the `location` key from the
+    /// wire when the form carries no structural address.
+    ///
+    /// Not `const fn`: `Vec::is_empty` only became const-stable in Rust
+    /// 1.87, but the workspace MSRV is pinned at 1.85.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.crate_id.is_none() && self.module_path.is_empty()
+    }
+}
+
 /// Cross-language normalized representation of a single form (function,
 /// method, doctest body, …).
 ///
@@ -55,6 +111,9 @@ use super::{FilePath, FormKind, Span};
 ///   across languages.
 /// - `line_count` — source-line span (end-line minus start-line, plus
 ///   one); used by reporters and the size-bucketed parallelism in v0.5.
+/// - `location` — additive [`StructuralLocation`] (crate + module path)
+///   for reporter-side grouping / scoping. Never read by the comparison
+///   engine; omitted from the wire when default ("unknown location").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NormalizedForm {
     /// What category of form this is (production, test, doctest).
@@ -89,6 +148,18 @@ pub struct NormalizedForm {
     pub node_count: u32,
     /// Source line count covered by the form.
     pub line_count: u32,
+    /// Structural address (crate + module path) of the form.
+    ///
+    /// Additive enrichment populated by adapters that can resolve a
+    /// form's structural origin; defaults to the "unknown location"
+    /// sentinel ([`StructuralLocation::default`]). The comparison
+    /// engine never reads it. `skip_serializing_if` omits the
+    /// `location` key from the wire when default, so envelopes from
+    /// adapters that do not populate it stay byte-identical to the v0.1
+    /// snapshot. Declared LAST so adding it leaves the prefix of the
+    /// serialized object unchanged.
+    #[serde(default, skip_serializing_if = "StructuralLocation::is_default")]
+    pub location: StructuralLocation,
 }
 
 impl NormalizedForm {
@@ -119,6 +190,7 @@ impl NormalizedForm {
             span,
             node_count,
             line_count,
+            location: StructuralLocation::default(),
         }
     }
 
@@ -144,7 +216,22 @@ impl NormalizedForm {
             span,
             node_count,
             line_count,
+            location: StructuralLocation::default(),
         }
+    }
+
+    /// Attach a [`StructuralLocation`] to this form, returning the
+    /// updated value (builder-style).
+    ///
+    /// Adapters that resolve a form's structural origin call this after
+    /// [`NormalizedForm::new`] / [`NormalizedForm::with_context`]. The
+    /// location is additive — it never affects Jaccard similarity — so
+    /// the comparison engine behaves identically whether or not it is
+    /// set.
+    #[must_use]
+    pub fn with_location(mut self, location: StructuralLocation) -> Self {
+        self.location = location;
+        self
     }
 }
 
@@ -195,6 +282,8 @@ mod tests {
         // PR 4 (#5): O8/O11 context fields default to empty.
         assert!(form.identifier_set.is_empty());
         assert!(form.qualified_name.is_empty());
+        // PR 8 (#122): `location` defaults to the unknown-location sentinel.
+        assert!(form.location.is_default());
     }
 
     #[test]
@@ -313,6 +402,158 @@ mod tests {
         assert!(form.identifier_set.is_empty());
         assert!(form.qualified_name.is_empty());
         assert_eq!(form.node_count, 4);
+    }
+
+    // ---- StructuralLocation (PR 8 / #122) ----
+
+    fn populated_location() -> StructuralLocation {
+        StructuralLocation {
+            crate_id: Some("dry_core".to_string()),
+            module_path: vec!["domain".to_string(), "form".to_string()],
+        }
+    }
+
+    #[test]
+    fn structural_location_default_is_unknown_sentinel() {
+        let loc = StructuralLocation::default();
+        assert_eq!(loc.crate_id, None);
+        assert!(loc.module_path.is_empty());
+        assert!(loc.is_default());
+    }
+
+    #[test]
+    fn structural_location_is_default_truth_table() {
+        // Default → true.
+        assert!(StructuralLocation::default().is_default());
+        // crate_id set → false.
+        let crate_only = StructuralLocation {
+            crate_id: Some("dry_core".to_string()),
+            module_path: Vec::new(),
+        };
+        assert!(!crate_only.is_default());
+        // module_path non-empty → false.
+        let module_only = StructuralLocation {
+            crate_id: None,
+            module_path: vec!["domain".to_string()],
+        };
+        assert!(!module_only.is_default());
+        // Both set → false.
+        assert!(!populated_location().is_default());
+    }
+
+    #[test]
+    fn structural_location_serde_round_trips_default() {
+        let loc = StructuralLocation::default();
+        let json = serde_json::to_string(&loc).unwrap();
+        // Both fields omitted when default → empty JSON object.
+        assert_eq!(json, "{}");
+        let back: StructuralLocation = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, loc);
+    }
+
+    #[test]
+    fn structural_location_serde_round_trips_populated() {
+        let loc = populated_location();
+        let json = serde_json::to_string(&loc).unwrap();
+        assert!(json.contains("\"crate_id\":\"dry_core\""));
+        assert!(json.contains("\"module_path\":[\"domain\",\"form\"]"));
+        let back: StructuralLocation = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, loc);
+    }
+
+    #[test]
+    fn structural_location_omits_empty_crate_and_module_individually() {
+        // crate_id Some + module_path empty → only crate_id on the wire.
+        let crate_only = StructuralLocation {
+            crate_id: Some("dry_core".to_string()),
+            module_path: Vec::new(),
+        };
+        let json = serde_json::to_string(&crate_only).unwrap();
+        assert!(json.contains("crate_id"));
+        assert!(!json.contains("module_path"));
+        // crate_id None + module_path non-empty → only module_path.
+        let module_only = StructuralLocation {
+            crate_id: None,
+            module_path: vec!["domain".to_string()],
+        };
+        let json = serde_json::to_string(&module_only).unwrap();
+        assert!(!json.contains("crate_id"));
+        assert!(json.contains("module_path"));
+    }
+
+    // ---- NormalizedForm.location wire gate (PR 8 / #122) ----
+
+    #[test]
+    fn normalized_form_with_default_location_omits_location_key() {
+        // WIRE GATE: a form with the default location serializes WITHOUT
+        // a `location` key (skip_serializing_if), keeping the v0.1
+        // snapshot byte-identical for adapters that do not emit one.
+        let form = NormalizedForm::new(FormKind::Production, HashSet::new(), make_span(), 4, 2);
+        assert!(form.location.is_default());
+        let json = serde_json::to_string(&form).unwrap();
+        assert!(
+            !json.contains("location"),
+            "default location must be omitted from the wire, got: {json}"
+        );
+        // Round-trips back to the same value.
+        let back: NormalizedForm = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, form);
+    }
+
+    #[test]
+    fn normalized_form_with_location_serializes_the_field() {
+        let form = NormalizedForm::new(FormKind::Production, HashSet::new(), make_span(), 4, 2)
+            .with_location(populated_location());
+        assert_eq!(form.location, populated_location());
+        let json = serde_json::to_string(&form).unwrap();
+        assert!(
+            json.contains("location"),
+            "populated location must serialize, got: {json}"
+        );
+        assert!(json.contains("\"crate_id\":\"dry_core\""));
+        let back: NormalizedForm = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, form);
+    }
+
+    #[test]
+    fn normalized_form_deserializes_envelope_missing_location_key() {
+        // Backward-compat: a v0.1 envelope with no `location` key
+        // deserializes with the default (unknown) location.
+        let json = r#"{
+            "kind": "production",
+            "fingerprint_set": [1, 2, 3],
+            "span": {"start": {"line": 1, "column": 0}, "end": {"line": 2, "column": 5}},
+            "node_count": 4,
+            "line_count": 2
+        }"#;
+        let form: NormalizedForm = serde_json::from_str(json)
+            .expect("envelope missing location must deserialize to default");
+        assert!(form.location.is_default());
+    }
+
+    #[test]
+    fn normalized_form_with_location_is_additive_to_other_fields() {
+        // with_location preserves every other field — it only swaps in
+        // the structural location.
+        let fps: HashSet<u64> = [1_u64, 2, 3].into_iter().collect();
+        let base = NormalizedForm::with_context(
+            FormKind::Test,
+            fps.clone(),
+            vec!["a".to_string()],
+            vec!["mod_a".to_string()],
+            make_span(),
+            9,
+            4,
+        );
+        let located = base.clone().with_location(populated_location());
+        assert_eq!(located.kind, base.kind);
+        assert_eq!(located.fingerprint_set, base.fingerprint_set);
+        assert_eq!(located.identifier_set, base.identifier_set);
+        assert_eq!(located.qualified_name, base.qualified_name);
+        assert_eq!(located.span, base.span);
+        assert_eq!(located.node_count, base.node_count);
+        assert_eq!(located.line_count, base.line_count);
+        assert_eq!(located.location, populated_location());
     }
 
     #[test]
