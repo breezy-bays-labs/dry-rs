@@ -19,9 +19,23 @@
 #   - No `copy_target = true` (CI uses `--in-place`; the setting is
 #     irrelevant under `--in-place` and adds disk pressure on local
 #     `-j N` runs).
-#   - No `minimum_test_timeout` floor (the baseline test time is
-#     ~3s; cargo-mutants's auto-derived 20s timeout is comfortable
-#     for every mutant in the comparison module).
+#   - `minimum_test_timeout = 120` floor (dry-rs#116). The dry-rs#106
+#     clustering merge added Pass-3 helpers whose whole-function /
+#     return-value mutants disable hash-bucket clustering or the
+#     sliding-window break, routing duplicate-heavy `comparison_proptest`
+#     inputs into the O(N^2) path. Under cargo-mutants's default
+#     `-j N` parallelism (N = CPU count) those test runs are CPU-starved
+#     and overran the auto-derived ~28s timeout even though they fail
+#     fast in isolation (verified: the full `dry-core` suite under
+#     `pass2_sliding_window /->%` FAILS in ~1s un-contended, but timed
+#     out under `-j 10`). The 120s floor lets the starved-but-finite
+#     mutants complete and be CAUGHT honestly, so the only residual
+#     timeouts are the genuine `grow_clique` infinite loops
+#     (`best_clique_candidate -> Some(0)/Some(1)`), which are classified
+#     below. Preferring a higher floor over blanket timeout-excludes
+#     keeps ~20 otherwise-killable mutants from being silently masked.
+
+minimum_test_timeout = 120
 
 # Per-line exclude regexes for mutants that survive by design or for
 # a documented reason. Anchored on `file:line:` so the regex matches
@@ -45,9 +59,10 @@ exclude_re = [
     # Pass 1's cluster-emission loop. cargo-mutants catches it via the
     # timeout path (exit 3); excluded only to keep the green-CI signal
     # clean per the ADR's timeout-detected handling. Line moved from
-    # 296 -> 311 and the predicate now lives in `emit_clusters_for_bucket`
-    # (extracted in dry-rs#42).
-    "comparison/mod\\.rs:311:.* in emit_clusters_for_bucket",
+    # 296 -> 311 (dry-rs#42 helper extraction) -> 372 (dry-rs#106
+    # clustering merge inserted helpers above); the predicate lives in
+    # `emit_clusters_for_bucket`. tracked: dry-rs#116
+    "comparison/mod\\.rs:372:.* in emit_clusters_for_bucket",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # pass2 score-1.0 defensive guard is unreachable by design
     # (`debug_assert!(false, ...)` proves it). Of the five operator
@@ -55,29 +70,107 @@ exclude_re = [
     # branch and are provably equivalent: `<` -> `==`, `<` -> `<=`,
     # `-` -> `+`, `-` -> `/`. The two patterns below are operator-
     # granular per the ADR and match ONLY those four — never `< with >`.
-    # Line moved from 361 -> 421 and the guard now lives in
-    # `resolve_pass2_score` (extracted in dry-rs#42).
-    "comparison/mod\\.rs:421:.*: replace < with (==|<=) in resolve_pass2_score",
-    "comparison/mod\\.rs:421:.*: replace - with (\\+|/) in resolve_pass2_score",
+    # Line moved from 361 -> 421 (dry-rs#42) -> 869 (dry-rs#106
+    # clustering merge); the guard lives in `resolve_pass2_score`.
+    # tracked: dry-rs#116
+    "comparison/mod\\.rs:869:.*: replace < with (==|<=) in resolve_pass2_score",
+    "comparison/mod\\.rs:869:.*: replace - with (\\+|/) in resolve_pass2_score",
     # NOTE: `replace < with > in resolve_pass2_score` is intentionally
     # NOT excluded — flipping the guard to `>` fires the `debug_assert!`
     # on every non-1.0 Pass-2 score, so existing tests CATCH it. Per the
     # ADR's operator-granularity rule, do NOT re-add a blanket
-    # `comparison/mod\\.rs:421:.*` exclude: it would silently re-mask
+    # `comparison/mod\\.rs:869:.*` exclude: it would silently re-mask
     # this killable mutant.
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # jaccard `||` -> `&&` short-circuit: both branches produce 0.0 for
     # every single-empty case (intersection of an empty set is 0,
     # union > 0, score = 0/N = 0.0), so this is a provably-equivalent
     # mutant — no test can distinguish the two behaviors without changing
-    # the empty-set policy itself. Line moved from 483 -> 535 during the
-    # dry-rs#42 refactor sweep (helper extractions above pushed `jaccard`
-    # further down the file).
-    "comparison/mod\\.rs:535:.*: replace \\|\\| with && in jaccard",
+    # the empty-set policy itself. Line moved from 483 -> 535 (dry-rs#42
+    # refactor sweep) -> 983 (dry-rs#106 clustering merge inserted Pass 3
+    # helpers above `jaccard`). tracked: dry-rs#116
+    "comparison/mod\\.rs:983:.*: replace \\|\\| with && in jaccard",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # jaccard `a.len() <= b.len()` optimization invariant; the source
     # comment literally says "semantically equivalent" (iterating the
     # smaller set is a perf choice, the count is identical either way).
-    # Line moved from 488 -> 540 during the dry-rs#42 refactor sweep.
-    "comparison/mod\\.rs:540:.*: replace <= with > in jaccard",
+    # Line moved from 488 -> 540 (dry-rs#42 refactor sweep) -> 988
+    # (dry-rs#106 clustering merge). tracked: dry-rs#116
+    "comparison/mod\\.rs:988:.*: replace <= with > in jaccard",
+    # ---- dry-rs#106 clique-carving helpers (dry-rs#116) ----
+    # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
+    # EQUIVALENT: `uf_union` picks the min-index root as the component
+    # representative (`if ra < rb`). Its sole consumer,
+    # `component_size_by_node`, COUNTS nodes per component; the count is
+    # identical regardless of WHICH node is the representative root.
+    # Flipping `<` to `==`/`>`/`<=` only changes the representative, never
+    # the partition or any component size, so no test can distinguish
+    # them. Verified: the full `dry-core` suite (352 tests) PASSES under
+    # `< -> ==`. Operator-granular (the three `<`-relational transforms
+    # at col 30); the surrounding `!= -> ==` at col 11 is a real merge-
+    # guard change and is CAUGHT, so it is NOT excluded. tracked: dry-rs#116
+    "comparison/mod\\.rs:851:30: replace < with (==|>|<=) in uf_union",
+    # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
+    # EQUIVALENT: `candidate_beats_best`'s `Ordering::Equal` arm is the
+    # identity tie-break `ident[&cand] < ident[&best_cand]`. `cand` and
+    # `best_cand` are ALWAYS distinct nodes: `best_cand` was a PRIOR
+    # `cand` from the same `for &cand in adj[&clique[0]].keys()` scan
+    # (BTreeMap keys are unique), and the current `cand` is skipped if it
+    # is already a clique member (line 774), so the current and prior
+    # nodes never coincide. `NodeIdent` ends in the form's input index
+    # (`(FilePath, LineColumn, LineColumn, usize)`), which is unique per
+    # node, so `ident[&cand] != ident[&best_cand]` always holds. On a
+    # total order with distinct operands `a < b` and `a <= b` agree, so
+    # the `< -> <=` flip is behaviorally identical — no test can
+    # distinguish them. Operator-granular: ONLY `< with <=`. The sibling
+    # `< with ==` (admit on every tie -> wrong member on ties) and
+    # `< with >` (reverse the tie-break -> wrong member) DO change
+    # behavior and are CAUGHT by
+    # `candidate_tie_break_picks_smaller_identity_deterministically`, so
+    # they are NOT excluded. tracked: dry-rs#116
+    "comparison/mod\\.rs:818:55: replace < with <= in candidate_beats_best",
+    # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
+    # TIMEOUT-DETECTED (NOT an equivalence claim): the FIRST `if p ==
+    # root` loop in `uf_find` (line 829, col 14) is the root walk that
+    # ascends the parent chain to the component root, breaking when a
+    # node is its own parent (`p == root`). Flipping `==` to `!=`
+    # inverts the break condition: the walk no longer stops at the
+    # self-parent root, so `root` is corrupted to a non-root node — and
+    # the SECOND (path-compression) loop, rewriting `parent[cur] = root`
+    # against that corrupt target on a non-trivial parent chain, never
+    # reaches its own `p == root` break and spins forever. A genuine
+    # infinite loop, caught via cargo-mutants's timeout path (exit 3)
+    # under the `minimum_test_timeout = 120` floor. Operator-granular
+    # (only the `== -> !=` at col 14 of the FIRST loop); excluded to
+    # keep the green-CI signal clean per the ADR's timeout-detected
+    # handling, NOT as an equivalence claim. tracked: dry-rs#116
+    "comparison/mod\\.rs:829:14: replace == with != in uf_find",
+    # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
+    # EQUIVALENT: the SECOND `if p == root` loop in `uf_find` is path
+    # compression (a perf optimization). `uf_find`'s RETURN value (the
+    # root) is computed in the FIRST loop; the second loop only rewrites
+    # `parent` entries to point at the already-found root. Flipping its
+    # `==` to `!=` changes only how much compression happens, never the
+    # returned root, so component sizes and all downstream output are
+    # unchanged. Verified: the full `dry-core` suite PASSES under this
+    # mutant. Anchored to col 14 of line 836 (the path-compression loop)
+    # — the FIRST `== -> !=` at line 829 col 14 corrupts the root walk
+    # into a genuine infinite loop and is TIMEOUT-DETECTED (see the
+    # separate 829 entry directly above), a different line/loop from
+    # this path-compression equivalence. tracked: dry-rs#116
+    "comparison/mod\\.rs:836:14: replace == with != in uf_find",
+    # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
+    # TIMEOUT-DETECTED (NOT an equivalence claim): replacing
+    # `best_clique_candidate`'s body with `Some(0)` / `Some(1)` makes
+    # `grow_clique`'s `while let Some(cand) = best_clique_candidate(..)`
+    # loop push the same node forever — a genuine infinite loop.
+    # cargo-mutants catches it via the timeout path; excluded to keep the
+    # green-CI signal clean per the ADR's timeout-detected handling. These
+    # are the ONLY residual timeouts after the `minimum_test_timeout = 120`
+    # floor (above) lets every starved-but-finite mutant complete and be
+    # caught. Operator-granular per return value; `best_clique_candidate
+    # -> None` is a real behavior change and is CAUGHT, so it is NOT
+    # excluded. tracked: dry-rs#116
+    "comparison/mod\\.rs:772:5: replace best_clique_candidate -> Option<usize> with Some\\(0\\)",
+    "comparison/mod\\.rs:772:5: replace best_clique_candidate -> Option<usize> with Some\\(1\\)",
 ]
