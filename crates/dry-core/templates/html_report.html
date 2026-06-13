@@ -209,9 +209,25 @@
   const TIER_ORDER = ["auto_refactor", "review_first", "advisory"];
   const el = (id) => document.getElementById(id);
 
+  // Append children to a parent ONE NODE AT A TIME via `appendChild`.
+  // `appendChild` accepts exactly one Node and NEVER a raw HTML string, so
+  // it is not an HTML-parsing sink (unlike the native `Element.append`
+  // variadic method, which a static taint scanner conflates with jQuery's
+  // HTML-parsing append). Each kid is flattened, null-skipped, and — if not
+  // already a Node — wrapped in a text node, so strings can NEVER become
+  // markup.
+  function appendKids(parent, ...kids) {
+    for (const c of kids.flat()) {
+      if (c == null) continue;
+      parent.appendChild(c.nodeType ? c : document.createTextNode(String(c)));
+    }
+    return parent;
+  }
+
   // Minimal DOM builder. `attrs.class` -> className; `id` / `data-*` ->
   // setAttribute; everything else -> property assignment. Children are
-  // nodes or coerced to text nodes — strings can NEVER become markup.
+  // nodes or coerced to text nodes (via `appendKids` / `appendChild`) —
+  // strings can NEVER become markup.
   function h(tag, attrs, ...kids) {
     const e = document.createElement(tag);
     for (const k in (attrs || {})) {
@@ -219,11 +235,7 @@
       else if (k === "id" || k.startsWith("data-")) e.setAttribute(k, attrs[k]);
       else e[k] = attrs[k];
     }
-    for (const c of kids.flat()) {
-      if (c == null) continue;
-      e.append(c.nodeType ? c : document.createTextNode(String(c)));
-    }
-    return e;
+    return appendKids(e, ...kids);
   }
   function clear(node) {
     while (node.firstChild) node.removeChild(node.firstChild);
@@ -311,7 +323,7 @@
 
     const ov = el("overview");
     clear(ov);
-    ov.append(h("h2", null, "Overview"), h("div", { class: "panel" }, statLine, body));
+    appendKids(ov, h("h2", null, "Overview"), h("div", { class: "panel" }, statLine, body));
   }
 
   function tierRank(tier) {
@@ -384,7 +396,7 @@
   function templateSkeleton(template) {
     const holes = template.holes || [];
     const pre = h("div", { class: "skeleton", "data-skeleton": "1" });
-    pre.append(skeletonNode(template.root, holes, 0));
+    appendKids(pre, skeletonNode(template.root, holes, 0));
     return pre;
   }
 
@@ -401,7 +413,7 @@
     const td = h("td", null);
     for (const e of els) {
       const cls = els.length === 1 && e.fp !== modal ? "variadic-elem divergent" : "variadic-elem";
-      td.append(h("span", { class: cls }, e.lexeme ?? ""));
+      appendKids(td, h("span", { class: cls }, e.lexeme ?? ""));
     }
     return td;
   }
@@ -518,17 +530,19 @@
       const holeCount = (template.holes || []).length;
       if (holeCount === 0) {
         // Exact-dup cluster: a concrete shared form, NO empty grid.
-        card.append(
+        appendKids(
+          card,
           h("div", { class: "meta" }, "exact structural match · no holes"),
           templateSkeleton(template),
         );
       } else {
-        card.append(
+        appendKids(
+          card,
           h("div", { class: "meta" }, "template · " + holeCount + " holes"),
           templateSkeleton(template),
         );
         const slider = dSlider(card, m);
-        if (slider) card.append(slider);
+        if (slider) appendKids(card, slider);
         // Large-cluster handling: collapse the grid by default beyond the
         // member ceiling; render lazily when revealed.
         if (forms.length > MEMBER_CEILING) {
@@ -547,15 +561,15 @@
             btn.disabled = true;
             btn.textContent = "Grid shown";
           });
-          card.append(note, btn);
+          appendKids(card, note, btn);
         } else {
           const grid = substitutionGrid(m);
-          if (grid) card.append(grid);
+          if (grid) appendKids(card, grid);
         }
       }
     }
 
-    card.append(h("ul", null, forms.map((f) => h("li", null, formLabel(f)))));
+    appendKids(card, h("ul", null, forms.map((f) => h("li", null, formLabel(f)))));
     return card;
   }
 
@@ -575,10 +589,10 @@
     const list = el("cluster-list");
     clear(list);
     if (!visible.length) {
-      list.append(h("p", { class: "empty" }, "No clusters match the filters."));
+      appendKids(list, h("p", { class: "empty" }, "No clusters match the filters."));
       return;
     }
-    list.append(...visible.map(({ m, i }) => clusterCard(m, i)));
+    appendKids(list, ...visible.map(({ m, i }) => clusterCard(m, i)));
   }
 
   // ---- scope banner (dry-rs#149) -------------------------------------
@@ -613,7 +627,8 @@
     });
     clear(section);
     section.hidden = false;
-    section.append(
+    appendKids(
+      section,
       h("h2", null, "Scope"),
       h(
         "div",
@@ -634,7 +649,8 @@
     if (!env) {
       const ov = el("overview");
       clear(ov);
-      ov.append(
+      appendKids(
+        ov,
         h("h2", null, "Overview"),
         h("div", { class: "panel empty" }, "Could not load report data."),
       );
