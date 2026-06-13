@@ -64,6 +64,15 @@ pub struct CrateIdResolver {
     /// nearest-`Cargo.toml` walk. `None` records "walked to root, found
     /// no `[package].name`" so a miss is not re-walked.
     cargo_cache: HashMap<PathBuf, Option<String>>,
+    /// `source FilePath -> resolved crate id` memo. The run loop calls
+    /// [`resolve`](CrateIdResolver::resolve) once PER FORM, and many forms
+    /// share one file, so this outer cache collapses the per-form repeats:
+    /// the `std::path::absolute` syscall, the parent-dir allocation, and
+    /// the top-segment fallback each run at most once per unique file
+    /// (gemini-code-assist PR #144). The inner `cargo_cache` still
+    /// dedupes the `Cargo.toml` walk across DIFFERENT files in one
+    /// directory.
+    file_cache: HashMap<FilePath, Option<String>>,
 }
 
 impl CrateIdResolver {
@@ -82,6 +91,7 @@ impl CrateIdResolver {
         Self {
             roots,
             cargo_cache: HashMap::new(),
+            file_cache: HashMap::new(),
         }
     }
 
@@ -89,10 +99,25 @@ impl CrateIdResolver {
     /// (nearest-`Cargo.toml` `[package].name`, else top directory segment
     /// under the analysis root, else `None`).
     ///
-    /// `&mut self` so the per-directory `Cargo.toml` memo persists across
-    /// calls within one run.
+    /// `&mut self` so the per-directory `Cargo.toml` memo AND the
+    /// per-file result memo persist across calls within one run. The
+    /// per-file memo means a repeat `FilePath` (the common case — every
+    /// form in a file resolves the same path) skips the
+    /// `std::path::absolute` syscall and the parent/fallback work
+    /// entirely.
     #[must_use]
     pub fn resolve(&mut self, path: &FilePath) -> Option<String> {
+        if let Some(cached) = self.file_cache.get(path) {
+            return cached.clone();
+        }
+        let resolved = self.resolve_uncached(path);
+        self.file_cache.insert(path.clone(), resolved.clone());
+        resolved
+    }
+
+    /// The actual derivation, run at most once per unique [`FilePath`]
+    /// (the [`resolve`](CrateIdResolver::resolve) outer cache guards it).
+    fn resolve_uncached(&mut self, path: &FilePath) -> Option<String> {
         let abs =
             std::path::absolute(path.as_path()).unwrap_or_else(|_| path.as_path().to_path_buf());
         if let Some(name) = self.nearest_cargo_package_name(&abs) {
@@ -297,6 +322,35 @@ mod tests {
             resolver.cargo_cache.len(),
             1,
             "same-directory second file reuses the cache entry"
+        );
+    }
+
+    #[test]
+    fn resolve_memoizes_final_result_per_file() {
+        // The run loop calls resolve() once PER FORM; many forms share a
+        // file. The per-FilePath cache collapses those repeats so the
+        // expensive path resolution runs once per unique file
+        // (gemini-code-assist PR #144).
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        write(
+            &root.join("crates/foo/Cargo.toml"),
+            "[package]\nname = \"foo\"\n",
+        );
+        let a = root.join("crates/foo/src/a.rs");
+        write(&a, "fn a() {} fn b() {}");
+
+        let mut resolver = CrateIdResolver::new(&[fp(root)]);
+        // First call populates the per-file memo.
+        assert_eq!(resolver.resolve(&fp(&a)), Some("foo".to_string()));
+        assert_eq!(resolver.file_cache.len(), 1, "one file cached");
+        // Second call on the SAME file (a second form in the file) hits
+        // the per-file memo and returns the identical result.
+        assert_eq!(resolver.resolve(&fp(&a)), Some("foo".to_string()));
+        assert_eq!(
+            resolver.file_cache.len(),
+            1,
+            "repeat resolve on the same file reuses the per-file cache entry"
         );
     }
 
