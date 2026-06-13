@@ -38,7 +38,9 @@ use super::effective::EffectiveConfig;
 use crate::adapters::config::{ConfigError, discover_config, load_config};
 use crate::adapters::reporters::json::{Envelope, EnvelopeMeta, ViewProjection};
 use crate::adapters::reporters::{markdown, text};
-use crate::adapters::source::{SourceError, SourceOutcome, SourceWarning, enumerate};
+use crate::adapters::source::{
+    CrateIdResolver, SourceError, SourceOutcome, SourceWarning, enumerate,
+};
 use crate::comparison::{antiunify, compare_with_paths};
 use crate::domain::{
     Config, FilePath, Match, NormalizedForm, NormalizedTree, Report, Span, Summary, Template,
@@ -196,7 +198,17 @@ fn run_with_args<N: NormalizerPort + TreeDeriverPort + Default>(
     // Normalize every enumerated file. Per-file parse errors go to
     // stderr; the adapter's skip-on-parse-error policy keeps the
     // pipeline running on a corrupt input.
-    let (forms, form_paths) = normalize_files(&normalizer, &outcome);
+    let (mut forms, form_paths) = normalize_files(&normalizer, &outcome);
+
+    // Crate-id enrichment (dry-rs#141). The adapter walker resolves each
+    // form's `module_path` (intra-file AST context) but leaves `crate_id`
+    // as `None` — the crate axis is FilePath-vs-analysis-root work the
+    // per-file `normalize` surface deliberately cannot see. Derive it
+    // here (nearest-ancestor `Cargo.toml` `[package].name`, else top
+    // directory segment under the analysis root, else `None`) and merge
+    // onto each form's existing `location`, preserving the walker's
+    // `module_path`.
+    enrich_crate_ids(&mut forms, &form_paths, &config);
 
     // Compare. The comparison engine is `debug_assert!`-only on
     // threshold range; clap's value parser is the production-build
@@ -623,6 +635,34 @@ fn normalize_files<N: NormalizerPort>(
         "normalize_files() must produce parallel forms+paths arrays"
     );
     (forms, paths)
+}
+
+/// Enrich each form's [`StructuralLocation`] with a derived `crate_id`
+/// (dry-rs#141).
+///
+/// The adapter walker resolves `module_path` (the enclosing-module
+/// segments — intra-file AST context) but cannot resolve `crate_id`: the
+/// crate axis is FilePath-vs-analysis-root work the per-file `normalize`
+/// surface deliberately does not see. This function derives the crate id
+/// from each form's source path (via [`CrateIdResolver`]) and writes it
+/// onto the form's existing `location`, leaving the walker-supplied
+/// `module_path` intact.
+///
+/// `forms[i]` and `form_paths[i]` are the parallel arrays
+/// [`normalize_files`] produces. The resolver memoizes the
+/// nearest-`Cargo.toml` walk per directory, so a corpus with many forms
+/// per file pays the filesystem cost once per directory, not per form.
+///
+/// [`StructuralLocation`]: crate::domain::StructuralLocation
+fn enrich_crate_ids(
+    forms: &mut [NormalizedForm],
+    form_paths: &[FilePath],
+    config: &AnalysisConfig,
+) {
+    let mut resolver = CrateIdResolver::new(&config.roots);
+    for (form, path) in forms.iter_mut().zip(form_paths.iter()) {
+        form.location.crate_id = resolver.resolve(path);
+    }
 }
 
 /// Attach an anti-unification [`Template`] to every MULTI-member match
@@ -1842,5 +1882,84 @@ mod tests {
             "structural_score must be derived once a template attaches"
         );
         assert!(matches[0].rename_count.is_some());
+    }
+
+    // ---- enrich_crate_ids (dry-rs#141) ----
+
+    #[test]
+    fn enrich_crate_ids_resolves_package_name_and_preserves_module_path() {
+        use std::fs;
+
+        use crate::domain::StructuralLocation;
+
+        // A workspace file under crates/foo/src/: crate_id resolves to the
+        // `[package].name` (`foo`) while the walker-supplied module_path
+        // is left intact.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("crates/foo/src")).unwrap();
+        fs::write(
+            root.join("crates/foo/Cargo.toml"),
+            "[package]\nname = \"foo\"\n",
+        )
+        .unwrap();
+        let file = root.join("crates/foo/src/lib.rs");
+        fs::write(&file, "fn a() {}").unwrap();
+
+        let span = Span::try_new(LineColumn::new(1, 0), LineColumn::new(1, 9)).unwrap();
+        // Seed the form with a walker-style module_path; crate_id None.
+        let form = NormalizedForm::new(
+            FormKind::Production,
+            std::collections::HashSet::new(),
+            span,
+            1,
+            1,
+        )
+        .with_location(StructuralLocation {
+            crate_id: None,
+            module_path: vec!["inner".to_string()],
+        });
+        let mut forms = vec![form];
+        let form_paths = vec![FilePath::from(file)];
+        let config = AnalysisConfig::new([root.to_path_buf()]);
+
+        enrich_crate_ids(&mut forms, &form_paths, &config);
+
+        assert_eq!(forms[0].location.crate_id, Some("foo".to_string()));
+        assert_eq!(
+            forms[0].location.module_path,
+            vec!["inner".to_string()],
+            "crate-id enrichment must preserve the walker's module_path"
+        );
+    }
+
+    #[test]
+    fn enrich_crate_ids_yields_none_for_single_dir_run_with_no_cargo_toml() {
+        use std::fs;
+
+        // A flat directory with no Cargo.toml: crate_id stays None so
+        // crate_aware=false downstream never drops every pair.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let file = root.join("a.rs");
+        fs::write(&file, "fn a() {}").unwrap();
+
+        let span = Span::try_new(LineColumn::new(1, 0), LineColumn::new(1, 9)).unwrap();
+        let mut forms = vec![NormalizedForm::new(
+            FormKind::Production,
+            std::collections::HashSet::new(),
+            span,
+            1,
+            1,
+        )];
+        let form_paths = vec![FilePath::from(file)];
+        let config = AnalysisConfig::new([root.to_path_buf()]);
+
+        enrich_crate_ids(&mut forms, &form_paths, &config);
+
+        assert_eq!(
+            forms[0].location.crate_id, None,
+            "single-dir no-Cargo.toml run must leave crate_id None"
+        );
     }
 }

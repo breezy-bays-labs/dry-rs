@@ -26,6 +26,10 @@ use thiserror::Error;
 use crate::cli::AnalysisConfig;
 use crate::domain::FilePath;
 
+pub mod crate_id;
+
+pub use crate_id::CrateIdResolver;
+
 /// Enumerate every source file under the roots in `config`, honoring
 /// `.gitignore` / `.ignore` rules unless `config.include_ignored` is
 /// `true`.
