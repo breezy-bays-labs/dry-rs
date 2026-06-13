@@ -35,6 +35,7 @@ mod args;
 mod build_command;
 mod effective;
 mod run;
+mod scope;
 
 pub use adapter_meta::{AdapterMeta, Language};
 pub use args::{Args, Command, Format, ThresholdMode};
@@ -43,6 +44,7 @@ pub use effective::EffectiveConfig;
 pub use run::{
     compute_analysis_root, merge_effective_inputs, render_config_error, resolve_config_path, run,
 };
+pub use scope::ResolvedScope;
 
 // Test-shim alias — integration tests in
 // `crates/dry-core/tests/config.rs` call this name so the helper's

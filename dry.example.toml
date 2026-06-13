@@ -53,6 +53,25 @@ include_ignored = false
 # supplied list overrides (an empty vec disables the filter).
 extensions = ["rs"]
 
+# `[scope]` table — relatedness scoping by structural boundary.
+[scope]
+# Allow clustering pairs whose two forms share a crate / package.
+# CLI `--[no-]within-crate` overrides this when both are set.
+# Default (unset) resolves to `true`.
+within_crate = true
+# Allow clustering pairs whose two forms live in different crates.
+# CLI `--[no-]across-crate` overrides this when both are set.
+# Default (unset) resolves to `true`.
+across_crate = true
+# Allow clustering pairs whose two forms share a module path.
+# CLI `--[no-]within-module` overrides this when both are set.
+# Default (unset) resolves to `true`.
+within_module = true
+# Allow clustering pairs whose two forms live in different modules.
+# CLI `--[no-]across-module` overrides this when both are set.
+# Default (unset) resolves to `true`.
+across_module = true
+
 # `[rust]` table — per-language overrides for the `dry4rs` adapter.
 # Every knob in this table cascades: when set, it replaces the
 # corresponding shared `[gate]`/`[output]`/`[walk]` value for the
@@ -75,6 +94,14 @@ subtitle = "Per-language override example"
 include_ignored = false
 # Per-language override for `[walk].extensions`.
 extensions = ["rs"]
+# Per-language override for `[scope].within_crate`.
+within_crate = true
+# Per-language override for `[scope].across_crate`.
+across_crate = true
+# Per-language override for `[scope].within_module`.
+within_module = true
+# Per-language override for `[scope].across_module`.
+across_module = true
 
 # `[typescript]` table — per-language overrides for the future
 # `dry4ts` adapter (v0.6+). Reserved at v0.1 so the cross-tool
@@ -99,3 +126,11 @@ extensions = [
     "ts",
     "tsx",
 ]
+# Per-language override for `[scope].within_crate`.
+within_crate = true
+# Per-language override for `[scope].across_crate`.
+across_crate = true
+# Per-language override for `[scope].within_module`.
+within_module = true
+# Per-language override for `[scope].across_module`.
+across_module = true

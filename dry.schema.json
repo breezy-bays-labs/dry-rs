@@ -16,6 +16,10 @@
       "description": "`[rust]` table — per-language overrides for the `dry4rs` adapter.\nEvery knob in this table cascades: when set, it replaces the\ncorresponding shared `[gate]`/`[output]`/`[walk]` value for the\nrust adapter ONLY; when unset, the adapter falls back to the\nshared value, then the [`crate::cli::AdapterMeta`] default,\nthen the compiled-in fallback. Other adapters (dry4ts) are\nunaffected by anything in this table.",
       "$ref": "#/$defs/LanguageConfig"
     },
+    "scope": {
+      "description": "`[scope]` table — relatedness scoping by structural boundary.",
+      "$ref": "#/$defs/ScopeConfig"
+    },
     "typescript": {
       "description": "`[typescript]` table — per-language overrides for the future\n`dry4ts` adapter (v0.6+). Reserved at v0.1 so the cross-tool\nschema stays stable across the dry4rs / dry4ts cadence. Every\nknob cascades on top of `[gate]` / `[output]` / `[walk]` the\nsame way `[rust]` does, for the typescript adapter ONLY.",
       "$ref": "#/$defs/LanguageConfig"
@@ -77,6 +81,20 @@
       "description": "Per-language override table — `[rust]` for the `dry4rs` adapter,\n`[typescript]` for the future `dry4ts` adapter (v0.6+).\n\nEvery knob mirrors one in `[gate]` / `[output]` / `[walk]` as\n`Option<T>`. A `Some(v)` here REPLACES the corresponding shared\nvalue when the adapter resolves its effective config via\n[`crate::cli::EffectiveConfig::resolve`] (dry-rs#78); a `None`\nhere falls back to the shared value. When BOTH are unset, the\nresolved field stays `None` and the next precedence tier\n([`crate::cli::AdapterMeta`] default → compiled-in fallback) applies.\n\nAdding a knob requires extending BOTH this struct AND the shared\nsection struct that owns the matching shared knob; the cascade\nresolver's exhaustive destructure is the compile-time guard.",
       "type": "object",
       "properties": {
+        "across_crate": {
+          "description": "Per-language override for `[scope].across_crate`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "across_module": {
+          "description": "Per-language override for `[scope].across_module`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "extensions": {
           "description": "Per-language override for `[walk].extensions`.",
           "type": [
@@ -137,6 +155,20 @@
             "string",
             "null"
           ]
+        },
+        "within_crate": {
+          "description": "Per-language override for `[scope].within_crate`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "within_module": {
+          "description": "Per-language override for `[scope].within_module`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
@@ -167,6 +199,41 @@
           "description": "Scorecard title displayed by external consumers (e.g., the\ndry-scorecard GitHub Action's sticky PR comment header).\nReplaces the consumer-side `comment-preamble` action input\nstopgap. When unset, consumers may default to the tool name.",
           "type": [
             "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ScopeConfig": {
+      "description": "`[scope]` table — relatedness scoping by structural boundary\n(dry-rs#123, `adr-relatedness-scoping-model.md`).\n\nFour orthogonal `Option<bool>` knobs gate which pairs of forms the\ncomparison engine is allowed to cluster, by the structural\nrelationship between the two forms' [`crate::domain::StructuralLocation`]:\n\n- `within_crate` — allow pairs whose two forms share a crate / package.\n- `across_crate` — allow pairs whose two forms live in different crates.\n- `within_module` — allow pairs whose two forms share a module path.\n- `across_module` — allow pairs whose two forms live in different modules.\n\nThe four axes are orthogonal (crate × module, within × across) and\nmap 1:1 to the user's mental model — NOT a single enum forcing an\nunnatural product. Each defaults to \"allow\" (the resolved\n[`crate::cli::ResolvedScope`] is all-true) so an unconfigured run\nclusters every pair exactly as it did before scoping landed.\n\nEvery field is `Option<bool>` so the cascade resolver\n([`crate::cli::EffectiveConfig::resolve`]) can distinguish \"user\nset this in TOML\" from \"user left it unset\" — per-language\n`Some(v)` shadows the shared `[scope]` value; both `None` resolves\nto the all-true default.",
+      "type": "object",
+      "properties": {
+        "across_crate": {
+          "description": "Allow clustering pairs whose two forms live in different crates.\nCLI `--[no-]across-crate` overrides this when both are set.\nDefault (unset) resolves to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "across_module": {
+          "description": "Allow clustering pairs whose two forms live in different modules.\nCLI `--[no-]across-module` overrides this when both are set.\nDefault (unset) resolves to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "within_crate": {
+          "description": "Allow clustering pairs whose two forms share a crate / package.\nCLI `--[no-]within-crate` overrides this when both are set.\nDefault (unset) resolves to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "within_module": {
+          "description": "Allow clustering pairs whose two forms share a module path.\nCLI `--[no-]within-module` overrides this when both are set.\nDefault (unset) resolves to `true`.",
+          "type": [
+            "boolean",
             "null"
           ]
         }
