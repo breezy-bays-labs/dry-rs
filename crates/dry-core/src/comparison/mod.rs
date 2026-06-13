@@ -2672,4 +2672,103 @@ mod tests {
              under the mutant would consume them): {matches:?}"
         );
     }
+
+    /// Equal-score carving-order fixture (dry-rs#116) for the canonical
+    /// endpoint-pair tie-break in `carving_order`.
+    ///
+    /// Two TOP edges A-D and B-C carry the SAME score (0.9375) — quantized
+    /// Jaccard makes exact ties the common case, and `carving_order`
+    /// breaks the tie on the canonical `(smaller_ident, larger_ident)`
+    /// endpoint pair. The five identities sort `a < b < c < d < m`, so:
+    ///   - correct min-first canonicalization: key(A-D)=(a,d) <
+    ///     key(B-C)=(b,c) because `a < b` -> A-D seeds FIRST.
+    ///   - the `<= -> >` mutant canonicalizes to (larger, smaller):
+    ///     key(A-D)=(d,a), key(B-C)=(c,b); now `c < d` -> B-C seeds first.
+    ///
+    /// Swing node M is adjacent (at 0.3191, below both top edges) to ALL
+    /// of A, B, C, D, and is the ONLY admissible growth candidate for
+    /// whichever top pair seeds first (A,B,C,D are pairwise non-adjacent
+    /// across the two cores). So M joins the FIRST-seeded clique and is
+    /// then locked out of the second:
+    ///   - correct: {A,D,M} 3-clique + {B,C} 2-clique (+ B-M, C-M
+    ///     residuals).
+    ///   - mutant:  {B,C,M} 3-clique + {A,D} 2-clique (+ A-M, D-M
+    ///     residuals).
+    ///
+    /// The 3-clique's membership is the observable difference: M clusters
+    /// with {A,D} iff the canonical pair ordering is correct.
+    fn equal_score_swing_forms() -> (Vec<NormalizedForm>, Vec<FilePath>) {
+        let a: Vec<u64> = (1..=30).chain([900]).collect();
+        let d: Vec<u64> = (1..=30).chain([901]).collect();
+        let b: Vec<u64> = (50..=79).chain([950]).collect();
+        let c: Vec<u64> = (50..=79).chain([951]).collect();
+        let m: Vec<u64> = (1..=15).chain(50..=64).chain([999]).collect();
+        // Input order is a,b,c,d,m; filenames sort a<b<c<d<m so the
+        // identity tie-break is filename-driven, independent of index.
+        let forms = vec![
+            make_form(&a, 31),
+            make_form(&b, 31),
+            make_form(&c, 31),
+            make_form(&d, 31),
+            make_form(&m, 31),
+        ];
+        let paths = ["a.rs", "b.rs", "c.rs", "d.rs", "m.rs"]
+            .iter()
+            .map(|n| FilePath::from(std::path::PathBuf::from(n)))
+            .collect();
+        (forms, paths)
+    }
+
+    #[test]
+    fn equal_score_carving_seeds_in_canonical_pair_order() {
+        // Kills `620 <= -> >` in `carving_order` (the canonical
+        // endpoint-pair `if a <= b { (a, b) } else { (b, a) }`). Two
+        // equal-score top edges A-D and B-C tie on score; the tie-break
+        // is the canonical (min-ident, max-ident) pair. The `<= -> >`
+        // flip reverses every pair to (max, min), reordering the two
+        // equal-score edges so B-C seeds before A-D. The swing node M
+        // then joins B-C instead of A-D -> a DIFFERENT clustering.
+        //
+        // Verified: passes on HEAD, FAILS under a manual `<= -> >` flip
+        // at line 620 (the 3-clique becomes {B,C,M} instead of {A,D,M}).
+        let (forms, paths) = equal_score_swing_forms();
+        let matches = compare_with_paths(&forms, &paths, 0.3);
+
+        let members_of = |mm: &Match| -> Vec<String> {
+            let mut v: Vec<String> = mm.forms.iter().map(|f| f.file.to_string()).collect();
+            v.sort();
+            v
+        };
+
+        // Exactly one 3-clique, and it MUST be {A,D,M} — the mutant emits
+        // {B,C,M} instead (same shape, different members).
+        let three: Vec<Vec<String>> = matches
+            .iter()
+            .filter(|mm| mm.forms.len() == 3)
+            .map(members_of)
+            .collect();
+        assert_eq!(
+            three.len(),
+            1,
+            "expected exactly one 3-clique, got {matches:?}"
+        );
+        assert_eq!(
+            three[0],
+            vec!["a.rs", "d.rs", "m.rs"],
+            "swing node M must cluster with the canonical-first pair {{A,D}}; \
+             the <=->> mutant flips seeding so M clusters with {{B,C}}: {matches:?}"
+        );
+
+        // The losing pair {B,C} stays a binary clique (M did not absorb
+        // into it).
+        let has_pair = |x: &str, y: &str| {
+            matches.iter().any(|mm| {
+                mm.forms.len() == 2 && members_of(mm) == vec![x.to_string(), y.to_string()]
+            })
+        };
+        assert!(
+            has_pair("b.rs", "c.rs"),
+            "B-C must remain a binary clique (M joined A-D, not B-C): {matches:?}"
+        );
+    }
 }
