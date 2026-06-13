@@ -30,7 +30,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap_complete::Shell;
 
 use super::AnalysisConfig;
-use super::ResolvedScope;
 use super::adapter_meta::AdapterMeta;
 use super::args::{Args, Command, Format, ThresholdMode};
 use super::build_command::build_command;
@@ -43,7 +42,8 @@ use crate::adapters::source::{
 };
 use crate::comparison::{antiunify, compare_with_paths_scoped};
 use crate::domain::{
-    Config, FilePath, Match, NormalizedForm, NormalizedTree, Report, Span, Summary, Template,
+    Config, FilePath, Match, NormalizedForm, NormalizedTree, Report, ResolvedScope, Span, Summary,
+    Template,
 };
 use crate::ports::{NormalizerPort, TreeDeriverPort};
 

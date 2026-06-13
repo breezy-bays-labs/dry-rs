@@ -206,7 +206,7 @@ pub struct Envelope {
 /// (dry-rs#124, Track B), echoed onto the wire as `Envelope.scope`.
 ///
 /// A flat snapshot of the resolved predicate
-/// ([`crate::cli::ResolvedScope`]): the four orthogonal axes plus the
+/// ([`crate::domain::ResolvedScope`]): the four orthogonal axes plus the
 /// runtime `crate_aware` flag (whether ANY form's crate-id was resolvable
 /// this run). Reporters and the HTML explorer read it to render a
 /// read-only scope banner — when `crate_aware == false` the two crate
@@ -215,7 +215,7 @@ pub struct Envelope {
 ///
 /// Result struct (AGENTS.md `#[non_exhaustive]` discipline — structs NO):
 /// no `#[non_exhaustive]`; evolves via construction. Five `bool`s map 1:1
-/// to the locked `[scope]` config knobs + [`crate::cli::ResolvedScope`];
+/// to the locked `[scope]` config knobs + [`crate::domain::ResolvedScope`];
 /// `clippy::struct_excessive_bools` is allowed here for the same reason
 /// as on `ResolvedScope` — the orthogonal axes are the user's mental
 /// model, not a bitflag candidate.

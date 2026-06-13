@@ -199,7 +199,7 @@ impl WalkConfig {
 /// The four axes are orthogonal (crate × module, within × across) and
 /// map 1:1 to the user's mental model — NOT a single enum forcing an
 /// unnatural product. Each defaults to "allow" (the resolved
-/// [`crate::cli::ResolvedScope`] is all-true) so an unconfigured run
+/// [`crate::domain::ResolvedScope`] is all-true) so an unconfigured run
 /// clusters every pair exactly as it did before scoping landed.
 ///
 /// Every field is `Option<bool>` so the cascade resolver

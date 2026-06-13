@@ -20,9 +20,10 @@
 //! `dry4ts` adapter; selection of which language section to read is
 //! driven by [`crate::cli::Language`] on `&AdapterMeta`.
 
-use crate::cli::ResolvedScope;
 use crate::cli::adapter_meta::{AdapterMeta, Language};
-use crate::domain::{Config, GateConfig, LanguageConfig, OutputConfig, ScopeConfig, WalkConfig};
+use crate::domain::{
+    Config, GateConfig, LanguageConfig, OutputConfig, ResolvedScope, ScopeConfig, WalkConfig,
+};
 
 /// Cascade-resolved file-config tier — every knob is either the
 /// per-language override value, the shared value, or `None`. The

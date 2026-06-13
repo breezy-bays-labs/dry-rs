@@ -325,7 +325,7 @@ pub struct Match {
   struct (NO `#[non_exhaustive]`) carrying five `bool`s —
   `within_crate` / `across_crate` / `within_module` / `across_module`
   + the runtime `crate_aware` flag — a flat projection of
-  `cli::ResolvedScope`. `clippy::struct_excessive_bools` is allowed
+  `domain::ResolvedScope`. `clippy::struct_excessive_bools` is allowed
   (orthogonal axes, the user's mental model, NOT a bitflag candidate —
   same rationale as `ResolvedScope`). Do NOT suggest collapsing the
   five bools into a bitflag/enum, and do NOT suggest dropping
