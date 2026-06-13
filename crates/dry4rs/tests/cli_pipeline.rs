@@ -398,7 +398,7 @@ fn stats_subcommand_json_carries_summary_by_tier() {
     );
 }
 
-/// Extract the `#dry-data` island payload from a rendered HTML page.
+/// Extract the `#dry-data` island text (base64) from a rendered HTML page.
 /// Panics if the island is missing or malformed — the structural gate.
 fn extract_data_island(html: &str) -> &str {
     let open = "type=\"application/json\">";
@@ -408,6 +408,17 @@ fn extract_data_island(html: &str) -> &str {
             .find("</script>")
             .expect("dry-data island close");
     &html[start..end]
+}
+
+/// Decode the base64 `#dry-data` island back into the parsed JSON envelope.
+fn decode_data_island(html: &str) -> Value {
+    use base64::Engine as _;
+    let b64 = extract_data_island(html).trim();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .expect("dry-data island must be valid base64");
+    let json = String::from_utf8(bytes).expect("decoded island must be UTF-8");
+    serde_json::from_str(&json).expect("decoded island must be valid JSON")
 }
 
 #[test]
@@ -441,11 +452,16 @@ fn report_html_emits_single_file_with_valid_data_island() {
         "clusters container expected"
     );
     assert!(stdout.contains("id=\"dry-data\""), "data island expected");
+    // The island is base64 — its alphabet has no `<`, so no `</script>`
+    // break-out is structurally possible (the security property).
+    assert!(
+        !extract_data_island(&stdout).contains('<'),
+        "base64 island must contain no `<`: {stdout}"
+    );
 
-    // The island parses as the wire envelope, tagged REPORT mode with the
+    // The island decodes to the wire envelope, tagged REPORT mode with the
     // bare-reporter capabilities.
-    let envelope: Value =
-        serde_json::from_str(extract_data_island(&stdout)).expect("data island must be valid JSON");
+    let envelope = decode_data_island(&stdout);
     assert_eq!(envelope["schema_version"], 1);
     assert_eq!(envelope["mode"], "report");
     assert_eq!(envelope["capabilities"]["overview"], true);

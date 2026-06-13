@@ -32,7 +32,7 @@ dry4ts (depends on dry-core; adds swc_ecma_parser or oxc, napi-rs)  [v0.6+]
 
 | Crate | Purpose | Allowed deps |
 |-------|---------|--------------|
-| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters), config-file loader, `init`-time annotated example + JSON schema emitter | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `askama` (Template derive, markdown/HTML reporters), `clap` (derive), `clap_complete`, `thiserror`, `toml`, `toml_edit`, `documented`, `schemars` |
+| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters), config-file loader, `init`-time annotated example + JSON schema emitter | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `askama` (Template derive, markdown/HTML reporters), `base64` (HTML reporter `#dry-data` island), `clap` (derive), `clap_complete`, `thiserror`, `toml`, `toml_edit`, `documented`, `schemars` |
 | `dry4rs` | Rust-source parser adapter + binary | `dry-core`, `syn`, `proc-macro2` (with `span-locations` feature), `xxhash-rust` (with `xxh3` feature) |
 | `dry4ts` | TypeScript-source parser adapter + binary | `dry-core`, `swc_ecma_parser` *or* `oxc_parser`, `napi-rs`, `xxhash-rust` (with `xxh3` feature) |
 | `dry-examples` | Curated DRY-violation corpus + cross-tool benchmark harness (no library logic; fixtures under `examples/<tier>/<fixture>/main.rs` + snapshot harness in `tests/snapshots.rs`; `publish = false`, `autoexamples = false`) | (none) |
@@ -133,9 +133,9 @@ In particular:
   on grounds of "domain purity" are based on a misread of this
   project's rules. The "domain purity" rule scopes only to AST
   libraries (see below); `thiserror`, `serde`, `serde_json`, `clap`,
-  `walkdir`, `ignore`, `globset`, `comfy-table`, `askama`, `toml`,
-  `toml_edit`, `documented`, and `schemars` are explicitly permitted
-  in `dry-core`.
+  `walkdir`, `ignore`, `globset`, `comfy-table`, `askama`, `base64`,
+  `toml`, `toml_edit`, `documented`, and `schemars` are explicitly
+  permitted in `dry-core`.
 - **`toml` IS allowed in `dry-core::adapters::config`** (config-file
   loader landed in dry-rs#71 per
   `ops/decisions/org/adr-config-file-pattern.md` D6). Suggestions to
@@ -362,9 +362,17 @@ pub struct Match {
   (serialization-layer companion types, not domain types). The HTML
   reporter (`dry-core::adapters::reporters::html`) injects the FULL
   serialized envelope ONCE into a `<script id="dry-data"
-  type="application/json">…</script>` island and renders client-side; the
-  payload is pre-sanitized (`</` → `<\/`) to neutralize the `</script>`
-  break-out. See `ops/decisions/dry-rs/adr-dual-mode-html-reporter.md`.
+  type="application/json">…</script>` island, **base64-encoded** (`base64`
+  dep): base64's `[A-Za-z0-9+/=]` alphabet has zero HTML-special chars, so
+  the island injects with askama's DEFAULT escaping (a no-op) — NO `|safe`,
+  no `</script>` break-out possible. Do NOT suggest adding `|safe` to the
+  island or hand-rolling a `</`→`<\/` sanitizer — base64 makes both
+  unnecessary, and `|safe` would re-open the raw-injection surface. The
+  client JS base64-decodes (`atob` + `TextDecoder`, UTF-8-safe) and builds
+  ALL DOM via `document.createElement` + `textContent` (a tiny `h(...)`
+  helper) — NO `innerHTML`/`outerHTML`/`document.write`, so user-controlled
+  values are inert by construction (do NOT suggest reintroducing `innerHTML`
+  for brevity). See `ops/decisions/dry-rs/adr-dual-mode-html-reporter.md`.
 
 ### `#[non_exhaustive]` discipline — enums YES, structs NO
 

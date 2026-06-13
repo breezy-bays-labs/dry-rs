@@ -132,31 +132,59 @@
   </noscript>
 </main>
 
-{#- The single injection: the full JSON envelope, pre-sanitized in Rust.
-   `|safe` is the ONLY raw injection in the template — every other value
-   (title, subtitle, the <noscript> fields) gets askama's default HTML
-   escaping. `payload` is safe because `sanitize_island` already neutralized
-   the `</script>` break-out; HTML-escaping it would corrupt the JSON. -#}
-<script id="dry-data" type="application/json">{{ payload|safe }}</script>
+{#- The single injection: the full JSON envelope, base64-encoded in Rust.
+   NO `|safe` — base64's [A-Za-z0-9+/=] alphabet has zero HTML-special
+   chars, so askama's default escaping is a byte-level no-op and the island
+   can never carry a </script> break-out. The JS base64-decodes + JSON-parses
+   it client-side. Every other template value (title, subtitle, <noscript>
+   fields) gets askama's default HTML escaping. -#}
+<script id="dry-data" type="application/json">{{ payload_b64 }}</script>
 
 <script type="module">
-  // Vanilla single-file explorer. Reads the `#dry-data` island, renders the
-  // overview + cluster views from `result.*` (the truthful gate). Degrades
-  // gracefully when optional fields (mode / capabilities / scope / template)
-  // are absent — every access is guarded, nothing throws on a missing key.
+  // Vanilla single-file explorer. Reads the `#dry-data` island (base64),
+  // decodes + parses it, and renders the overview + cluster views from
+  // `result.*` (the truthful gate). All DOM is built via createElement +
+  // textContent (the `h(...)` helper) — NO raw-markup sink (no string-to-
+  // HTML assignment) anywhere, so every user-controlled value (file paths,
+  // the title carried in the payload) is inert by construction; no manual
+  // escaping. Degrades gracefully when optional fields (mode / capabilities
+  // / scope / template) are absent — every access is guarded.
   const TIER_ORDER = ["auto_refactor", "review_first", "advisory"];
   const el = (id) => document.getElementById(id);
-  const esc = (s) =>
-    String(s).replace(/[&<>"']/g, (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  // Minimal DOM builder. `attrs.class` -> className; `id` / `data-*` ->
+  // setAttribute; everything else -> property assignment. Children are
+  // nodes or coerced to text nodes — strings can NEVER become markup.
+  function h(tag, attrs, ...kids) {
+    const e = document.createElement(tag);
+    for (const k in (attrs || {})) {
+      if (k === "class") e.className = attrs[k];
+      else if (k === "id" || k.startsWith("data-")) e.setAttribute(k, attrs[k]);
+      else e[k] = attrs[k];
+    }
+    for (const c of kids.flat()) {
+      if (c == null) continue;
+      e.append(c.nodeType ? c : document.createTextNode(String(c)));
+    }
+    return e;
+  }
+  function clear(node) {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  }
 
   function loadData() {
     const node = el("dry-data");
     if (!node) return null;
     try {
-      return JSON.parse(node.textContent || "{}");
+      // The island is base64(JSON). Decode UTF-8-safely: atob yields a
+      // binary string; map to bytes and TextDecoder reads multibyte source
+      // identifiers correctly (a plain atob + JSON.parse mangles them).
+      const b64 = (node.textContent || "").trim();
+      if (!b64) return {};
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      return JSON.parse(new TextDecoder().decode(bytes));
     } catch (e) {
-      console.error("dry-rs: failed to parse #dry-data island", e);
+      console.error("dry-rs: failed to decode #dry-data island", e);
       return null;
     }
   }
@@ -168,11 +196,11 @@
     const start = span.start || {};
     const line = start.line ?? 0;
     const col = (start.column ?? 0) + 1;
-    return esc(form.file) + ":" + line + ":" + col;
+    return (form.file ?? "") + ":" + line + ":" + col;
   }
 
   function tierBadge(tier) {
-    return '<span class="badge tier-' + esc(tier) + '">' + esc(tier) + "</span>";
+    return h("span", { class: "badge tier-" + tier }, tier);
   }
 
   function renderOverview(env) {
@@ -183,38 +211,80 @@
     let worst = 0;
     for (const m of matches) worst = Math.max(worst, m.score ?? 0);
 
-    let rows = "";
+    const statLine = h(
+      "p",
+      null,
+      h("span", { class: "stat" }, h("b", null, matches.length), " matches"),
+      h("span", { class: "stat" }, h("b", null, summary.total_forms ?? 0), " forms"),
+      h("span", { class: "stat" }, "worst ", h("b", null, worst.toFixed(2))),
+      env.mode ? [" · mode ", h("code", null, env.mode)] : null,
+    );
+
+    let body;
+    const rows = [];
     for (const tier of TIER_ORDER) {
       const count = byTier[tier];
       if (!count) continue;
       let tierWorst = 0;
       for (const m of matches) if (m.tier === tier) tierWorst = Math.max(tierWorst, m.score ?? 0);
-      rows +=
-        '<tr><td class="tier-' + esc(tier) + '">' + esc(tier) + "</td>" +
-        '<td class="num">' + count + "</td>" +
-        '<td class="num">' + tierWorst.toFixed(2) + "</td></tr>";
+      rows.push(
+        h(
+          "tr",
+          null,
+          h("td", { class: "tier-" + tier }, tier),
+          h("td", { class: "num" }, count),
+          h("td", { class: "num" }, tierWorst.toFixed(2)),
+        ),
+      );
+    }
+    if (rows.length) {
+      body = h(
+        "table",
+        null,
+        h("thead", null,
+          h("tr", null,
+            h("th", null, "Tier"),
+            h("th", { class: "num" }, "Matches"),
+            h("th", { class: "num" }, "Worst"))),
+        h("tbody", null, rows),
+      );
+    } else {
+      body = h("p", { class: "empty" }, "No matches above threshold.");
     }
 
-    const table = rows
-      ? '<table><thead><tr><th>Tier</th><th class="num">Matches</th><th class="num">Worst</th></tr></thead><tbody>' +
-        rows + "</tbody></table>"
-      : '<p class="empty">No matches above threshold.</p>';
-
-    const modeNote = env.mode ? ' · mode <code>' + esc(env.mode) + "</code>" : "";
-
-    el("overview").innerHTML =
-      "<h2>Overview</h2>" +
-      '<div class="panel">' +
-        '<p><span class="stat"><b>' + matches.length + "</b> matches</span>" +
-        '<span class="stat"><b>' + (summary.total_forms ?? 0) + "</b> forms</span>" +
-        '<span class="stat">worst <b>' + worst.toFixed(2) + "</b></span>" + modeNote + "</p>" +
-        table +
-      "</div>";
+    const ov = el("overview");
+    clear(ov);
+    ov.append(h("h2", null, "Overview"), h("div", { class: "panel" }, statLine, body));
   }
 
   function tierRank(tier) {
     const i = TIER_ORDER.indexOf(tier);
     return i === -1 ? TIER_ORDER.length : i;
+  }
+
+  function clusterCard(m, i) {
+    const forms = m.forms || [];
+    const kind = (forms[0] && forms[0].kind) || "unknown";
+    // Showcase slot (later PR): present only when the optional `template`
+    // field is populated.
+    const tmpl = m.template
+      ? h("div", { class: "meta" }, "template: " + ((m.template.holes || []).length) + " holes")
+      : null;
+    return h(
+      "div",
+      { class: "card", id: "match-" + i },
+      h(
+        "div",
+        null,
+        tierBadge(m.tier),
+        " ",
+        h("b", null, (m.score ?? 0).toFixed(2)),
+        " ",
+        h("span", { class: "meta" }, "· " + kind + " · " + forms.length + " forms"),
+      ),
+      tmpl,
+      h("ul", null, forms.map((f) => h("li", null, formLabel(f)))),
+    );
   }
 
   function renderClusters(env) {
@@ -228,42 +298,26 @@
       .sort((a, b) =>
         tierRank(a.m.tier) - tierRank(b.m.tier) || (b.m.score ?? 0) - (a.m.score ?? 0));
 
-    el("cluster-count").textContent =
-      visible.length + " of " + matches.length + " clusters";
+    el("cluster-count").textContent = visible.length + " of " + matches.length + " clusters";
 
+    const list = el("cluster-list");
+    clear(list);
     if (!visible.length) {
-      el("cluster-list").innerHTML = '<p class="empty">No clusters match the filters.</p>';
+      list.append(h("p", { class: "empty" }, "No clusters match the filters."));
       return;
     }
-
-    el("cluster-list").innerHTML = visible
-      .map(({ m, i }) => {
-        const forms = m.forms || [];
-        const kind = (forms[0] && forms[0].kind) || "unknown";
-        const items = forms.map((f) => "<li>" + formLabel(f) + "</li>").join("");
-        // Showcase fields (later PR): a template/divergence summary slot —
-        // present only when the optional `template` field is populated.
-        const tmpl = m.template
-          ? '<div class="meta">template: ' + ((m.template.holes || []).length) + " holes</div>"
-          : "";
-        return (
-          '<div class="card" id="match-' + i + '">' +
-            "<div>" + tierBadge(m.tier) +
-              " <b>" + (m.score ?? 0).toFixed(2) + "</b>" +
-              ' <span class="meta">· ' + esc(kind) + " · " + forms.length + " forms</span></div>" +
-            tmpl +
-            "<ul>" + items + "</ul>" +
-          "</div>"
-        );
-      })
-      .join("");
+    list.append(...visible.map(({ m, i }) => clusterCard(m, i)));
   }
 
   function main() {
     const env = loadData();
     if (!env) {
-      el("overview").innerHTML =
-        "<h2>Overview</h2><div class=\"panel empty\">Could not load report data.</div>";
+      const ov = el("overview");
+      clear(ov);
+      ov.append(
+        h("h2", null, "Overview"),
+        h("div", { class: "panel empty" }, "Could not load report data."),
+      );
       return;
     }
     renderOverview(env);

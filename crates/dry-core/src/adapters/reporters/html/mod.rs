@@ -3,11 +3,12 @@
 //!
 //! Renders the duplication report as ONE standalone `.html` file with no
 //! framework, no build step, and no external assets. The whole [`Envelope`]
-//! is serialized to JSON and injected ONCE into a
+//! is serialized to JSON, **base64-encoded**, and injected ONCE into a
 //! `<script id="dry-data" type="application/json">…</script>` island; the
-//! page's inline ES-module `<script>` reads `#dry-data` and renders the
-//! interactive views (overview, cluster list, cluster detail, tier/score
-//! filters) client-side. The inline `<style>` block carries all CSS.
+//! page's inline ES-module `<script>` reads `#dry-data`, base64-decodes it,
+//! and renders the interactive views (overview, cluster list, cluster
+//! detail, tier/score filters) client-side. The inline `<style>` block
+//! carries all CSS.
 //!
 //! This is the BASIC reference frontend — Claude Design polishes later. PR13
 //! ships the bare REPORT reporter (overview + cluster views); the
@@ -17,13 +18,32 @@
 //! `mode` / `capabilities` are absent (it MUST NOT throw on a missing
 //! optional field).
 //!
-//! ## Single injection contract
+//! ## Single injection contract — base64 island, no `|safe`
 //!
-//! There is exactly ONE `{{ payload }}` interpolation — the serialized
-//! envelope. Presentation is entirely client-side: the JS reads `result.*`
-//! (the truthful gate, immune to view-shaping flags) and derives everything
-//! else. No server-rendered match markup, so the HTML body stays a small,
-//! stable shell regardless of corpus size; the payload carries the data.
+//! There is exactly ONE template interpolation of report data — the
+//! base64-encoded envelope (`{{ payload_b64 }}`). Base64's alphabet
+//! (`[A-Za-z0-9+/=]`) contains zero HTML-special characters, so askama's
+//! DEFAULT escaping is a byte-level no-op and NO `|safe` directive is
+//! needed: the island can never carry a `</script>` break-out, and there is
+//! no raw-injection surface for a code-review bot to flag. Every OTHER
+//! template variable (`title`, `subtitle`, the `<noscript>` fields) is
+//! auto-escaped by askama's default — so config-sourced `title` / `subtitle`
+//! (echoed from the analyzed repo's `dry.toml`, untrusted) cannot inject
+//! markup. Presentation is entirely client-side: the JS base64-decodes the
+//! island, reads `result.*` (the truthful gate, immune to view-shaping
+//! flags), and derives everything else. The HTML body stays a small, stable
+//! shell regardless of corpus size.
+//!
+//! ## Client-side rendering uses DOM construction, not `innerHTML`
+//!
+//! The inline JS builds the overview + cluster cards with DOM-API element
+//! construction (`document.createElement` + `textContent` + `append` via a
+//! tiny `h(...)` helper) — NO `innerHTML` / `outerHTML` / `document.write`
+//! anywhere. All text flows through `createTextNode` / `textContent`, which
+//! cannot interpret markup, so user-controlled values (file paths, the
+//! `title` carried in the payload, etc.) are inert by construction — no
+//! manual `esc()` discipline to get wrong. This keeps the client surface
+//! XSS-free at the root, not by sanitizing-after-the-fact.
 //!
 //! ## Reuse, not re-implementation
 //!
@@ -44,6 +64,8 @@
 //! per-form columns), so the 0-vs-1 convention lives entirely in the JS.
 
 use askama::Template;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use thiserror::Error;
 
 use crate::adapters::reporters::group_and_sort_by_tier;
@@ -91,11 +113,13 @@ pub enum HtmlError {
 /// compile-checked template) but surfaced as typed errors rather than
 /// panics so the run-loop dispatch can degrade cleanly.
 pub fn render(envelope: &Envelope) -> Result<String, HtmlError> {
-    // Single injection contract: the entire envelope becomes the payload.
-    // Compact (not pretty) — the page is machine-consumed by the JS, and a
-    // compact island keeps the file small on large corpora.
-    let payload = sanitize_island(&serde_json::to_string(envelope)?);
-    let view = build_view(envelope, payload);
+    // Single injection contract: the entire envelope is serialized to JSON
+    // (compact — the page is machine-consumed by the JS) and base64-encoded.
+    // Base64's `[A-Za-z0-9+/=]` alphabet has zero HTML-special chars, so the
+    // island injects with askama's DEFAULT escaping (a no-op) — no `|safe`,
+    // no `</script>` break-out possible, no raw-injection surface.
+    let payload_b64 = BASE64.encode(serde_json::to_string(envelope)?);
+    let view = build_view(envelope, payload_b64);
     let mut out = view.render()?;
     if !out.ends_with('\n') {
         out.push('\n');
@@ -103,29 +127,14 @@ pub fn render(envelope: &Envelope) -> Result<String, HtmlError> {
     Ok(out)
 }
 
-/// Neutralize a serialized JSON payload for embedding inside a
-/// `<script type="application/json">` island.
-///
-/// The one break-out vector that matters: a literal `</script>` sequence
-/// inside a JSON string would prematurely close the host `<script>`
-/// element (the HTML tokenizer scans for `</script` regardless of the
-/// `type` attribute). We rewrite every `</` to `<\/`. `\/` is a legal JSON
-/// string escape that parses back to `/`, so the round-tripped data is
-/// byte-for-byte identical after `JSON.parse`, while the embedded byte
-/// stream can never contain `</script>`. An HTML comment opener (`<!--`)
-/// cannot terminate a `<script>` element, so no further rewrite is needed.
-fn sanitize_island(json: &str) -> String {
-    json.replace("</", "<\\/")
-}
-
-/// Assemble the HTML view-model from `envelope` + the pre-serialized
-/// `payload`.
+/// Assemble the HTML view-model from `envelope` + the base64-encoded
+/// `payload_b64`.
 ///
 /// The `<noscript>` overview reuses [`group_and_sort_by_tier`] — the single
 /// cross-reporter grouping pass — so the per-tier counts match the text and
 /// markdown surfaces exactly. The interactive views are NOT server-rendered;
-/// the JS builds them from the injected payload.
-fn build_view(envelope: &Envelope, payload: String) -> HtmlReport {
+/// the JS base64-decodes the island and builds them from the payload.
+fn build_view(envelope: &Envelope, payload_b64: String) -> HtmlReport {
     let groups = group_and_sort_by_tier(&envelope.result);
     let total_matches: usize = groups.values().map(Vec::len).sum();
 
@@ -155,12 +164,12 @@ fn build_view(envelope: &Envelope, payload: String) -> HtmlReport {
         total_forms: envelope.result.summary.total_forms,
         worst_overall: worst_overall.unwrap_or(0.0),
         tiers,
-        payload,
+        payload_b64,
     }
 }
 
-/// Top-level HTML view-model. Carries the pre-serialized JSON `payload`
-/// (the single `{{ payload }}` injection) plus a small server-rendered
+/// Top-level HTML view-model. Carries the base64-encoded JSON `payload_b64`
+/// (the single `{{ payload_b64 }}` injection) plus a small server-rendered
 /// `<noscript>` overview (per-tier counts). The template owns all CSS / JS /
 /// layout; this struct supplies only semantic data.
 #[derive(Template)]
@@ -180,17 +189,16 @@ struct HtmlReport {
     /// One entry per non-empty tier, canonical order — the `<noscript>`
     /// per-tier table rows.
     tiers: Vec<TierView>,
-    /// The serialized [`Envelope`] injected into `#dry-data`. This is the
-    /// SOLE `|safe` (raw) injection in the template — every other variable
-    /// (`title`, `subtitle`, the `<noscript>` fields) is auto-escaped by
-    /// askama's default HTML escaping, so config-sourced `title` /
-    /// `subtitle` (echoed from the analyzed repo's `dry.toml`, untrusted)
-    /// cannot inject markup. `payload` is marked `|safe` because it is
-    /// already pre-sanitized by [`sanitize_island`] (which rewrites `</` to
-    /// `<\/`, neutralizing the `</script>` break-out) AND because
-    /// HTML-escaping JSON would corrupt it — the value lives inside a
-    /// `type="application/json"` island the browser parses, not executes.
-    payload: String,
+    /// The base64-encoded serialized [`Envelope`] injected into `#dry-data`.
+    /// Injected with askama's DEFAULT escaping (NO `|safe`): base64's
+    /// `[A-Za-z0-9+/=]` alphabet has zero HTML-special chars, so escaping is
+    /// a byte-level no-op and the island can never carry a `</script>`
+    /// break-out. Every OTHER template variable (`title`, `subtitle`, the
+    /// `<noscript>` fields) is likewise auto-escaped, so config-sourced
+    /// `title` / `subtitle` (echoed from the analyzed repo's `dry.toml`,
+    /// untrusted) cannot inject markup. The JS base64-decodes this island
+    /// (`atob` + `TextDecoder`, UTF-8-safe) and parses the JSON client-side.
+    payload_b64: String,
 }
 
 /// One tier's `<noscript>` summary row — the tier (for the template's emoji
@@ -226,6 +234,22 @@ mod tests {
             "2026-05-24T22:00:00Z".into(),
             THRESHOLD_MODE_DEFAULT.into(),
         )
+    }
+
+    /// Extract the `#dry-data` island text from rendered HTML.
+    fn island_b64(html: &str) -> &str {
+        let open = "type=\"application/json\">";
+        let start = html.find(open).expect("island open tag") + open.len();
+        let end = start + html[start..].find("</script>").expect("island close");
+        &html[start..end]
+    }
+
+    /// Decode the base64 island back into the parsed JSON envelope.
+    fn decode_island(html: &str) -> serde_json::Value {
+        let b64 = island_b64(html).trim();
+        let bytes = BASE64.decode(b64).expect("island must be valid base64");
+        let json = String::from_utf8(bytes).expect("decoded island must be UTF-8");
+        serde_json::from_str(&json).expect("decoded island must be valid JSON")
     }
 
     fn form_ref(path: &str, line: u32) -> FormRef {
@@ -283,14 +307,15 @@ mod tests {
             html.contains("id=\"dry-data\""),
             "data island must be present: {html}"
         );
-        // Extract the island payload and confirm it parses + carries the
-        // envelope's result.
-        let open = "type=\"application/json\">";
-        let start = html.find(open).expect("island open tag") + open.len();
-        let end = start + html[start..].find("</script>").expect("island close");
-        let payload = &html[start..end];
-        let parsed: serde_json::Value =
-            serde_json::from_str(payload).expect("island payload must be valid JSON");
+        // The island is base64 — its alphabet has NO `<`, so no `</script>`
+        // break-out is structurally possible.
+        let raw_island = island_b64(&html);
+        assert!(
+            !raw_island.contains('<'),
+            "base64 island must contain no `<`: {raw_island}"
+        );
+        // Decode + confirm it carries the envelope.
+        let parsed = decode_island(&html);
         assert_eq!(parsed["schema_version"], 1);
         assert_eq!(parsed["mode"], "report");
         assert_eq!(parsed["result"]["matches"].as_array().unwrap().len(), 2);
@@ -306,7 +331,7 @@ mod tests {
         // repo. They MUST be HTML-escaped (askama default) so a config like
         // `title = "<script>alert(1)</script>"` cannot inject markup into
         // the generated report (critical for the CI-artifact / Pages REPORT
-        // surface). Only the pre-sanitized JSON payload is `|safe`.
+        // surface).
         let mut env = Envelope::new(report_with_matches(), fixed_meta())
             .with_presentation(Mode::Report, Capabilities::report());
         env.title = Some("<script>alert(1)</script>".to_string());
@@ -328,11 +353,10 @@ mod tests {
             html.contains(&format!("{lt}b{gt}xss{lt}/b{gt}")),
             "subtitle must be HTML-escaped: {html}"
         );
-        // No ACTIVE markup may appear in the rendered document. The full
-        // `<script>…</script>` / `<b>…</b>` pairs must be absent: the
-        // template positions render them entity-encoded, and the JSON
-        // island's copy has its `</script>` neutralized to `<\/script>` by
-        // `sanitize_island`, so the closing-tag form never appears raw.
+        // No ACTIVE markup may appear anywhere in the rendered document. The
+        // template positions render the payloads entity-encoded, and the
+        // base64 island contains zero `<`, so neither the opening NOR the
+        // closing tag form appears raw.
         assert!(
             !html.contains("<script>alert(1)</script>"),
             "raw <script>…</script> must never appear: {html}"
@@ -342,15 +366,11 @@ mod tests {
             "raw <b>…</b> must never appear: {html}"
         );
 
-        // The `|safe` payload still round-trips as valid raw JSON.
-        let open = "type=\"application/json\">";
-        let start = html.find(open).expect("island open tag") + open.len();
-        let end = start + html[start..].find("</script>").expect("island close");
-        let parsed: serde_json::Value =
-            serde_json::from_str(&html[start..end]).expect("payload must be valid JSON");
+        // The base64 payload decodes back to the envelope; the untrusted
+        // title survives there as DATA (the JS decodes + builds DOM via
+        // textContent, so it is inert by construction — never markup).
+        let parsed = decode_island(&html);
         assert_eq!(parsed["schema_version"], 1);
-        // The untrusted title survives in the JSON payload as data (the JS
-        // reads it via JSON.parse + esc() before any DOM write).
         assert_eq!(parsed["title"], "<script>alert(1)</script>");
     }
 
@@ -383,11 +403,7 @@ mod tests {
         let env = Envelope::new(report_with_matches(), fixed_meta());
         let html = render(&env).unwrap();
         assert!(html.contains("id=\"dry-data\""), "{html}");
-        let open = "type=\"application/json\">";
-        let start = html.find(open).expect("island open tag") + open.len();
-        let end = start + html[start..].find("</script>").expect("island close");
-        let payload = &html[start..end];
-        let parsed: serde_json::Value = serde_json::from_str(payload).expect("valid JSON");
+        let parsed = decode_island(&html);
         assert!(parsed.get("mode").is_none(), "mode omitted when None");
         assert!(parsed.get("scope").is_none(), "scope omitted when None");
         assert!(
@@ -403,30 +419,28 @@ mod tests {
         let html = render(&env).unwrap();
         assert!(html.contains("id=\"dry-data\""), "{html}");
         assert!(html.contains("id=\"overview\""), "{html}");
-        // No matches -> empty matches array in the payload.
-        let open = "type=\"application/json\">";
-        let start = html.find(open).expect("island open tag") + open.len();
-        let end = start + html[start..].find("</script>").expect("island close");
-        let parsed: serde_json::Value =
-            serde_json::from_str(&html[start..end]).expect("valid JSON");
+        // No matches -> empty matches array in the decoded payload.
+        let parsed = decode_island(&html);
         assert_eq!(parsed["result"]["matches"].as_array().unwrap().len(), 0);
     }
 
     #[test]
-    fn sanitize_island_neutralizes_close_script_and_round_trips() {
-        // A file path containing `</script>` (pathological but possible in
-        // a corpus) must not break the island. After sanitization the byte
-        // stream has no `</script>`, yet JSON.parse-equivalent recovers the
-        // original value.
-        let raw = r#"{"file":"a</script>b"}"#;
-        let safe = sanitize_island(raw);
+    fn island_is_pure_base64_no_break_out_possible() {
+        // A file path containing `</script>` (pathological but possible in a
+        // corpus) cannot break the island: base64 encoding has no `<` in its
+        // alphabet, so a `</script>` in the source data becomes inert base64
+        // and still round-trips through decode.
+        let mut env = Envelope::new(report_with_matches(), fixed_meta())
+            .with_presentation(Mode::Report, Capabilities::report());
+        env.title = Some("a</script>b".to_string());
+        let html = render(&env).unwrap();
+        let raw_island = island_b64(&html);
         assert!(
-            !safe.contains("</script>"),
-            "must not contain raw close tag"
+            !raw_island.contains('<'),
+            "base64 island must contain no `<`: {raw_island}"
         );
-        assert!(!safe.contains("</"), "all </ rewritten: {safe}");
-        let parsed: serde_json::Value = serde_json::from_str(&safe).expect("still valid JSON");
-        assert_eq!(parsed["file"], "a</script>b", "value round-trips");
+        let parsed = decode_island(&html);
+        assert_eq!(parsed["title"], "a</script>b", "value round-trips");
     }
 
     #[test]
