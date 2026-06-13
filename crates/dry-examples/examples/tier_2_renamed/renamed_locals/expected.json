@@ -33,10 +33,10 @@
             }
           }
         ],
-        "rename_count": 0,
-        "rename_density": 0.0,
+        "rename_count": 6,
+        "rename_density": 0.8571428571428571,
         "score": 0.8571428571428571,
-        "structural_score": 0.8571428571428571,
+        "structural_score": 0.979591836734694,
         "template": {
           "holes": [
             {
@@ -69,11 +69,11 @@
                       "lexeme": "area_a",
                       "span": {
                         "end": {
-                          "column": 1,
-                          "line": 12
+                          "column": 9,
+                          "line": 6
                         },
                         "start": {
-                          "column": 0,
+                          "column": 3,
                           "line": 6
                         }
                       }
@@ -87,12 +87,348 @@
                       "lexeme": "area_b",
                       "span": {
                         "end": {
-                          "column": 1,
-                          "line": 20
+                          "column": 9,
+                          "line": 14
                         },
                         "start": {
-                          "column": 0,
+                          "column": 3,
                           "line": 14
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "span"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 1
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "w",
+                      "span": {
+                        "end": {
+                          "column": 9,
+                          "line": 7
+                        },
+                        "start": {
+                          "column": 8,
+                          "line": 7
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "span",
+                      "span": {
+                        "end": {
+                          "column": 12,
+                          "line": 15
+                        },
+                        "start": {
+                          "column": 8,
+                          "line": 15
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "depth"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 2
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "h",
+                      "span": {
+                        "end": {
+                          "column": 9,
+                          "line": 8
+                        },
+                        "start": {
+                          "column": 8,
+                          "line": 8
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "depth",
+                      "span": {
+                        "end": {
+                          "column": 13,
+                          "line": 16
+                        },
+                        "start": {
+                          "column": 8,
+                          "line": 16
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "product"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 3
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "product",
+                      "span": {
+                        "end": {
+                          "column": 15,
+                          "line": 9
+                        },
+                        "start": {
+                          "column": 8,
+                          "line": 9
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "total",
+                      "span": {
+                        "end": {
+                          "column": 13,
+                          "line": 17
+                        },
+                        "start": {
+                          "column": 8,
+                          "line": 17
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "span"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 4
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "w",
+                      "span": {
+                        "end": {
+                          "column": 19,
+                          "line": 9
+                        },
+                        "start": {
+                          "column": 18,
+                          "line": 9
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "span",
+                      "span": {
+                        "end": {
+                          "column": 20,
+                          "line": 17
+                        },
+                        "start": {
+                          "column": 16,
+                          "line": 17
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "depth"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 5
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "h",
+                      "span": {
+                        "end": {
+                          "column": 23,
+                          "line": 9
+                        },
+                        "start": {
+                          "column": 22,
+                          "line": 9
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "depth",
+                      "span": {
+                        "end": {
+                          "column": 28,
+                          "line": 17
+                        },
+                        "start": {
+                          "column": 23,
+                          "line": 17
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "divergence": {
+                "differing": 0,
+                "distinct": 1,
+                "distinct_values": [
+                  {
+                    "count": 2,
+                    "fp": 14374147212387527897,
+                    "lexeme": "product"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 6
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "product",
+                      "span": {
+                        "end": {
+                          "column": 11,
+                          "line": 11
+                        },
+                        "start": {
+                          "column": 4,
+                          "line": 11
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 14374147212387527897,
+                      "lexeme": "total",
+                      "span": {
+                        "end": {
+                          "column": 9,
+                          "line": 19
+                        },
+                        "start": {
+                          "column": 4,
+                          "line": 19
                         }
                       }
                     }
@@ -116,7 +452,7 @@
                           {
                             "children": [],
                             "label": "ident",
-                            "leaf_lexeme": "_",
+                            "leaf_lexeme": "width",
                             "node": "fixed"
                           }
                         ],
@@ -152,7 +488,7 @@
                           {
                             "children": [],
                             "label": "ident",
-                            "leaf_lexeme": "_",
+                            "leaf_lexeme": "height",
                             "node": "fixed"
                           }
                         ],
@@ -216,10 +552,8 @@
                       {
                         "children": [
                           {
-                            "children": [],
-                            "label": "ident",
-                            "leaf_lexeme": "_",
-                            "node": "fixed"
+                            "index": 1,
+                            "node": "hole"
                           }
                         ],
                         "label": "PatIdent",
@@ -230,7 +564,7 @@
                           {
                             "children": [],
                             "label": "ident",
-                            "leaf_lexeme": "_",
+                            "leaf_lexeme": "width",
                             "node": "fixed"
                           }
                         ],
@@ -252,10 +586,8 @@
                       {
                         "children": [
                           {
-                            "children": [],
-                            "label": "ident",
-                            "leaf_lexeme": "_",
-                            "node": "fixed"
+                            "index": 2,
+                            "node": "hole"
                           }
                         ],
                         "label": "PatIdent",
@@ -266,7 +598,7 @@
                           {
                             "children": [],
                             "label": "ident",
-                            "leaf_lexeme": "_",
+                            "leaf_lexeme": "height",
                             "node": "fixed"
                           }
                         ],
@@ -288,10 +620,8 @@
                       {
                         "children": [
                           {
-                            "children": [],
-                            "label": "ident",
-                            "leaf_lexeme": "_",
-                            "node": "fixed"
+                            "index": 3,
+                            "node": "hole"
                           }
                         ],
                         "label": "PatIdent",
@@ -308,10 +638,8 @@
                           {
                             "children": [
                               {
-                                "children": [],
-                                "label": "ident",
-                                "leaf_lexeme": "_",
-                                "node": "fixed"
+                                "index": 4,
+                                "node": "hole"
                               }
                             ],
                             "label": "ExprLocal",
@@ -320,10 +648,8 @@
                           {
                             "children": [
                               {
-                                "children": [],
-                                "label": "ident",
-                                "leaf_lexeme": "_",
-                                "node": "fixed"
+                                "index": 5,
+                                "node": "hole"
                               }
                             ],
                             "label": "ExprLocal",
@@ -360,10 +686,8 @@
                       {
                         "children": [
                           {
-                            "children": [],
-                            "label": "ident",
-                            "leaf_lexeme": "_",
-                            "node": "fixed"
+                            "index": 6,
+                            "node": "hole"
                           }
                         ],
                         "label": "ExprLocal",

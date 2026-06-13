@@ -45,6 +45,7 @@ use std::hash::{Hash, Hasher};
 
 use dry_core::domain::Span;
 use proc_macro2::Span as PmSpan;
+use syn::spanned::Spanned;
 use xxhash_rust::xxh3::Xxh3;
 
 use super::token::NormalizedToken;
@@ -95,14 +96,21 @@ pub trait SubformSink {
     /// The per-node accumulator held open between `begin` and `seal`.
     type Node;
 
-    /// Open a fresh, untagged node. Most callers use the [`begin`]
-    /// convenience (open + tag in one step); [`walk_expr`] opens untagged
-    /// because its category dispatch decides the tag after the node is
-    /// open (mirroring the original fold, which created the `Xxh3` before
-    /// the `Expr` match selected its `"ExprXxx"` discriminator).
+    /// Open a fresh, untagged node STAMPED with the syn node's own source
+    /// `span` (dry-rs#130). Most callers use the [`begin`] convenience
+    /// (open + tag in one step); [`walk_expr`] opens untagged because its
+    /// category dispatch decides the tag after the node is open
+    /// (mirroring the original fold, which created the `Xxh3` before the
+    /// `Expr` match selected its `"ExprXxx"` discriminator).
+    ///
+    /// The fold ([`super::walker::FormEmitter`]) IGNORES the span — spans
+    /// are never hashed, so the fingerprint path stays byte-identical. The
+    /// tree builder ([`super::tree::TreeBuilder`]) stamps each node's
+    /// `NormalizedTree.span` with it, replacing the v0.1 form-span
+    /// approximation.
     ///
     /// [`begin`]: SubformSink::begin
-    fn begin_node(&mut self) -> Self::Node;
+    fn begin_node(&mut self, span: Span) -> Self::Node;
 
     /// Hash a structural kind tag (`"Block"`, `"ExprBinary"`, …) into an
     /// open node. The tag is the AST-node-kind discriminator; the fold
@@ -110,12 +118,13 @@ pub trait SubformSink {
     fn tag(&mut self, node: &mut Self::Node, tag: &'static str);
 
     /// Open a node and immediately tag it — the common case. Equivalent
-    /// to [`begin_node`] followed by [`tag`].
+    /// to [`begin_node`] followed by [`tag`]. `span` is the syn node's own
+    /// source range (dry-rs#130).
     ///
     /// [`begin_node`]: SubformSink::begin_node
     /// [`tag`]: SubformSink::tag
-    fn begin(&mut self, tag: &'static str) -> Self::Node {
-        let mut node = self.begin_node();
+    fn begin(&mut self, tag: &'static str, span: Span) -> Self::Node {
+        let mut node = self.begin_node(span);
         self.tag(&mut node, tag);
         node
     }
@@ -123,10 +132,29 @@ pub trait SubformSink {
     /// Fold a fully-visited child subtree into the open node.
     fn fold(&mut self, node: &mut Self::Node, child: Self::Out);
 
-    /// Contribute a leaf token to the open node. In the fold this hashes
-    /// the token AND counts it toward `node_count` (the O8 per-leaf
-    /// count); a tree builder records it as a leaf child.
-    fn leaf(&mut self, node: &mut Self::Node, token: &NormalizedToken);
+    /// Contribute a leaf token to the open node, stamped with the leaf's
+    /// own source `span` (dry-rs#130). In the fold this hashes the token
+    /// AND counts it toward `node_count` (the O8 per-leaf count) — the
+    /// span is NOT hashed; a tree builder records it as a leaf child
+    /// carrying `span`.
+    fn leaf(&mut self, node: &mut Self::Node, token: &NormalizedToken, span: Span);
+
+    /// Contribute an alpha-renameable local/param identifier leaf
+    /// (dry-rs#138). The FINGERPRINT collapses it to the
+    /// [`NormalizedToken::Var`] CLASS (alpha-equivalence) — `name` is NOT
+    /// hashed — but a tree builder records the REAL identifier text as the
+    /// leaf's display `lexeme`, so a same-structure-different-name cluster
+    /// surfaces pure-rename holes in the substitution table.
+    ///
+    /// The default impl drives the fingerprint path exactly as the old
+    /// `leaf(&Var)` call did (hash the `Var` class, count one leaf,
+    /// discard `name`), so [`super::walker::FormEmitter`] stays
+    /// byte-identical with no override. The tree builder OVERRIDES it to
+    /// stamp the real name.
+    fn leaf_var(&mut self, node: &mut Self::Node, name: &str, span: Span) {
+        let _ = name;
+        self.leaf(node, &NormalizedToken::Var, span);
+    }
 
     /// Seal the open node and yield its `Out`. The fold finalises the
     /// `Xxh3` and inserts the resulting `u64` into `fingerprint_set`.
@@ -153,15 +181,20 @@ pub trait SubformSink {
 /// site so the "only seal when a preserved attr was seen" rule lives in
 /// ONE place — both the fingerprint fold ([`super::walker::FormEmitter`])
 /// and the tree builder ([`super::tree`]) drive the identical lifecycle.
-pub(super) fn walk_attrs<S: SubformSink>(sink: &mut S, attrs: &[syn::Attribute]) -> Option<S::Out> {
-    let mut node = sink.begin("Attrs");
+pub(super) fn walk_attrs<S: SubformSink>(
+    sink: &mut S,
+    attrs: &[syn::Attribute],
+    form_span: Span,
+) -> Option<S::Out> {
+    let mut node = sink.begin("Attrs", form_span);
     let mut any_preserved = false;
     for attr in attrs {
         let Some(name) = preserved_attr_name(attr) else {
             continue;
         };
         any_preserved = true;
-        sink.leaf(&mut node, &NormalizedToken::Attr(name));
+        let attr_span = node_span(attr);
+        sink.leaf(&mut node, &NormalizedToken::Attr(name), attr_span);
     }
     if any_preserved {
         Some(sink.seal(node))
@@ -204,22 +237,24 @@ pub(super) fn preserved_attr_name(attr: &syn::Attribute) -> Option<String> {
 /// type + modifier keywords (async / const / unsafe). Seals and returns
 /// the signature subform's `Out`.
 pub(super) fn walk_sig<S: SubformSink>(sink: &mut S, sig: &syn::Signature) -> S::Out {
-    let mut node = sink.begin("Sig");
+    let sig_span = node_span(sig);
+    let mut node = sink.begin("Sig", sig_span);
 
     if sig.constness.is_some() {
-        sink.leaf(&mut node, &NormalizedToken::Modifier("const"));
+        sink.leaf(&mut node, &NormalizedToken::Modifier("const"), sig_span);
     }
     if sig.asyncness.is_some() {
-        sink.leaf(&mut node, &NormalizedToken::Modifier("async"));
+        sink.leaf(&mut node, &NormalizedToken::Modifier("async"), sig_span);
     }
     if sig.unsafety.is_some() {
-        sink.leaf(&mut node, &NormalizedToken::Modifier("unsafe"));
+        sink.leaf(&mut node, &NormalizedToken::Modifier("unsafe"), sig_span);
     }
 
     // Function name is preserved as Ident.
     let name = sig.ident.to_string();
+    let name_span = node_span(&sig.ident);
     sink.record_identifier(name.clone());
-    sink.leaf(&mut node, &NormalizedToken::Ident(name));
+    sink.leaf(&mut node, &NormalizedToken::Ident(name), name_span);
 
     // Generic parameters (type params + lifetimes).
     for gp in &sig.generics.params {
@@ -243,11 +278,12 @@ pub(super) fn walk_sig<S: SubformSink>(sink: &mut S, sig: &syn::Signature) -> S:
 }
 
 fn walk_generic_param<S: SubformSink>(sink: &mut S, gp: &syn::GenericParam) -> S::Out {
+    let gp_span = node_span(gp);
     match gp {
         syn::GenericParam::Type(tp) => {
-            let mut node = sink.begin("GenericTypeParam");
+            let mut node = sink.begin("GenericTypeParam", gp_span);
             sink.record_identifier(tp.ident.to_string());
-            sink.leaf(&mut node, &NormalizedToken::TypeParam);
+            sink.leaf(&mut node, &NormalizedToken::TypeParam, node_span(&tp.ident));
             for bound in &tp.bounds {
                 let bound_out = walk_type_param_bound(sink, bound);
                 sink.fold(&mut node, bound_out);
@@ -255,15 +291,15 @@ fn walk_generic_param<S: SubformSink>(sink: &mut S, gp: &syn::GenericParam) -> S
             sink.seal(node)
         }
         syn::GenericParam::Lifetime(lt) => {
-            let mut node = sink.begin("GenericLifetimeParam");
+            let mut node = sink.begin("GenericLifetimeParam", gp_span);
             let token = lifetime_token(&lt.lifetime);
-            sink.leaf(&mut node, &token);
+            sink.leaf(&mut node, &token, node_span(&lt.lifetime));
             sink.seal(node)
         }
         syn::GenericParam::Const(c) => {
-            let mut node = sink.begin("GenericConstParam");
+            let mut node = sink.begin("GenericConstParam", gp_span);
             sink.record_identifier(c.ident.to_string());
-            sink.leaf(&mut node, &NormalizedToken::TypeParam);
+            sink.leaf(&mut node, &NormalizedToken::TypeParam, node_span(&c.ident));
             let ty_out = walk_type(sink, &c.ty);
             sink.fold(&mut node, ty_out);
             sink.seal(node)
@@ -272,41 +308,45 @@ fn walk_generic_param<S: SubformSink>(sink: &mut S, gp: &syn::GenericParam) -> S
 }
 
 fn walk_type_param_bound<S: SubformSink>(sink: &mut S, bound: &syn::TypeParamBound) -> S::Out {
+    let bound_span = node_span(bound);
     match bound {
         syn::TypeParamBound::Trait(t) => {
-            let mut node = sink.begin("TraitBound");
+            let mut node = sink.begin("TraitBound", bound_span);
             let path_out = walk_path(sink, &t.path);
             sink.fold(&mut node, path_out);
             sink.seal(node)
         }
         syn::TypeParamBound::Lifetime(lt) => {
-            let mut node = sink.begin("LifetimeBound");
+            let mut node = sink.begin("LifetimeBound", bound_span);
             let token = lifetime_token(lt);
-            sink.leaf(&mut node, &token);
+            sink.leaf(&mut node, &token, node_span(lt));
             sink.seal(node)
         }
         _ => {
-            let node = sink.begin("UnknownBound");
+            let node = sink.begin("UnknownBound", bound_span);
             sink.seal(node)
         }
     }
 }
 
 fn walk_fn_arg<S: SubformSink>(sink: &mut S, arg: &syn::FnArg) -> S::Out {
+    let arg_span = node_span(arg);
     match arg {
         syn::FnArg::Receiver(r) => {
-            let mut node = sink.begin("Receiver");
+            let mut node = sink.begin("Receiver", arg_span);
             if r.reference.is_some() {
-                sink.leaf(&mut node, &NormalizedToken::Op("&"));
+                sink.leaf(&mut node, &NormalizedToken::Op("&"), arg_span);
             }
             if r.mutability.is_some() {
-                sink.leaf(&mut node, &NormalizedToken::Kw("mut"));
+                sink.leaf(&mut node, &NormalizedToken::Kw("mut"), arg_span);
             }
-            sink.leaf(&mut node, &NormalizedToken::Var);
+            // The receiver is `self` — an alpha-renameable Var whose real
+            // surface text is always `self` (dry-rs#138).
+            sink.leaf_var(&mut node, "self", node_span(&r.self_token));
             sink.seal(node)
         }
         syn::FnArg::Typed(pt) => {
-            let mut node = sink.begin("TypedArg");
+            let mut node = sink.begin("TypedArg", arg_span);
             let pat_out = walk_pat(sink, &pt.pat);
             sink.fold(&mut node, pat_out);
             let ty_out = walk_type(sink, &pt.ty);
@@ -318,28 +358,29 @@ fn walk_fn_arg<S: SubformSink>(sink: &mut S, arg: &syn::FnArg) -> S::Out {
 
 #[must_use]
 pub(super) fn walk_type<S: SubformSink>(sink: &mut S, ty: &syn::Type) -> S::Out {
+    let ty_span = node_span(ty);
     let node = match ty {
         syn::Type::Path(tp) => {
-            let mut node = sink.begin("TypePath");
+            let mut node = sink.begin("TypePath", ty_span);
             let path_out = walk_path(sink, &tp.path);
             sink.fold(&mut node, path_out);
             node
         }
         syn::Type::Reference(r) => {
-            let mut node = sink.begin("TypeRef");
+            let mut node = sink.begin("TypeRef", ty_span);
             if r.mutability.is_some() {
-                sink.leaf(&mut node, &NormalizedToken::Kw("mut"));
+                sink.leaf(&mut node, &NormalizedToken::Kw("mut"), ty_span);
             }
             if let Some(lt) = &r.lifetime {
                 let token = lifetime_token(lt);
-                sink.leaf(&mut node, &token);
+                sink.leaf(&mut node, &token, node_span(lt));
             }
             let inner_out = walk_type(sink, &r.elem);
             sink.fold(&mut node, inner_out);
             node
         }
         syn::Type::Tuple(t) => {
-            let mut node = sink.begin("TypeTuple");
+            let mut node = sink.begin("TypeTuple", ty_span);
             for elem in &t.elems {
                 let elem_out = walk_type(sink, elem);
                 sink.fold(&mut node, elem_out);
@@ -347,7 +388,7 @@ pub(super) fn walk_type<S: SubformSink>(sink: &mut S, ty: &syn::Type) -> S::Out 
             node
         }
         syn::Type::Array(a) => {
-            let mut node = sink.begin("TypeArray");
+            let mut node = sink.begin("TypeArray", ty_span);
             let inner_out = walk_type(sink, &a.elem);
             sink.fold(&mut node, inner_out);
             let len_out = walk_expr(sink, &a.len);
@@ -355,13 +396,13 @@ pub(super) fn walk_type<S: SubformSink>(sink: &mut S, ty: &syn::Type) -> S::Out 
             node
         }
         syn::Type::Slice(s) => {
-            let mut node = sink.begin("TypeSlice");
+            let mut node = sink.begin("TypeSlice", ty_span);
             let inner_out = walk_type(sink, &s.elem);
             sink.fold(&mut node, inner_out);
             node
         }
         syn::Type::TraitObject(to) => {
-            let mut node = sink.begin("TypeDyn");
+            let mut node = sink.begin("TypeDyn", ty_span);
             for bound in &to.bounds {
                 let bound_out = walk_type_param_bound(sink, bound);
                 sink.fold(&mut node, bound_out);
@@ -369,7 +410,7 @@ pub(super) fn walk_type<S: SubformSink>(sink: &mut S, ty: &syn::Type) -> S::Out 
             node
         }
         syn::Type::ImplTrait(it) => {
-            let mut node = sink.begin("TypeImpl");
+            let mut node = sink.begin("TypeImpl", ty_span);
             for bound in &it.bounds {
                 let bound_out = walk_type_param_bound(sink, bound);
                 sink.fold(&mut node, bound_out);
@@ -387,9 +428,9 @@ pub(super) fn walk_type<S: SubformSink>(sink: &mut S, ty: &syn::Type) -> S::Out 
             // Less-common type shapes — emit a discriminator and a
             // placeholder; downstream PRs can refine if these turn
             // out to be duplication hotspots.
-            sink.begin("TypeOther")
+            sink.begin("TypeOther", ty_span)
         }
-        _ => sink.begin("TypeUnknown"),
+        _ => sink.begin("TypeUnknown", ty_span),
     };
     // node_count is per-leaf (O8 ADR); the subform itself does NOT
     // contribute. Any leaf tokens fed via `leaf` during the match arms
@@ -398,16 +439,17 @@ pub(super) fn walk_type<S: SubformSink>(sink: &mut S, ty: &syn::Type) -> S::Out 
 }
 
 fn walk_path<S: SubformSink>(sink: &mut S, path: &syn::Path) -> S::Out {
-    let mut node = sink.begin("Path");
+    let mut node = sink.begin("Path", node_span(path));
     for seg in &path.segments {
         let name = seg.ident.to_string();
+        let seg_span = node_span(&seg.ident);
         sink.record_identifier(name.clone());
         // If the segment looks like a generic placeholder (single
         // uppercase letter or short PascalCase that matches no real
         // type), we still preserve it as PathSeg — the heuristic
         // for distinguishing generic params from types is contextual
         // and lives elsewhere.
-        sink.leaf(&mut node, &NormalizedToken::PathSeg(name));
+        sink.leaf(&mut node, &NormalizedToken::PathSeg(name), seg_span);
         // Generic arguments inside the path segment.
         if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
             for arg in &args.args {
@@ -420,61 +462,67 @@ fn walk_path<S: SubformSink>(sink: &mut S, path: &syn::Path) -> S::Out {
 }
 
 fn walk_generic_arg<S: SubformSink>(sink: &mut S, arg: &syn::GenericArgument) -> S::Out {
+    let arg_span = node_span(arg);
     match arg {
         syn::GenericArgument::Type(ty) => {
-            let mut node = sink.begin("GArgType");
+            let mut node = sink.begin("GArgType", arg_span);
             let ty_out = walk_type(sink, ty);
             sink.fold(&mut node, ty_out);
             sink.seal(node)
         }
         syn::GenericArgument::Lifetime(lt) => {
-            let mut node = sink.begin("GArgLifetime");
+            let mut node = sink.begin("GArgLifetime", arg_span);
             let token = lifetime_token(lt);
-            sink.leaf(&mut node, &token);
+            sink.leaf(&mut node, &token, node_span(lt));
             sink.seal(node)
         }
         syn::GenericArgument::Const(expr) => {
-            let mut node = sink.begin("GArgConst");
+            let mut node = sink.begin("GArgConst", arg_span);
             let e_out = walk_expr(sink, expr);
             sink.fold(&mut node, e_out);
             sink.seal(node)
         }
         _ => {
-            let node = sink.begin("GArgOther");
+            let node = sink.begin("GArgOther", arg_span);
             sink.seal(node)
         }
     }
 }
 
 fn walk_pat<S: SubformSink>(sink: &mut S, pat: &syn::Pat) -> S::Out {
+    let pat_span = node_span(pat);
     let node = match pat {
         syn::Pat::Ident(pi) => {
-            let mut node = sink.begin("PatIdent");
-            sink.record_identifier(pi.ident.to_string());
-            sink.leaf(&mut node, &NormalizedToken::Var);
+            let mut node = sink.begin("PatIdent", pat_span);
+            // The bound name is an alpha-renameable Var — its REAL surface
+            // text rides the tree leaf (dry-rs#138) while the fingerprint
+            // collapses to the Var class.
+            let name = pi.ident.to_string();
+            sink.leaf_var(&mut node, &name, node_span(&pi.ident));
+            sink.record_identifier(name);
             if pi.mutability.is_some() {
-                sink.leaf(&mut node, &NormalizedToken::Kw("mut"));
+                sink.leaf(&mut node, &NormalizedToken::Kw("mut"), pat_span);
             }
             node
         }
-        syn::Pat::Wild(_) => sink.begin("PatWild"),
+        syn::Pat::Wild(_) => sink.begin("PatWild", pat_span),
         syn::Pat::Path(pp) => {
-            let mut node = sink.begin("PatPath");
+            let mut node = sink.begin("PatPath", pat_span);
             let path_out = walk_path(sink, &pp.path);
             sink.fold(&mut node, path_out);
             node
         }
         syn::Pat::Lit(pl) => {
-            let mut node = sink.begin("PatLit");
+            let mut node = sink.begin("PatLit", pat_span);
             let lit_token = lit_to_token(&pl.lit);
-            sink.leaf(&mut node, &lit_token);
+            sink.leaf(&mut node, &lit_token, node_span(&pl.lit));
             node
         }
-        syn::Pat::Tuple(t) => walk_pat_seq(sink, "PatTuple", &t.elems),
-        syn::Pat::Slice(s) => walk_pat_seq(sink, "PatSlice", &s.elems),
-        syn::Pat::Or(po) => walk_pat_seq(sink, "PatOr", &po.cases),
+        syn::Pat::Tuple(t) => walk_pat_seq(sink, "PatTuple", pat_span, &t.elems),
+        syn::Pat::Slice(s) => walk_pat_seq(sink, "PatSlice", pat_span, &s.elems),
+        syn::Pat::Or(po) => walk_pat_seq(sink, "PatOr", pat_span, &po.cases),
         syn::Pat::TupleStruct(ts) => {
-            let mut node = sink.begin("PatTupleStruct");
+            let mut node = sink.begin("PatTupleStruct", pat_span);
             let path_out = walk_path(sink, &ts.path);
             sink.fold(&mut node, path_out);
             for elem in &ts.elems {
@@ -484,7 +532,7 @@ fn walk_pat<S: SubformSink>(sink: &mut S, pat: &syn::Pat) -> S::Out {
             node
         }
         syn::Pat::Struct(ps) => {
-            let mut node = sink.begin("PatStruct");
+            let mut node = sink.begin("PatStruct", pat_span);
             let path_out = walk_path(sink, &ps.path);
             sink.fold(&mut node, path_out);
             for field in &ps.fields {
@@ -494,25 +542,25 @@ fn walk_pat<S: SubformSink>(sink: &mut S, pat: &syn::Pat) -> S::Out {
             node
         }
         syn::Pat::Reference(pr) => {
-            let mut node = sink.begin("PatRef");
+            let mut node = sink.begin("PatRef", pat_span);
             if pr.mutability.is_some() {
-                sink.leaf(&mut node, &NormalizedToken::Kw("mut"));
+                sink.leaf(&mut node, &NormalizedToken::Kw("mut"), pat_span);
             }
             let inner_out = walk_pat(sink, &pr.pat);
             sink.fold(&mut node, inner_out);
             node
         }
         syn::Pat::Type(pt) => {
-            let mut node = sink.begin("PatType");
+            let mut node = sink.begin("PatType", pat_span);
             let inner_out = walk_pat(sink, &pt.pat);
             sink.fold(&mut node, inner_out);
             let ty_out = walk_type(sink, &pt.ty);
             sink.fold(&mut node, ty_out);
             node
         }
-        syn::Pat::Range(_) => sink.begin("PatRange"),
-        syn::Pat::Rest(_) => sink.begin("PatRest"),
-        _ => sink.begin("PatOther"),
+        syn::Pat::Range(_) => sink.begin("PatRange", pat_span),
+        syn::Pat::Rest(_) => sink.begin("PatRest", pat_span),
+        _ => sink.begin("PatOther", pat_span),
     };
     // node_count is per-leaf (O8 ADR); the pattern subform itself does
     // NOT contribute. Leaf tokens fed via `leaf` during the match arms
@@ -528,9 +576,10 @@ fn walk_pat<S: SubformSink>(sink: &mut S, pat: &syn::Pat) -> S::Out {
 fn walk_pat_seq<S: SubformSink, P>(
     sink: &mut S,
     discriminator: &'static str,
+    span: Span,
     elems: &syn::punctuated::Punctuated<syn::Pat, P>,
 ) -> S::Node {
-    let mut node = sink.begin(discriminator);
+    let mut node = sink.begin(discriminator, span);
     for elem in elems {
         let e_out = walk_pat(sink, elem);
         sink.fold(&mut node, e_out);
@@ -540,7 +589,7 @@ fn walk_pat_seq<S: SubformSink, P>(
 
 /// Walk a `{ … }` block: open a node, fold each statement subform.
 pub(super) fn walk_block<S: SubformSink>(sink: &mut S, block: &syn::Block) -> S::Out {
-    let mut node = sink.begin("Block");
+    let mut node = sink.begin("Block", node_span(block));
     for stmt in &block.stmts {
         let s_out = walk_stmt(sink, stmt);
         sink.fold(&mut node, s_out);
@@ -551,10 +600,11 @@ pub(super) fn walk_block<S: SubformSink>(sink: &mut S, block: &syn::Block) -> S:
 }
 
 fn walk_stmt<S: SubformSink>(sink: &mut S, stmt: &syn::Stmt) -> S::Out {
+    let stmt_span = node_span(stmt);
     let node = match stmt {
         syn::Stmt::Local(local) => {
-            let mut node = sink.begin("StmtLet");
-            sink.leaf(&mut node, &NormalizedToken::Kw("let"));
+            let mut node = sink.begin("StmtLet", stmt_span);
+            sink.leaf(&mut node, &NormalizedToken::Kw("let"), stmt_span);
             let pat_out = walk_pat(sink, &local.pat);
             sink.fold(&mut node, pat_out);
             if let Some(init) = &local.init {
@@ -568,14 +618,14 @@ fn walk_stmt<S: SubformSink>(sink: &mut S, stmt: &syn::Stmt) -> S::Out {
             node
         }
         syn::Stmt::Item(item) => {
-            let mut node = sink.begin("StmtItem");
+            let mut node = sink.begin("StmtItem", stmt_span);
             // Nested item — form-boundary marker. The nested item may
             // emit its own form (via top-level visit_item), BUT we don't
             // recurse into nested forms from inside a function body at
             // v0.1 (function-local items are emitted as form-boundary
             // markers only).
             if matches!(item, syn::Item::Fn(_)) {
-                sink.leaf(&mut node, &NormalizedToken::NestedFn);
+                sink.leaf(&mut node, &NormalizedToken::NestedFn, stmt_span);
             }
             // Other nested item shapes don't carry useful structural
             // signal inside an enclosing fn body; collapse to a generic
@@ -583,13 +633,13 @@ fn walk_stmt<S: SubformSink>(sink: &mut S, stmt: &syn::Stmt) -> S::Out {
             node
         }
         syn::Stmt::Expr(expr, _semi) => {
-            let mut node = sink.begin("StmtExpr");
+            let mut node = sink.begin("StmtExpr", stmt_span);
             let e_out = walk_expr(sink, expr);
             sink.fold(&mut node, e_out);
             node
         }
         syn::Stmt::Macro(m) => {
-            let mut node = sink.begin("StmtMacro");
+            let mut node = sink.begin("StmtMacro", stmt_span);
             let m_out = walk_macro(sink, &m.mac);
             sink.fold(&mut node, m_out);
             node
@@ -603,8 +653,9 @@ fn walk_stmt<S: SubformSink>(sink: &mut S, stmt: &syn::Stmt) -> S::Out {
 /// `Yield`, …) fall through to the `ExprOther` discriminator.
 #[must_use]
 pub(super) fn walk_expr<S: SubformSink>(sink: &mut S, expr: &syn::Expr) -> S::Out {
-    let mut node = sink.begin_node();
-    if !walk_expr_dispatch(sink, &mut node, expr) {
+    let expr_span = node_span(expr);
+    let mut node = sink.begin_node(expr_span);
+    if !walk_expr_dispatch(sink, &mut node, expr, expr_span) {
         sink.tag(&mut node, "ExprOther");
     }
     // Expression itself is a fingerprint-emitting subform; whether it
@@ -617,22 +668,36 @@ pub(super) fn walk_expr<S: SubformSink>(sink: &mut S, expr: &syn::Expr) -> S::Ou
 /// Dispatch a `syn::Expr` to its category-grouped walk helper. Returns
 /// `true` when a category handler claimed the variant; `false` falls
 /// back to the [`walk_expr`] caller's `ExprOther` discriminator.
-fn walk_expr_dispatch<S: SubformSink>(sink: &mut S, node: &mut S::Node, expr: &syn::Expr) -> bool {
-    walk_expr_value(sink, node, expr)
-        || walk_expr_operator(sink, node, expr)
-        || walk_expr_call_like(sink, node, expr)
-        || walk_expr_control(sink, node, expr)
-        || walk_expr_collection(sink, node, expr)
-        || walk_expr_wrap(sink, node, expr)
-        || walk_expr_block_like(sink, node, expr)
+///
+/// `span` is the expression's own source range (dry-rs#130); category
+/// handlers use it as the leaf span for tokens (operators, keywords) that
+/// have no readily-addressable finer syn span.
+fn walk_expr_dispatch<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    expr: &syn::Expr,
+    span: Span,
+) -> bool {
+    walk_expr_value(sink, node, expr, span)
+        || walk_expr_operator(sink, node, expr, span)
+        || walk_expr_call_like(sink, node, expr, span)
+        || walk_expr_control(sink, node, expr, span)
+        || walk_expr_collection(sink, node, expr, span)
+        || walk_expr_wrap(sink, node, expr, span)
+        || walk_expr_block_like(sink, node, expr, span)
 }
 
 /// Value-level expressions: path-or-local, literal, struct literal,
 /// repeat.
-fn walk_expr_value<S: SubformSink>(sink: &mut S, node: &mut S::Node, expr: &syn::Expr) -> bool {
+fn walk_expr_value<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    expr: &syn::Expr,
+    span: Span,
+) -> bool {
     match expr {
         syn::Expr::Path(ep) => walk_expr_path(sink, node, ep),
-        syn::Expr::Lit(el) => walk_expr_lit(sink, node, &el.lit),
+        syn::Expr::Lit(el) => walk_expr_lit(sink, node, &el.lit, span),
         syn::Expr::Struct(es) => walk_expr_struct(sink, node, es),
         syn::Expr::Repeat(er) => walk_expr_repeat(sink, node, er),
         _ => return false,
@@ -641,25 +706,35 @@ fn walk_expr_value<S: SubformSink>(sink: &mut S, node: &mut S::Node, expr: &syn:
 }
 
 /// Operator expressions: binary, unary, assign, cast, range, try.
-fn walk_expr_operator<S: SubformSink>(sink: &mut S, node: &mut S::Node, expr: &syn::Expr) -> bool {
+fn walk_expr_operator<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    expr: &syn::Expr,
+    span: Span,
+) -> bool {
     match expr {
-        syn::Expr::Binary(eb) => walk_expr_binary(sink, node, eb),
-        syn::Expr::Unary(eu) => walk_expr_unary(sink, node, eu),
-        syn::Expr::Assign(ea) => walk_expr_assign(sink, node, ea),
-        syn::Expr::Cast(ec) => walk_expr_cast(sink, node, ec),
-        syn::Expr::Range(er) => walk_expr_range(sink, node, er),
-        syn::Expr::Try(et) => walk_expr_try(sink, node, et),
+        syn::Expr::Binary(eb) => walk_expr_binary(sink, node, eb, span),
+        syn::Expr::Unary(eu) => walk_expr_unary(sink, node, eu, span),
+        syn::Expr::Assign(ea) => walk_expr_assign(sink, node, ea, span),
+        syn::Expr::Cast(ec) => walk_expr_cast(sink, node, ec, span),
+        syn::Expr::Range(er) => walk_expr_range(sink, node, er, span),
+        syn::Expr::Try(et) => walk_expr_try(sink, node, et, span),
         _ => return false,
     }
     true
 }
 
 /// Call-like expressions: free call, method call, field, index.
-fn walk_expr_call_like<S: SubformSink>(sink: &mut S, node: &mut S::Node, expr: &syn::Expr) -> bool {
+fn walk_expr_call_like<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    expr: &syn::Expr,
+    span: Span,
+) -> bool {
     match expr {
         syn::Expr::Call(ec) => walk_expr_call(sink, node, ec),
         syn::Expr::MethodCall(em) => walk_expr_method_call(sink, node, em),
-        syn::Expr::Field(ef) => walk_expr_field(sink, node, ef),
+        syn::Expr::Field(ef) => walk_expr_field(sink, node, ef, span),
         syn::Expr::Index(ei) => walk_expr_index(sink, node, ei),
         _ => return false,
     }
@@ -668,17 +743,22 @@ fn walk_expr_call_like<S: SubformSink>(sink: &mut S, node: &mut S::Node, expr: &
 
 /// Control-flow expressions: if, match, while, for, loop, return, break,
 /// continue, let.
-fn walk_expr_control<S: SubformSink>(sink: &mut S, node: &mut S::Node, expr: &syn::Expr) -> bool {
+fn walk_expr_control<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    expr: &syn::Expr,
+    span: Span,
+) -> bool {
     match expr {
-        syn::Expr::If(ei) => walk_expr_if(sink, node, ei),
-        syn::Expr::Match(em) => walk_expr_match(sink, node, em),
-        syn::Expr::While(ew) => walk_expr_while(sink, node, ew),
-        syn::Expr::ForLoop(efl) => walk_expr_for(sink, node, efl),
-        syn::Expr::Loop(el) => walk_expr_loop(sink, node, el),
-        syn::Expr::Return(er) => walk_expr_return(sink, node, er),
-        syn::Expr::Break(eb) => walk_expr_break(sink, node, eb),
-        syn::Expr::Continue(_) => walk_expr_continue(sink, node),
-        syn::Expr::Let(el) => walk_expr_let(sink, node, el),
+        syn::Expr::If(ei) => walk_expr_if(sink, node, ei, span),
+        syn::Expr::Match(em) => walk_expr_match(sink, node, em, span),
+        syn::Expr::While(ew) => walk_expr_while(sink, node, ew, span),
+        syn::Expr::ForLoop(efl) => walk_expr_for(sink, node, efl, span),
+        syn::Expr::Loop(el) => walk_expr_loop(sink, node, el, span),
+        syn::Expr::Return(er) => walk_expr_return(sink, node, er, span),
+        syn::Expr::Break(eb) => walk_expr_break(sink, node, eb, span),
+        syn::Expr::Continue(_) => walk_expr_continue(sink, node, span),
+        syn::Expr::Let(el) => walk_expr_let(sink, node, el, span),
         _ => return false,
     }
     true
@@ -689,6 +769,7 @@ fn walk_expr_collection<S: SubformSink>(
     sink: &mut S,
     node: &mut S::Node,
     expr: &syn::Expr,
+    _span: Span,
 ) -> bool {
     match expr {
         syn::Expr::Tuple(et) => walk_expr_seq(sink, node, "ExprTuple", &et.elems),
@@ -700,13 +781,18 @@ fn walk_expr_collection<S: SubformSink>(
 
 /// Unary-wrapping expressions: reference, paren, await, macro, closure
 /// (form-boundary).
-fn walk_expr_wrap<S: SubformSink>(sink: &mut S, node: &mut S::Node, expr: &syn::Expr) -> bool {
+fn walk_expr_wrap<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    expr: &syn::Expr,
+    span: Span,
+) -> bool {
     match expr {
-        syn::Expr::Reference(er) => walk_expr_reference(sink, node, er),
+        syn::Expr::Reference(er) => walk_expr_reference(sink, node, er, span),
         syn::Expr::Paren(ep) => walk_expr_paren(sink, node, ep),
-        syn::Expr::Await(ea) => walk_expr_await(sink, node, ea),
+        syn::Expr::Await(ea) => walk_expr_await(sink, node, ea, span),
         syn::Expr::Macro(em) => walk_expr_macro(sink, node, em),
-        syn::Expr::Closure(_) => walk_expr_closure(sink, node),
+        syn::Expr::Closure(_) => walk_expr_closure(sink, node, span),
         _ => return false,
     }
     true
@@ -717,11 +803,12 @@ fn walk_expr_block_like<S: SubformSink>(
     sink: &mut S,
     node: &mut S::Node,
     expr: &syn::Expr,
+    span: Span,
 ) -> bool {
     match expr {
         syn::Expr::Block(eb) => walk_expr_block_expr(sink, node, &eb.block),
-        syn::Expr::Async(ea) => walk_expr_async(sink, node, ea),
-        syn::Expr::Unsafe(eu) => walk_expr_unsafe(sink, node, eu),
+        syn::Expr::Async(ea) => walk_expr_async(sink, node, ea, span),
+        syn::Expr::Unsafe(eu) => walk_expr_unsafe(sink, node, eu, span),
         _ => return false,
     }
     true
@@ -736,8 +823,11 @@ fn walk_expr_block_like<S: SubformSink>(
 fn walk_expr_path<S: SubformSink>(sink: &mut S, node: &mut S::Node, ep: &syn::ExprPath) {
     if let Some(name) = single_seg_local(&ep.path) {
         sink.tag(node, "ExprLocal");
-        sink.record_identifier(name);
-        sink.leaf(node, &NormalizedToken::Var);
+        let var_span = node_span(&ep.path);
+        sink.record_identifier(name.clone());
+        // A local-variable reference: the REAL name rides the tree leaf
+        // (dry-rs#138); the fold sees only the Var class.
+        sink.leaf_var(node, &name, var_span);
     } else {
         sink.tag(node, "ExprPath");
         let path_out = walk_path(sink, &ep.path);
@@ -745,31 +835,46 @@ fn walk_expr_path<S: SubformSink>(sink: &mut S, node: &mut S::Node, ep: &syn::Ex
     }
 }
 
-fn walk_expr_lit<S: SubformSink>(sink: &mut S, node: &mut S::Node, lit: &syn::Lit) {
+fn walk_expr_lit<S: SubformSink>(sink: &mut S, node: &mut S::Node, lit: &syn::Lit, span: Span) {
     sink.tag(node, "ExprLit");
     let lit_token = lit_to_token(lit);
-    sink.leaf(node, &lit_token);
+    sink.leaf(node, &lit_token, span);
 }
 
-fn walk_expr_binary<S: SubformSink>(sink: &mut S, node: &mut S::Node, eb: &syn::ExprBinary) {
+fn walk_expr_binary<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    eb: &syn::ExprBinary,
+    span: Span,
+) {
     sink.tag(node, "ExprBinary");
-    sink.leaf(node, &NormalizedToken::Op(binop_symbol(&eb.op)));
+    sink.leaf(node, &NormalizedToken::Op(binop_symbol(&eb.op)), span);
     let l_out = walk_expr(sink, &eb.left);
     sink.fold(node, l_out);
     let r_out = walk_expr(sink, &eb.right);
     sink.fold(node, r_out);
 }
 
-fn walk_expr_unary<S: SubformSink>(sink: &mut S, node: &mut S::Node, eu: &syn::ExprUnary) {
+fn walk_expr_unary<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    eu: &syn::ExprUnary,
+    span: Span,
+) {
     sink.tag(node, "ExprUnary");
-    sink.leaf(node, &NormalizedToken::Op(unop_symbol(&eu.op)));
+    sink.leaf(node, &NormalizedToken::Op(unop_symbol(&eu.op)), span);
     let inner_out = walk_expr(sink, &eu.expr);
     sink.fold(node, inner_out);
 }
 
-fn walk_expr_assign<S: SubformSink>(sink: &mut S, node: &mut S::Node, ea: &syn::ExprAssign) {
+fn walk_expr_assign<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    ea: &syn::ExprAssign,
+    span: Span,
+) {
     sink.tag(node, "ExprAssign");
-    sink.leaf(node, &NormalizedToken::Op("="));
+    sink.leaf(node, &NormalizedToken::Op("="), span);
     let l_out = walk_expr(sink, &ea.left);
     sink.fold(node, l_out);
     let r_out = walk_expr(sink, &ea.right);
@@ -795,26 +900,33 @@ fn walk_expr_method_call<S: SubformSink>(
     let recv_out = walk_expr(sink, &em.receiver);
     sink.fold(node, recv_out);
     let method = em.method.to_string();
+    let method_span = node_span(&em.method);
     sink.record_identifier(method.clone());
-    sink.leaf(node, &NormalizedToken::Ident(method));
+    sink.leaf(node, &NormalizedToken::Ident(method), method_span);
     for arg in &em.args {
         let a_out = walk_expr(sink, arg);
         sink.fold(node, a_out);
     }
 }
 
-fn walk_expr_field<S: SubformSink>(sink: &mut S, node: &mut S::Node, ef: &syn::ExprField) {
+fn walk_expr_field<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    ef: &syn::ExprField,
+    span: Span,
+) {
     sink.tag(node, "ExprField");
     let recv_out = walk_expr(sink, &ef.base);
     sink.fold(node, recv_out);
     match &ef.member {
         syn::Member::Named(ident) => {
             let name = ident.to_string();
+            let name_span = node_span(ident);
             sink.record_identifier(name.clone());
-            sink.leaf(node, &NormalizedToken::Ident(name));
+            sink.leaf(node, &NormalizedToken::Ident(name), name_span);
         }
         syn::Member::Unnamed(idx) => {
-            sink.leaf(node, &NormalizedToken::LitInt(i128::from(idx.index)));
+            sink.leaf(node, &NormalizedToken::LitInt(i128::from(idx.index)), span);
         }
     }
 }
@@ -833,9 +945,9 @@ fn walk_expr_block_expr<S: SubformSink>(sink: &mut S, node: &mut S::Node, block:
     sink.fold(node, b_out);
 }
 
-fn walk_expr_if<S: SubformSink>(sink: &mut S, node: &mut S::Node, ei: &syn::ExprIf) {
+fn walk_expr_if<S: SubformSink>(sink: &mut S, node: &mut S::Node, ei: &syn::ExprIf, span: Span) {
     sink.tag(node, "ExprIf");
-    sink.leaf(node, &NormalizedToken::Kw("if"));
+    sink.leaf(node, &NormalizedToken::Kw("if"), span);
     let c_out = walk_expr(sink, &ei.cond);
     sink.fold(node, c_out);
     let t_out = walk_block(sink, &ei.then_branch);
@@ -846,9 +958,14 @@ fn walk_expr_if<S: SubformSink>(sink: &mut S, node: &mut S::Node, ei: &syn::Expr
     }
 }
 
-fn walk_expr_match<S: SubformSink>(sink: &mut S, node: &mut S::Node, em: &syn::ExprMatch) {
+fn walk_expr_match<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    em: &syn::ExprMatch,
+    span: Span,
+) {
     sink.tag(node, "ExprMatch");
-    sink.leaf(node, &NormalizedToken::Kw("match"));
+    sink.leaf(node, &NormalizedToken::Kw("match"), span);
     let scrutinee_out = walk_expr(sink, &em.expr);
     sink.fold(node, scrutinee_out);
     for arm in &em.arms {
@@ -857,18 +974,28 @@ fn walk_expr_match<S: SubformSink>(sink: &mut S, node: &mut S::Node, em: &syn::E
     }
 }
 
-fn walk_expr_while<S: SubformSink>(sink: &mut S, node: &mut S::Node, ew: &syn::ExprWhile) {
+fn walk_expr_while<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    ew: &syn::ExprWhile,
+    span: Span,
+) {
     sink.tag(node, "ExprWhile");
-    sink.leaf(node, &NormalizedToken::Kw("while"));
+    sink.leaf(node, &NormalizedToken::Kw("while"), span);
     let c_out = walk_expr(sink, &ew.cond);
     sink.fold(node, c_out);
     let b_out = walk_block(sink, &ew.body);
     sink.fold(node, b_out);
 }
 
-fn walk_expr_for<S: SubformSink>(sink: &mut S, node: &mut S::Node, efl: &syn::ExprForLoop) {
+fn walk_expr_for<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    efl: &syn::ExprForLoop,
+    span: Span,
+) {
     sink.tag(node, "ExprFor");
-    sink.leaf(node, &NormalizedToken::Kw("for"));
+    sink.leaf(node, &NormalizedToken::Kw("for"), span);
     let pat_out = walk_pat(sink, &efl.pat);
     sink.fold(node, pat_out);
     let it_out = walk_expr(sink, &efl.expr);
@@ -877,41 +1004,61 @@ fn walk_expr_for<S: SubformSink>(sink: &mut S, node: &mut S::Node, efl: &syn::Ex
     sink.fold(node, body_out);
 }
 
-fn walk_expr_loop<S: SubformSink>(sink: &mut S, node: &mut S::Node, el: &syn::ExprLoop) {
+fn walk_expr_loop<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    el: &syn::ExprLoop,
+    span: Span,
+) {
     sink.tag(node, "ExprLoop");
-    sink.leaf(node, &NormalizedToken::Kw("loop"));
+    sink.leaf(node, &NormalizedToken::Kw("loop"), span);
     let b_out = walk_block(sink, &el.body);
     sink.fold(node, b_out);
 }
 
-fn walk_expr_return<S: SubformSink>(sink: &mut S, node: &mut S::Node, er: &syn::ExprReturn) {
+fn walk_expr_return<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    er: &syn::ExprReturn,
+    span: Span,
+) {
     sink.tag(node, "ExprReturn");
-    sink.leaf(node, &NormalizedToken::Kw("return"));
+    sink.leaf(node, &NormalizedToken::Kw("return"), span);
     if let Some(inner) = &er.expr {
         let i_out = walk_expr(sink, inner);
         sink.fold(node, i_out);
     }
 }
 
-fn walk_expr_break<S: SubformSink>(sink: &mut S, node: &mut S::Node, eb: &syn::ExprBreak) {
+fn walk_expr_break<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    eb: &syn::ExprBreak,
+    span: Span,
+) {
     sink.tag(node, "ExprBreak");
-    sink.leaf(node, &NormalizedToken::Kw("break"));
+    sink.leaf(node, &NormalizedToken::Kw("break"), span);
     if let Some(inner) = &eb.expr {
         let i_out = walk_expr(sink, inner);
         sink.fold(node, i_out);
     }
 }
 
-fn walk_expr_continue<S: SubformSink>(sink: &mut S, node: &mut S::Node) {
+fn walk_expr_continue<S: SubformSink>(sink: &mut S, node: &mut S::Node, span: Span) {
     sink.tag(node, "ExprContinue");
-    sink.leaf(node, &NormalizedToken::Kw("continue"));
+    sink.leaf(node, &NormalizedToken::Kw("continue"), span);
 }
 
-fn walk_expr_reference<S: SubformSink>(sink: &mut S, node: &mut S::Node, er: &syn::ExprReference) {
+fn walk_expr_reference<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    er: &syn::ExprReference,
+    span: Span,
+) {
     sink.tag(node, "ExprRef");
-    sink.leaf(node, &NormalizedToken::Op("&"));
+    sink.leaf(node, &NormalizedToken::Op("&"), span);
     if er.mutability.is_some() {
-        sink.leaf(node, &NormalizedToken::Kw("mut"));
+        sink.leaf(node, &NormalizedToken::Kw("mut"), span);
     }
     let inner_out = walk_expr(sink, &er.expr);
     sink.fold(node, inner_out);
@@ -938,18 +1085,28 @@ fn walk_expr_seq<S: SubformSink>(
     }
 }
 
-fn walk_expr_cast<S: SubformSink>(sink: &mut S, node: &mut S::Node, ec: &syn::ExprCast) {
+fn walk_expr_cast<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    ec: &syn::ExprCast,
+    span: Span,
+) {
     sink.tag(node, "ExprCast");
-    sink.leaf(node, &NormalizedToken::Kw("as"));
+    sink.leaf(node, &NormalizedToken::Kw("as"), span);
     let inner_out = walk_expr(sink, &ec.expr);
     sink.fold(node, inner_out);
     let ty_out = walk_type(sink, &ec.ty);
     sink.fold(node, ty_out);
 }
 
-fn walk_expr_range<S: SubformSink>(sink: &mut S, node: &mut S::Node, er: &syn::ExprRange) {
+fn walk_expr_range<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    er: &syn::ExprRange,
+    span: Span,
+) {
     sink.tag(node, "ExprRange");
-    sink.leaf(node, &NormalizedToken::Op(".."));
+    sink.leaf(node, &NormalizedToken::Op(".."), span);
     if let Some(start) = &er.start {
         let s_out = walk_expr(sink, start);
         sink.fold(node, s_out);
@@ -960,30 +1117,45 @@ fn walk_expr_range<S: SubformSink>(sink: &mut S, node: &mut S::Node, er: &syn::E
     }
 }
 
-fn walk_expr_try<S: SubformSink>(sink: &mut S, node: &mut S::Node, et: &syn::ExprTry) {
+fn walk_expr_try<S: SubformSink>(sink: &mut S, node: &mut S::Node, et: &syn::ExprTry, span: Span) {
     sink.tag(node, "ExprTry");
-    sink.leaf(node, &NormalizedToken::Op("?"));
+    sink.leaf(node, &NormalizedToken::Op("?"), span);
     let inner_out = walk_expr(sink, &et.expr);
     sink.fold(node, inner_out);
 }
 
-fn walk_expr_await<S: SubformSink>(sink: &mut S, node: &mut S::Node, ea: &syn::ExprAwait) {
+fn walk_expr_await<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    ea: &syn::ExprAwait,
+    span: Span,
+) {
     sink.tag(node, "ExprAwait");
-    sink.leaf(node, &NormalizedToken::Kw("await"));
+    sink.leaf(node, &NormalizedToken::Kw("await"), span);
     let inner_out = walk_expr(sink, &ea.base);
     sink.fold(node, inner_out);
 }
 
-fn walk_expr_async<S: SubformSink>(sink: &mut S, node: &mut S::Node, ea: &syn::ExprAsync) {
+fn walk_expr_async<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    ea: &syn::ExprAsync,
+    span: Span,
+) {
     sink.tag(node, "ExprAsync");
-    sink.leaf(node, &NormalizedToken::Modifier("async"));
+    sink.leaf(node, &NormalizedToken::Modifier("async"), span);
     let b_out = walk_block(sink, &ea.block);
     sink.fold(node, b_out);
 }
 
-fn walk_expr_unsafe<S: SubformSink>(sink: &mut S, node: &mut S::Node, eu: &syn::ExprUnsafe) {
+fn walk_expr_unsafe<S: SubformSink>(
+    sink: &mut S,
+    node: &mut S::Node,
+    eu: &syn::ExprUnsafe,
+    span: Span,
+) {
     sink.tag(node, "ExprUnsafe");
-    sink.leaf(node, &NormalizedToken::Modifier("unsafe"));
+    sink.leaf(node, &NormalizedToken::Modifier("unsafe"), span);
     let b_out = walk_block(sink, &eu.block);
     sink.fold(node, b_out);
 }
@@ -998,9 +1170,9 @@ fn walk_expr_macro<S: SubformSink>(sink: &mut S, node: &mut S::Node, em: &syn::E
 /// this one. Emit only the opaque marker. The walker's caller is
 /// responsible for capturing the closure as a separate form via a
 /// follow-up pass.
-fn walk_expr_closure<S: SubformSink>(sink: &mut S, node: &mut S::Node) {
+fn walk_expr_closure<S: SubformSink>(sink: &mut S, node: &mut S::Node, span: Span) {
     sink.tag(node, "ExprClosure");
-    sink.leaf(node, &NormalizedToken::Closure);
+    sink.leaf(node, &NormalizedToken::Closure, span);
 }
 
 fn walk_expr_struct<S: SubformSink>(sink: &mut S, node: &mut S::Node, es: &syn::ExprStruct) {
@@ -1021,9 +1193,9 @@ fn walk_expr_repeat<S: SubformSink>(sink: &mut S, node: &mut S::Node, er: &syn::
     sink.fold(node, len_out);
 }
 
-fn walk_expr_let<S: SubformSink>(sink: &mut S, node: &mut S::Node, el: &syn::ExprLet) {
+fn walk_expr_let<S: SubformSink>(sink: &mut S, node: &mut S::Node, el: &syn::ExprLet, span: Span) {
     sink.tag(node, "ExprLet");
-    sink.leaf(node, &NormalizedToken::Kw("let"));
+    sink.leaf(node, &NormalizedToken::Kw("let"), span);
     let pat_out = walk_pat(sink, &el.pat);
     sink.fold(node, pat_out);
     let e_out = walk_expr(sink, &el.expr);
@@ -1031,11 +1203,12 @@ fn walk_expr_let<S: SubformSink>(sink: &mut S, node: &mut S::Node, el: &syn::Exp
 }
 
 fn walk_arm<S: SubformSink>(sink: &mut S, arm: &syn::Arm) -> S::Out {
-    let mut node = sink.begin("MatchArm");
+    let arm_span = node_span(&arm.pat);
+    let mut node = sink.begin("MatchArm", arm_span);
     let pat_out = walk_pat(sink, &arm.pat);
     sink.fold(&mut node, pat_out);
     if let Some((_, guard)) = &arm.guard {
-        sink.leaf(&mut node, &NormalizedToken::Kw("if"));
+        sink.leaf(&mut node, &NormalizedToken::Kw("if"), node_span(guard));
         let g_out = walk_expr(sink, guard);
         sink.fold(&mut node, g_out);
     }
@@ -1045,7 +1218,8 @@ fn walk_arm<S: SubformSink>(sink: &mut S, arm: &syn::Arm) -> S::Out {
 }
 
 fn walk_macro<S: SubformSink>(sink: &mut S, mac: &syn::Macro) -> S::Out {
-    let mut node = sink.begin("MacroCall");
+    let mac_span = node_span(mac);
+    let mut node = sink.begin("MacroCall", mac_span);
     let name = mac
         .path
         .segments
@@ -1053,7 +1227,11 @@ fn walk_macro<S: SubformSink>(sink: &mut S, mac: &syn::Macro) -> S::Out {
         .map(|s| s.ident.to_string())
         .unwrap_or_default();
     sink.record_identifier(name.clone());
-    sink.leaf(&mut node, &NormalizedToken::MacroCall(name));
+    sink.leaf(
+        &mut node,
+        &NormalizedToken::MacroCall(name),
+        node_span(&mac.path),
+    );
     // Per ADR: macro arguments are NOT walked at v0.1.
     sink.seal(node)
 }
@@ -1193,4 +1371,17 @@ pub(super) fn span_from_pm(start: PmSpan, end: PmSpan) -> Span {
         // fall back to a single-position span at start.
         Span::try_new(start_lc, start_lc).expect("self-referential span is always valid")
     })
+}
+
+/// The domain [`Span`] of one syn node (dry-rs#130 per-node spans).
+///
+/// `Spanned::span()` yields a single proc-macro2 span covering the whole
+/// node; [`span_from_pm`] folds its `start()`/`end()` into the canonical
+/// `(line 1-based, column 0-based, end-inclusive)` domain `Span`. Used to
+/// stamp every [`SubformSink`] node and leaf with its OWN source range
+/// rather than the enclosing form's span. Spans are never hashed, so this
+/// does not perturb the fingerprint fold.
+fn node_span<T: Spanned>(node: &T) -> Span {
+    let s = node.span();
+    span_from_pm(s, s)
 }

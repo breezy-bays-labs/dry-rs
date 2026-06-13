@@ -119,7 +119,7 @@ struct FormCollector {
 impl FormVisitor for FormCollector {
     fn visit_form(&mut self, parts: FormParts<'_>) {
         let mut emitter = FormEmitter::new();
-        emitter.hash_attrs(parts.attrs);
+        emitter.hash_attrs(parts.attrs, parts.span);
         visitor::walk_sig(&mut emitter, parts.sig);
         visitor::walk_block(&mut emitter, parts.block);
 
@@ -368,8 +368,8 @@ impl FormEmitter {
     /// attribute name like `"test"` or `"inline"` is part of the
     /// language vocabulary, not a renameable identifier, and including
     /// it would create false rename-diff signal at v0.2+.
-    fn hash_attrs(&mut self, attrs: &[syn::Attribute]) {
-        let _ = visitor::walk_attrs(self, attrs);
+    fn hash_attrs(&mut self, attrs: &[syn::Attribute], form_span: Span) {
+        let _ = visitor::walk_attrs(self, attrs, form_span);
     }
 }
 
@@ -377,7 +377,12 @@ impl SubformSink for FormEmitter {
     type Out = u64;
     type Node = Xxh3;
 
-    fn begin_node(&mut self) -> Xxh3 {
+    fn begin_node(&mut self, span: Span) -> Xxh3 {
+        // dry-rs#130: the per-node span rides the sink lifecycle for the
+        // tree path, but the fingerprint fold NEVER hashes a span — drop
+        // it here so the emitted `fingerprint_set` stays byte-identical to
+        // the pre-#130 fold (the `fingerprint_determinism` gate).
+        let _ = span;
         Xxh3::new()
     }
 
@@ -389,7 +394,13 @@ impl SubformSink for FormEmitter {
         child.hash(node);
     }
 
-    fn leaf(&mut self, node: &mut Xxh3, token: &NormalizedToken) {
+    fn leaf(&mut self, node: &mut Xxh3, token: &NormalizedToken, span: Span) {
+        // dry-rs#130: the leaf's span is NOT hashed — only the token class
+        // enters the fold (byte-identity guard). dry-rs#138's real Var
+        // name likewise never reaches the fold: `leaf_var`'s default impl
+        // delegates here with `NormalizedToken::Var`, so the name is
+        // dropped before this point and the alpha-equivalence is intact.
+        let _ = span;
         token.hash_into(node);
         // Per O8 node_count table: each placeholder, ident, type
         // reference, literal, operator, keyword, lifetime, and macro

@@ -47,15 +47,29 @@
 //!   `walk_attrs` call), so an attribute-free form gains no phantom
 //!   `Attrs` child in the tree, exactly as it gains no phantom fp.
 //!
-//! ## Span granularity seam
+//! ## Per-node spans (dry-rs#130)
 //!
-//! The [`SubformSink`] lifecycle carries no per-node span (the
-//! fingerprint fold never needed one). At v0.1 the tree builder stamps
-//! every node with the FORM's span — coarse but sufficient for the LGG's
-//! structural alignment (PR 5 derives per-hole substitution spans from
-//! the member subtrees it consumes, not from these node spans). Threading
-//! precise per-node spans through the sink is a documented follow-up; it
-//! does not affect the fp bridge (spans are not hashed).
+//! The [`SubformSink`] lifecycle now threads each syn node's OWN source
+//! span: [`SubformSink::begin_node`] takes the node span and
+//! [`SubformSink::leaf`] / [`SubformSink::leaf_var`] take the leaf span,
+//! so every materialised [`NormalizedTree`] node carries a precise range
+//! rather than the coarse enclosing-form span the v0.1 builder stamped
+//! everywhere. The LGG's per-hole [`crate::domain::SubElement::span`]
+//! therefore locates each binding exactly. Spans are NOT hashed, so this
+//! does not perturb the fp bridge — [`super::walker::FormEmitter`] drops
+//! the span in `begin_node` / `leaf`, keeping the `fingerprint_set`
+//! byte-identical (the `fingerprint_determinism` gate).
+//!
+//! ## Real Var lexemes (dry-rs#138)
+//!
+//! An alpha-renameable local/param identifier reaches the sink via
+//! [`SubformSink::leaf_var`] carrying its REAL surface text. The fold's
+//! default `leaf_var` collapses it to the [`NormalizedToken::Var`] class
+//! (the name never enters the hash, preserving alpha-equivalence), while
+//! [`TreeBuilder`] OVERRIDES `leaf_var` to display the real name as the
+//! leaf lexeme. A same-structure-different-name cluster then anti-unifies
+//! to pure-rename holes (same structural `fp`, differing lexemes), which
+//! `Match::with_template` counts as `rename_count > 0`.
 
 use dry_core::domain::{LeafClass, LeafToken, NormalizedTree, Span};
 use dry_core::ports::{NormalizeError, TreeDeriverPort};
@@ -71,7 +85,9 @@ use crate::parser::SynNormalizer;
 /// Held open between [`SubformSink::begin_node`] and
 /// [`SubformSink::seal`]. The `fp` hasher reproduces the fingerprint
 /// fold's per-node `Xxh3` exactly (tag, child fps, leaf tokens — in walk
-/// order); `label`/`children`/`leaf` accumulate the tree shape.
+/// order); `label`/`children`/`leaf` accumulate the tree shape; `span`
+/// is the syn node's OWN source range (dry-rs#130), stamped on the
+/// sealed node.
 pub(super) struct TreeNodeBuilder {
     /// Node fingerprint hasher — fed the SAME primitives, in the SAME
     /// order, as [`super::walker::FormEmitter`]'s per-node `Xxh3`.
@@ -81,21 +97,58 @@ pub(super) struct TreeNodeBuilder {
     label: Option<&'static str>,
     /// Ordered child subtrees (folded children + recorded leaves).
     children: Vec<NormalizedTree>,
+    /// The syn node's own source range (dry-rs#130) — stamped on the
+    /// sealed [`NormalizedTree`] instead of the coarse form span.
+    span: Span,
 }
 
 /// The tree-path [`SubformSink`]: materialises a [`NormalizedTree`] per
 /// node while computing each node's `fp` byte-identically to the
 /// fingerprint fold.
 ///
-/// `span` is the enclosing form's span, stamped on every node (see the
-/// module-level span-granularity seam).
-pub(super) struct TreeBuilder {
-    span: Span,
-}
+/// Every node carries its OWN span (dry-rs#130): `begin_node` records the
+/// syn node's span on the [`TreeNodeBuilder`] and `seal` stamps it on the
+/// node; `leaf` / `leaf_var` stamp each leaf with the leaf's own span. The
+/// builder is therefore stateless — the enclosing form span is held by
+/// [`TreeCollector`] and used only for the synthetic `"Form"` root, which
+/// is built outside the sink lifecycle.
+pub(super) struct TreeBuilder;
 
 impl TreeBuilder {
-    const fn new(span: Span) -> Self {
-        Self { span }
+    const fn new() -> Self {
+        Self
+    }
+
+    /// Materialise one leaf child carrying `class` / `lexeme` / `span`,
+    /// hashing `token` into the parent fp exactly as the fold does.
+    ///
+    /// Shared by [`SubformSink::leaf`] and [`SubformSink::leaf_var`]: the
+    /// PARENT fp folds in only the structural `token` (so the fp stays
+    /// byte-identical to the fold — dry-rs#138's real Var name never
+    /// enters the hash), while the DISPLAY `lexeme` and per-node `span`
+    /// ride only on the materialised tree leaf.
+    fn push_leaf(
+        node: &mut TreeNodeBuilder,
+        token: &NormalizedToken,
+        class: LeafClass,
+        lexeme: String,
+        span: Span,
+    ) {
+        // Hash the token into the PARENT fp exactly as the fold does (the
+        // fold never gives a leaf its own fp; leaves carry no bag entry).
+        token.hash_into(&mut node.fp);
+        // Materialise the leaf as a child subtree. Its own fp is the hash
+        // of just this token — a defined, deterministic value used only
+        // for tree identity/LGG short-circuit; it is intentionally NOT a
+        // `fingerprint_set` member (the bridge scopes to INTERNAL nodes).
+        let mut leaf_fp = Xxh3::new();
+        token.hash_into(&mut leaf_fp);
+        node.children.push(NormalizedTree::leaf(
+            leaf_label(class),
+            std::hash::Hasher::finish(&leaf_fp),
+            LeafToken::new(class, lexeme),
+            span,
+        ));
     }
 }
 
@@ -103,11 +156,12 @@ impl SubformSink for TreeBuilder {
     type Out = NormalizedTree;
     type Node = TreeNodeBuilder;
 
-    fn begin_node(&mut self) -> Self::Node {
+    fn begin_node(&mut self, span: Span) -> Self::Node {
         TreeNodeBuilder {
             fp: Xxh3::new(),
             label: None,
             children: Vec::new(),
+            span,
         }
     }
 
@@ -128,23 +182,25 @@ impl SubformSink for TreeBuilder {
         node.children.push(child);
     }
 
-    fn leaf(&mut self, node: &mut Self::Node, token: &NormalizedToken) {
-        // Hash the token into the PARENT fp exactly as the fold does (the
-        // fold never gives a leaf its own fp; leaves carry no bag entry).
-        token.hash_into(&mut node.fp);
-        // Materialise the leaf as a child subtree. Its own fp is the hash
-        // of just this token — a defined, deterministic value used only
-        // for tree identity/LGG short-circuit; it is intentionally NOT a
-        // `fingerprint_set` member (the bridge scopes to INTERNAL nodes).
-        let mut leaf_fp = Xxh3::new();
-        token.hash_into(&mut leaf_fp);
+    fn leaf(&mut self, node: &mut Self::Node, token: &NormalizedToken, span: Span) {
         let (class, lexeme) = leaf_class_and_lexeme(token);
-        node.children.push(NormalizedTree::leaf(
-            leaf_label(class),
-            std::hash::Hasher::finish(&leaf_fp),
-            LeafToken::new(class, lexeme),
-            self.span,
-        ));
+        Self::push_leaf(node, token, class, lexeme, span);
+    }
+
+    fn leaf_var(&mut self, node: &mut Self::Node, name: &str, span: Span) {
+        // dry-rs#138: the alpha-renameable local/param leaf displays its
+        // REAL identifier text, while the PARENT fp folds in the
+        // `NormalizedToken::Var` CLASS only (byte-identical to the fold's
+        // `leaf_var` default, which hashes `Var`). So the fingerprint
+        // stays alpha-normalized and the substitution table shows the
+        // real name — surfacing pure-rename holes.
+        Self::push_leaf(
+            node,
+            &NormalizedToken::Var,
+            LeafClass::Ident,
+            name.to_string(),
+            span,
+        );
     }
 
     fn seal(&mut self, node: Self::Node) -> Self::Out {
@@ -154,7 +210,7 @@ impl SubformSink for TreeBuilder {
         // discriminator-less seal would carry an empty tag for. We label
         // it explicitly so the tree is never silently mislabelled.
         let label = node.label.unwrap_or("Untagged").to_string();
-        NormalizedTree::new(label, fp, node.children, self.span)
+        NormalizedTree::new(label, fp, node.children, node.span)
     }
 
     fn record_identifier(&mut self, _id: String) {
@@ -216,14 +272,14 @@ struct TreeCollector {
 
 impl FormVisitor for TreeCollector {
     fn visit_form(&mut self, parts: FormParts<'_>) {
-        let mut builder = TreeBuilder::new(parts.span);
+        let mut builder = TreeBuilder::new();
 
         // Top-level subforms in emission order, exactly mirroring the
         // fingerprint path (Attrs prelude — conditional — then Sig, then
         // Block). `walk_attrs` is the SHARED prelude: it yields `Some`
         // only when a preserved attribute sealed an `Attrs` subform.
         let mut children = Vec::new();
-        if let Some(attrs_tree) = visitor::walk_attrs(&mut builder, parts.attrs) {
+        if let Some(attrs_tree) = visitor::walk_attrs(&mut builder, parts.attrs, parts.span) {
             children.push(attrs_tree);
         }
         children.push(visitor::walk_sig(&mut builder, parts.sig));
