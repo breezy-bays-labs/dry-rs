@@ -64,6 +64,9 @@ pub struct Config {
     /// `[walk]` table — file-walker tuning.
     #[serde(skip_serializing_if = "WalkConfig::is_default")]
     pub walk: WalkConfig,
+    /// `[scope]` table — relatedness scoping by structural boundary.
+    #[serde(skip_serializing_if = "ScopeConfig::is_default")]
+    pub scope: ScopeConfig,
     /// `[rust]` table — per-language overrides for the `dry4rs` adapter.
     /// Every knob in this table cascades: when set, it replaces the
     /// corresponding shared `[gate]`/`[output]`/`[walk]` value for the
@@ -181,6 +184,69 @@ impl WalkConfig {
     }
 }
 
+/// `[scope]` table — relatedness scoping by structural boundary
+/// (dry-rs#123, `adr-relatedness-scoping-model.md`).
+///
+/// Four orthogonal `Option<bool>` knobs gate which pairs of forms the
+/// comparison engine is allowed to cluster, by the structural
+/// relationship between the two forms' [`crate::domain::StructuralLocation`]:
+///
+/// - `within_crate` — allow pairs whose two forms share a crate / package.
+/// - `across_crate` — allow pairs whose two forms live in different crates.
+/// - `within_module` — allow pairs whose two forms share a module path.
+/// - `across_module` — allow pairs whose two forms live in different modules.
+///
+/// The four axes are orthogonal (crate × module, within × across) and
+/// map 1:1 to the user's mental model — NOT a single enum forcing an
+/// unnatural product. Each defaults to "allow" (the resolved
+/// [`crate::cli::ResolvedScope`] is all-true) so an unconfigured run
+/// clusters every pair exactly as it did before scoping landed.
+///
+/// Every field is `Option<bool>` so the cascade resolver
+/// ([`crate::cli::EffectiveConfig::resolve`]) can distinguish "user
+/// set this in TOML" from "user left it unset" — per-language
+/// `Some(v)` shadows the shared `[scope]` value; both `None` resolves
+/// to the all-true default.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, DocumentedFields, JsonSchema,
+)]
+#[serde(deny_unknown_fields, default)]
+pub struct ScopeConfig {
+    /// Allow clustering pairs whose two forms share a crate / package.
+    /// CLI `--[no-]within-crate` overrides this when both are set.
+    /// Default (unset) resolves to `true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub within_crate: Option<bool>,
+    /// Allow clustering pairs whose two forms live in different crates.
+    /// CLI `--[no-]across-crate` overrides this when both are set.
+    /// Default (unset) resolves to `true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub across_crate: Option<bool>,
+    /// Allow clustering pairs whose two forms share a module path.
+    /// CLI `--[no-]within-module` overrides this when both are set.
+    /// Default (unset) resolves to `true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub within_module: Option<bool>,
+    /// Allow clustering pairs whose two forms live in different modules.
+    /// CLI `--[no-]across-module` overrides this when both are set.
+    /// Default (unset) resolves to `true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub across_module: Option<bool>,
+}
+
+impl ScopeConfig {
+    /// True when every field is `None` — used by the top-level
+    /// `#[serde(skip_serializing_if = ...)]` to omit an empty `[scope]`
+    /// table from re-serialized TOML output.
+    #[must_use]
+    pub const fn is_default(&self) -> bool {
+        self.within_crate.is_none()
+            && self.across_crate.is_none()
+            && self.within_module.is_none()
+            && self.across_module.is_none()
+    }
+}
+
 /// Per-language override table — `[rust]` for the `dry4rs` adapter,
 /// `[typescript]` for the future `dry4ts` adapter (v0.6+).
 ///
@@ -221,6 +287,18 @@ pub struct LanguageConfig {
     /// Per-language override for `[walk].extensions`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extensions: Option<Vec<String>>,
+    /// Per-language override for `[scope].within_crate`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub within_crate: Option<bool>,
+    /// Per-language override for `[scope].across_crate`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub across_crate: Option<bool>,
+    /// Per-language override for `[scope].within_module`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub within_module: Option<bool>,
+    /// Per-language override for `[scope].across_module`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub across_module: Option<bool>,
 }
 
 impl LanguageConfig {
@@ -236,6 +314,10 @@ impl LanguageConfig {
             && self.subtitle.is_none()
             && self.include_ignored.is_none()
             && self.extensions.is_none()
+            && self.within_crate.is_none()
+            && self.across_crate.is_none()
+            && self.within_module.is_none()
+            && self.across_module.is_none()
     }
 }
 
@@ -249,8 +331,91 @@ mod tests {
         assert!(c.gate.is_default());
         assert!(c.output.is_default());
         assert!(c.walk.is_default());
+        assert!(c.scope.is_default());
         assert!(c.rust.is_default());
         assert!(c.typescript.is_default());
+    }
+
+    #[test]
+    fn scope_config_is_default_when_every_field_is_none() {
+        let c = ScopeConfig::default();
+        assert!(c.is_default());
+        assert_eq!(c.within_crate, None);
+        assert_eq!(c.across_crate, None);
+        assert_eq!(c.within_module, None);
+        assert_eq!(c.across_module, None);
+    }
+
+    #[test]
+    fn scope_config_any_field_some_unsets_default() {
+        let with_within_crate = ScopeConfig {
+            within_crate: Some(false),
+            ..ScopeConfig::default()
+        };
+        assert!(!with_within_crate.is_default());
+
+        let with_across_crate = ScopeConfig {
+            across_crate: Some(false),
+            ..ScopeConfig::default()
+        };
+        assert!(!with_across_crate.is_default());
+
+        let with_within_module = ScopeConfig {
+            within_module: Some(false),
+            ..ScopeConfig::default()
+        };
+        assert!(!with_within_module.is_default());
+
+        let with_across_module = ScopeConfig {
+            across_module: Some(false),
+            ..ScopeConfig::default()
+        };
+        assert!(!with_across_module.is_default());
+    }
+
+    #[test]
+    fn scope_config_round_trips_through_toml() {
+        let scoped = ScopeConfig {
+            within_crate: Some(true),
+            across_crate: Some(false),
+            within_module: Some(true),
+            across_module: Some(false),
+        };
+        let cfg = Config {
+            scope: scoped.clone(),
+            ..Config::default()
+        };
+        let serialized = toml::to_string_pretty(&cfg).expect("Config serializes to TOML");
+        let parsed: Config = toml::from_str(&serialized).expect("Config round-trips through TOML");
+        assert_eq!(parsed.scope, scoped);
+    }
+
+    #[test]
+    fn empty_scope_table_omitted_from_serialized_toml() {
+        let cfg = Config::default();
+        let serialized = toml::to_string_pretty(&cfg).expect("Config serializes to TOML");
+        assert!(
+            !serialized.contains("[scope]"),
+            "empty [scope] table must be omitted from re-serialized TOML"
+        );
+    }
+
+    #[test]
+    fn language_config_scope_knobs_participate_in_is_default() {
+        for ctor in [
+            |c: &mut LanguageConfig| c.within_crate = Some(false),
+            |c: &mut LanguageConfig| c.across_crate = Some(false),
+            |c: &mut LanguageConfig| c.within_module = Some(false),
+            |c: &mut LanguageConfig| c.across_module = Some(false),
+        ] {
+            let mut lang = LanguageConfig::default();
+            assert!(lang.is_default());
+            ctor(&mut lang);
+            assert!(
+                !lang.is_default(),
+                "a Some() scope knob must unset LanguageConfig::is_default"
+            );
+        }
     }
 
     #[test]

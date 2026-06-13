@@ -46,7 +46,7 @@ mod summary;
 mod template;
 mod tree;
 
-pub use config::{Config, GateConfig, LanguageConfig, OutputConfig, WalkConfig};
+pub use config::{Config, GateConfig, LanguageConfig, OutputConfig, ScopeConfig, WalkConfig};
 pub use enums::{FormKind, Severity, Tier};
 pub use form::{FormRef, NormalizedForm, StructuralLocation};
 pub use identity::{FilePath, Fingerprint};

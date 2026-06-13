@@ -98,6 +98,7 @@ mod tests {
             "GateConfig",
             "OutputConfig",
             "WalkConfig",
+            "ScopeConfig",
             "LanguageConfig",
             "Format",
             "ThresholdMode",

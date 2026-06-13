@@ -93,6 +93,24 @@ fn parsed_example_has_every_option_some_every_collection_non_empty() {
         "exhaustive example: walk.extensions must be non-empty"
     );
 
+    // [scope] section — every axis must be Some (dry-rs#123).
+    assert!(
+        parsed.scope.within_crate.is_some(),
+        "exhaustive example: scope.within_crate must be Some (dry-rs#123)"
+    );
+    assert!(
+        parsed.scope.across_crate.is_some(),
+        "exhaustive example: scope.across_crate must be Some (dry-rs#123)"
+    );
+    assert!(
+        parsed.scope.within_module.is_some(),
+        "exhaustive example: scope.within_module must be Some (dry-rs#123)"
+    );
+    assert!(
+        parsed.scope.across_module.is_some(),
+        "exhaustive example: scope.across_module must be Some (dry-rs#123)"
+    );
+
     // Per-language sections — every knob must be Some, every
     // collection non-empty (dry-rs#78 cascade model).
     for (label, lang) in [("rust", &parsed.rust), ("typescript", &parsed.typescript)] {
@@ -127,6 +145,22 @@ fn parsed_example_has_every_option_some_every_collection_non_empty() {
         assert!(
             !lang_exts.is_empty(),
             "exhaustive example: {label}.extensions must be non-empty"
+        );
+        assert!(
+            lang.within_crate.is_some(),
+            "exhaustive example: {label}.within_crate must be Some (dry-rs#123)"
+        );
+        assert!(
+            lang.across_crate.is_some(),
+            "exhaustive example: {label}.across_crate must be Some (dry-rs#123)"
+        );
+        assert!(
+            lang.within_module.is_some(),
+            "exhaustive example: {label}.within_module must be Some (dry-rs#123)"
+        );
+        assert!(
+            lang.across_module.is_some(),
+            "exhaustive example: {label}.across_module must be Some (dry-rs#123)"
         );
     }
 }

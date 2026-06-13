@@ -28,7 +28,9 @@ use documented::DocumentedFields;
 use toml_edit::{DocumentMut, Table};
 
 use crate::cli::{AdapterMeta, Format, ThresholdMode};
-use crate::domain::config::{Config, GateConfig, LanguageConfig, OutputConfig, WalkConfig};
+use crate::domain::config::{
+    Config, GateConfig, LanguageConfig, OutputConfig, ScopeConfig, WalkConfig,
+};
 
 /// Renders the exhaustive annotated `<adapter>.example.toml` reference.
 ///
@@ -76,6 +78,7 @@ pub fn render_example_config(meta: &AdapterMeta) -> String {
     annotate_gate_table(&mut doc);
     annotate_output_table(&mut doc);
     annotate_walk_table(&mut doc);
+    annotate_scope_table(&mut doc);
     annotate_rust_table(&mut doc);
     annotate_typescript_table(&mut doc);
 
@@ -104,6 +107,12 @@ fn build_exhaustive_example_config(meta: &AdapterMeta) -> Config {
         include_ignored: Some(false),
         extensions: Some(meta.extensions_owned()),
     };
+    let scope = ScopeConfig {
+        within_crate: Some(true),
+        across_crate: Some(true),
+        within_module: Some(true),
+        across_module: Some(true),
+    };
     let rust = LanguageConfig {
         threshold: Some(0.90),
         threshold_mode: Some(ThresholdMode::Default),
@@ -112,6 +121,10 @@ fn build_exhaustive_example_config(meta: &AdapterMeta) -> Config {
         subtitle: Some("Per-language override example".to_string()),
         include_ignored: Some(false),
         extensions: Some(meta.extensions_owned()),
+        within_crate: Some(true),
+        across_crate: Some(true),
+        within_module: Some(true),
+        across_module: Some(true),
     };
     let typescript = LanguageConfig {
         threshold: Some(0.85),
@@ -121,11 +134,16 @@ fn build_exhaustive_example_config(meta: &AdapterMeta) -> Config {
         subtitle: Some("Reserved for v0.6+ dry4ts adapter".to_string()),
         include_ignored: Some(false),
         extensions: Some(vec!["ts".to_string(), "tsx".to_string()]),
+        within_crate: Some(true),
+        across_crate: Some(true),
+        within_module: Some(true),
+        across_module: Some(true),
     };
     Config {
         gate,
         output,
         walk,
+        scope,
         rust,
         typescript,
     }
@@ -224,6 +242,31 @@ fn annotate_walk_table(doc: &mut DocumentMut) {
     attach_field_doc::<WalkConfig>(table, "extensions");
 }
 
+/// Attaches doc-comment prefixes to `[scope]` and its fields.
+///
+/// Compile-time guard mirrors [`annotate_gate_table`] — the exhaustive
+/// destructure of a default [`ScopeConfig`] fails if a new scope axis
+/// lands without wiring its annotation.
+fn annotate_scope_table(doc: &mut DocumentMut) {
+    let ScopeConfig {
+        within_crate: _,
+        across_crate: _,
+        within_module: _,
+        across_module: _,
+    } = ScopeConfig::default();
+
+    let prefix = section_prefix::<Config>("scope");
+    let table = doc["scope"]
+        .as_table_mut()
+        .expect("toml_edit emits [scope] as a table");
+    table.decor_mut().set_prefix(prefix);
+
+    attach_field_doc::<ScopeConfig>(table, "within_crate");
+    attach_field_doc::<ScopeConfig>(table, "across_crate");
+    attach_field_doc::<ScopeConfig>(table, "within_module");
+    attach_field_doc::<ScopeConfig>(table, "across_module");
+}
+
 /// Attaches doc-comment prefixes to `[rust]` and its fields.
 ///
 /// Compile-time guard mirrors [`annotate_gate_table`] — the exhaustive
@@ -238,6 +281,10 @@ fn annotate_rust_table(doc: &mut DocumentMut) {
         subtitle: _,
         include_ignored: _,
         extensions: _,
+        within_crate: _,
+        across_crate: _,
+        within_module: _,
+        across_module: _,
     } = LanguageConfig::default();
 
     let prefix = section_prefix::<Config>("rust");
@@ -253,6 +300,10 @@ fn annotate_rust_table(doc: &mut DocumentMut) {
     attach_field_doc::<LanguageConfig>(table, "subtitle");
     attach_field_doc::<LanguageConfig>(table, "include_ignored");
     attach_field_doc::<LanguageConfig>(table, "extensions");
+    attach_field_doc::<LanguageConfig>(table, "within_crate");
+    attach_field_doc::<LanguageConfig>(table, "across_crate");
+    attach_field_doc::<LanguageConfig>(table, "within_module");
+    attach_field_doc::<LanguageConfig>(table, "across_module");
 }
 
 /// Attaches doc-comment prefixes to `[typescript]` and its fields.
@@ -267,6 +318,10 @@ fn annotate_typescript_table(doc: &mut DocumentMut) {
         subtitle: _,
         include_ignored: _,
         extensions: _,
+        within_crate: _,
+        across_crate: _,
+        within_module: _,
+        across_module: _,
     } = LanguageConfig::default();
 
     let prefix = section_prefix::<Config>("typescript");
@@ -282,6 +337,10 @@ fn annotate_typescript_table(doc: &mut DocumentMut) {
     attach_field_doc::<LanguageConfig>(table, "subtitle");
     attach_field_doc::<LanguageConfig>(table, "include_ignored");
     attach_field_doc::<LanguageConfig>(table, "extensions");
+    attach_field_doc::<LanguageConfig>(table, "within_crate");
+    attach_field_doc::<LanguageConfig>(table, "across_crate");
+    attach_field_doc::<LanguageConfig>(table, "within_module");
+    attach_field_doc::<LanguageConfig>(table, "across_module");
 }
 
 /// Builds the leading comment block for a top-level table section,
@@ -348,6 +407,7 @@ mod tests {
         assert!(out.contains("[gate]"), "missing [gate] section");
         assert!(out.contains("[output]"), "missing [output] section");
         assert!(out.contains("[walk]"), "missing [walk] section");
+        assert!(out.contains("[scope]"), "missing [scope] section");
         assert!(out.contains("[rust]"), "missing [rust] section");
         assert!(out.contains("[typescript]"), "missing [typescript] section");
     }
