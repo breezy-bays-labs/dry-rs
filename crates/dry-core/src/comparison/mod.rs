@@ -531,7 +531,27 @@ fn emit_pass2_clusters(
         return;
     }
 
-    // Node identities for deterministic, permutation-stable ordering.
+    let ident = build_node_idents(forms, resolver, edges);
+    let adj = build_adjacency(edges);
+    let component_size = component_size_by_node(edges, &ident);
+    let order = carving_order(edges, &ident);
+
+    let (cliques, clique_of) =
+        carve_cliques(edges, &order, &adj, &ident, &component_size, component_cap);
+
+    emit_clique_matches(forms, resolver, threshold, &cliques, &adj, matches);
+    emit_residual_matches(
+        forms, resolver, threshold, edges, &order, &ident, &clique_of, matches,
+    );
+}
+
+/// Node identities for deterministic, permutation-stable ordering —
+/// one [`NodeIdent`] per endpoint touched by an edge.
+fn build_node_idents(
+    forms: &[NormalizedForm],
+    resolver: &dyn PathResolver,
+    edges: &[PairwiseEdge],
+) -> BTreeMap<usize, NodeIdent> {
     let mut ident: BTreeMap<usize, NodeIdent> = BTreeMap::new();
     for e in edges {
         for n in [e.i, e.j] {
@@ -540,32 +560,49 @@ fn emit_pass2_clusters(
                 .or_insert_with(|| node_ident(forms, n, resolver));
         }
     }
+    ident
+}
 
-    // Adjacency map: node -> (neighbor -> edge score). Drives clique
-    // growth, score lookups, and the absorbed/residual split.
+/// Adjacency map: node -> (neighbor -> edge score). Drives clique
+/// growth, score lookups, and the absorbed/residual split.
+fn build_adjacency(edges: &[PairwiseEdge]) -> BTreeMap<usize, BTreeMap<usize, f64>> {
     let mut adj: BTreeMap<usize, BTreeMap<usize, f64>> = BTreeMap::new();
     for e in edges {
         adj.entry(e.i).or_default().insert(e.j, e.score);
         adj.entry(e.j).or_default().insert(e.i, e.score);
     }
+    adj
+}
 
-    // Union-find over edge endpoints — only consulted for the
-    // component-size cap.
+/// Component size keyed by node (not root) so the carving loop can
+/// apply the oversize cap with a plain map lookup — no `&mut parent`
+/// borrow inside the hot loop. Union-find is consulted only here.
+fn component_size_by_node(
+    edges: &[PairwiseEdge],
+    ident: &BTreeMap<usize, NodeIdent>,
+) -> BTreeMap<usize, usize> {
     let mut parent: BTreeMap<usize, usize> = BTreeMap::new();
     for e in edges {
         uf_union(&mut parent, e.i, e.j);
     }
-    let mut component_size: BTreeMap<usize, usize> = BTreeMap::new();
-    let nodes: Vec<usize> = ident.keys().copied().collect();
-    for n in nodes {
+    let mut size_by_root: BTreeMap<usize, usize> = BTreeMap::new();
+    for &n in ident.keys() {
         let root = uf_find(&mut parent, n);
-        *component_size.entry(root).or_insert(0) += 1;
+        *size_by_root.entry(root).or_insert(0) += 1;
     }
+    let mut by_node: BTreeMap<usize, usize> = BTreeMap::new();
+    for &n in ident.keys() {
+        let root = uf_find(&mut parent, n);
+        by_node.insert(n, size_by_root[&root]);
+    }
+    by_node
+}
 
-    // Carving order: score descending (total order via `total_cmp`),
-    // then the ident-ordered endpoint pair. Quantized Jaccard makes
-    // exact score ties the common case, so the identity tie-break is
-    // load-bearing for byte-stable output.
+/// Carving order: score descending (total order via `total_cmp`),
+/// then the ident-ordered endpoint pair. Quantized Jaccard makes
+/// exact score ties the common case, so the identity tie-break is
+/// load-bearing for byte-stable output.
+fn carving_order(edges: &[PairwiseEdge], ident: &BTreeMap<usize, NodeIdent>) -> Vec<usize> {
     let edge_keys: Vec<(NodeIdent, NodeIdent)> = edges
         .iter()
         .map(|e| {
@@ -580,42 +617,58 @@ fn emit_pass2_clusters(
             .total_cmp(&edges[x].score)
             .then_with(|| edge_keys[x].cmp(&edge_keys[y]))
     });
+    order
+}
 
-    // Carve maximal cliques. A node belongs to at most one clique;
-    // edges whose endpoints land in different cliques (or none)
-    // become residuals below.
+/// Carve maximal cliques in carving order. A node belongs to at most
+/// one clique; each carved clique's members are sorted by identity so
+/// the wire-visible `forms[0]` is stable. Edges whose endpoints land
+/// in different cliques (or none) become residuals. Returns the
+/// cliques plus the node -> clique-id map the residual split needs.
+fn carve_cliques(
+    edges: &[PairwiseEdge],
+    order: &[usize],
+    adj: &BTreeMap<usize, BTreeMap<usize, f64>>,
+    ident: &BTreeMap<usize, NodeIdent>,
+    component_size: &BTreeMap<usize, usize>,
+    component_cap: usize,
+) -> (Vec<Vec<usize>>, BTreeMap<usize, usize>) {
     let mut clique_of: BTreeMap<usize, usize> = BTreeMap::new();
     let mut cliques: Vec<Vec<usize>> = Vec::new();
-    for &ei in &order {
+    for &ei in order {
         let e = &edges[ei];
-        if component_size[&uf_find(&mut parent, e.i)] > component_cap {
+        if component_size[&e.i] > component_cap {
             continue;
         }
         if clique_of.contains_key(&e.i) || clique_of.contains_key(&e.j) {
             continue;
         }
         let mut clique = vec![e.i, e.j];
-        grow_clique(&mut clique, &adj, &ident, &clique_of);
+        grow_clique(&mut clique, adj, ident, &clique_of);
+        clique.sort_by(|a, b| ident[a].cmp(&ident[b]));
         let id = cliques.len();
         for &m in &clique {
             clique_of.insert(m, id);
         }
         cliques.push(clique);
     }
+    (cliques, clique_of)
+}
 
-    // Emit carved cliques as n-ary matches: members ordered by
-    // identity (wire-visible — `forms[0]` feeds the canonical output
-    // sort), score = the minimum intra-clique pair score
-    // (generalizing Pass 1's score-1.0-as-group-min precedent), tier
-    // routed by that weakest pair.
-    for clique in &mut cliques {
-        clique.sort_by(|a, b| ident[a].cmp(&ident[b]));
-        let mut min_score = f64::INFINITY;
-        for (pos, &a) in clique.iter().enumerate() {
-            for &b in &clique[pos + 1..] {
-                min_score = min_score.min(adj[&a][&b]);
-            }
-        }
+/// Emit carved cliques as n-ary matches: members already identity-
+/// ordered, score = the minimum intra-clique pair score (generalizing
+/// Pass 1's score-1.0-as-group-min precedent), tier routed by that
+/// weakest pair.
+fn emit_clique_matches(
+    forms: &[NormalizedForm],
+    resolver: &dyn PathResolver,
+    threshold: f64,
+    cliques: &[Vec<usize>],
+    adj: &BTreeMap<usize, BTreeMap<usize, f64>>,
+    matches: &mut Vec<Match>,
+) {
+    for clique in cliques {
+        let min_score = min_intra_clique_score(clique, adj);
         let tier = tier_for(min_score, threshold);
         let forms_refs: Vec<FormRef> = clique
             .iter()
@@ -623,18 +676,37 @@ fn emit_pass2_clusters(
             .collect();
         matches.push(Match::new(forms_refs, min_score, tier));
     }
+}
 
-    // Residual edges — endpoints not co-members of one clique —
-    // emit as binary matches (edge conservation). Covers both
-    // cross-clique leftovers and every edge of an oversize (capped)
-    // component. Members ordered by identity.
-    for &ei in &order {
+/// The weakest (minimum) pairwise score over every pair in a clique.
+fn min_intra_clique_score(clique: &[usize], adj: &BTreeMap<usize, BTreeMap<usize, f64>>) -> f64 {
+    let mut min_score = f64::INFINITY;
+    for (pos, &a) in clique.iter().enumerate() {
+        for &b in &clique[pos + 1..] {
+            min_score = min_score.min(adj[&a][&b]);
+        }
+    }
+    min_score
+}
+
+/// Residual edges — endpoints not co-members of one clique — emit as
+/// binary matches (edge conservation). Covers both cross-clique
+/// leftovers and every edge of an oversize (capped) component.
+/// Members ordered by identity.
+#[allow(clippy::too_many_arguments)]
+fn emit_residual_matches(
+    forms: &[NormalizedForm],
+    resolver: &dyn PathResolver,
+    threshold: f64,
+    edges: &[PairwiseEdge],
+    order: &[usize],
+    ident: &BTreeMap<usize, NodeIdent>,
+    clique_of: &BTreeMap<usize, usize>,
+    matches: &mut Vec<Match>,
+) {
+    for &ei in order {
         let e = &edges[ei];
-        let absorbed = match (clique_of.get(&e.i), clique_of.get(&e.j)) {
-            (Some(a), Some(b)) => a == b,
-            _ => false,
-        };
-        if absorbed {
+        if edge_absorbed(clique_of, e.i, e.j) {
             continue;
         }
         let (a, b) = if ident[&e.i] <= ident[&e.j] {
@@ -651,6 +723,15 @@ fn emit_pass2_clusters(
     }
 }
 
+/// True when both endpoints landed in the same carved clique (the edge
+/// is already represented by that clique's n-ary match).
+fn edge_absorbed(clique_of: &BTreeMap<usize, usize>, i: usize, j: usize) -> bool {
+    match (clique_of.get(&i), clique_of.get(&j)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// Grow a seeded clique to maximality: repeatedly admit the
 /// unassigned candidate adjacent to ALL current members that
 /// maximizes the minimum edge score into the clique; ties break on
@@ -663,41 +744,69 @@ fn grow_clique(
     ident: &BTreeMap<usize, NodeIdent>,
     clique_of: &BTreeMap<usize, usize>,
 ) {
-    loop {
-        let mut best: Option<(f64, usize)> = None;
-        for &cand in adj[&clique[0]].keys() {
-            if clique_of.contains_key(&cand) || clique.contains(&cand) {
-                continue;
-            }
-            let mut worst = f64::INFINITY;
-            let mut adjacent_to_all = true;
-            for &m in clique.iter() {
-                if let Some(&w) = adj[&m].get(&cand) {
-                    worst = worst.min(w);
-                } else {
-                    adjacent_to_all = false;
-                    break;
-                }
-            }
-            if !adjacent_to_all {
-                continue;
-            }
-            let better = match best {
-                None => true,
-                Some((best_worst, best_cand)) => match worst.total_cmp(&best_worst) {
-                    std::cmp::Ordering::Greater => true,
-                    std::cmp::Ordering::Less => false,
-                    std::cmp::Ordering::Equal => ident[&cand] < ident[&best_cand],
-                },
-            };
-            if better {
-                best = Some((worst, cand));
-            }
+    while let Some(cand) = best_clique_candidate(clique, adj, ident, clique_of) {
+        clique.push(cand);
+    }
+}
+
+/// Pick the next node to admit into `clique`: among unassigned nodes
+/// adjacent to every current member, the one maximizing the minimum
+/// edge into the clique (ties → smaller identity). `None` when no
+/// admissible candidate remains (the clique is maximal).
+fn best_clique_candidate(
+    clique: &[usize],
+    adj: &BTreeMap<usize, BTreeMap<usize, f64>>,
+    ident: &BTreeMap<usize, NodeIdent>,
+    clique_of: &BTreeMap<usize, usize>,
+) -> Option<usize> {
+    let mut best: Option<(f64, usize)> = None;
+    for &cand in adj[&clique[0]].keys() {
+        if clique_of.contains_key(&cand) || clique.contains(&cand) {
+            continue;
         }
-        match best {
-            Some((_, cand)) => clique.push(cand),
-            None => break,
+        let Some(worst) = min_edge_into_clique(clique, adj, cand) else {
+            continue;
+        };
+        if candidate_beats_best(worst, cand, best, ident) {
+            best = Some((worst, cand));
         }
+    }
+    best.map(|(_, cand)| cand)
+}
+
+/// Minimum edge score from `cand` into every current clique member,
+/// or `None` if `cand` is not adjacent to all of them — a missing
+/// edge disqualifies the candidate (it would break the clique
+/// invariant).
+fn min_edge_into_clique(
+    clique: &[usize],
+    adj: &BTreeMap<usize, BTreeMap<usize, f64>>,
+    cand: usize,
+) -> Option<f64> {
+    let mut worst = f64::INFINITY;
+    for &m in clique {
+        let w = *adj[&m].get(&cand)?;
+        worst = worst.min(w);
+    }
+    Some(worst)
+}
+
+/// Prefer-larger-clique candidate ranking: a higher minimum edge wins;
+/// exact ties (the common case under quantized Jaccard) break on the
+/// smaller node identity for deterministic output.
+fn candidate_beats_best(
+    worst: f64,
+    cand: usize,
+    best: Option<(f64, usize)>,
+    ident: &BTreeMap<usize, NodeIdent>,
+) -> bool {
+    match best {
+        None => true,
+        Some((best_worst, best_cand)) => match worst.total_cmp(&best_worst) {
+            std::cmp::Ordering::Greater => true,
+            std::cmp::Ordering::Less => false,
+            std::cmp::Ordering::Equal => ident[&cand] < ident[&best_cand],
+        },
     }
 }
 
