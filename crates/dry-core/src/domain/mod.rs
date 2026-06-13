@@ -42,7 +42,7 @@ mod tree;
 
 pub use config::{Config, GateConfig, LanguageConfig, OutputConfig, WalkConfig};
 pub use enums::{FormKind, Severity, Tier};
-pub use form::{FormRef, NormalizedForm};
+pub use form::{FormRef, NormalizedForm, StructuralLocation};
 pub use identity::{FilePath, Fingerprint};
 pub use r#match::Match;
 pub use report::Report;
