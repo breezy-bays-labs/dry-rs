@@ -211,22 +211,12 @@ fn is_pure_rename_hole(hole: &Hole) -> bool {
     if hole.divergence.distinct != 1 {
         return false;
     }
-    distinct_lexeme_count(hole) > 1
-}
-
-/// Count the distinct lexemes bound at a hole across every member's
-/// substitution element. A pure rename has one structural `fp` but
-/// more than one of these.
-fn distinct_lexeme_count(hole: &Hole) -> usize {
-    let mut lexemes: Vec<&str> = hole
-        .substitutions
-        .iter()
-        .flat_map(|s| s.elements.iter())
-        .map(|e| e.lexeme.as_str())
-        .collect();
-    lexemes.sort_unstable();
-    lexemes.dedup();
-    lexemes.len()
+    // More than one distinct bound lexeme across members — short-circuit
+    // on the first differing element (no allocation, no sort).
+    let mut elements = hole.substitutions.iter().flat_map(|s| s.elements.iter());
+    elements
+        .next()
+        .is_some_and(|first| elements.any(|e| e.lexeme != first.lexeme))
 }
 
 /// Derive `rename_density` = `rename_count / total_holes`, or `None`
