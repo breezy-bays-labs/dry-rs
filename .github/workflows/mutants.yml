@@ -37,6 +37,17 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # cargo-mutants runs the FULL `dry-core` test suite per mutant. The
+  # anti-unification proptests (dry-rs#127, antiunify_proptest.rs) at the
+  # default 256 cases dominate that per-mutant time and pushed the slow
+  # clustering mutants (e.g. emit_clusters_for_bucket, which routes
+  # duplicate-heavy inputs into the O(N^2) path) past the 120s
+  # per-mutant floor and the 30-min job budget. A low case count keeps
+  # the gate honest: comparison/mod.rs mutants are caught by the
+  # DETERMINISTIC kill-tests (dry-rs#116) and a handful of proptest
+  # cases, not by 256-case randomness. The full 256-case proptests
+  # still run in the regular CI `Test` job. tracked: dry-rs#127.
+  PROPTEST_CASES: "32"
 
 defaults:
   run:
@@ -53,7 +64,11 @@ jobs:
     # contention and proptest-shrinker tail latency.
     name: Mutation testing (dry-core comparison engine)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Bumped 30 -> 45 (dry-rs#127): the anti-unification module added
+    # proptest integration binaries that run during every mutant's test
+    # phase; `PROPTEST_CASES=32` (env above) keeps the run well under
+    # this backstop, which stays generous for CI contention.
+    timeout-minutes: 45
     steps:
       # SHA-pinned action refs per the zizmor `unpinned-uses` audit
       # (see `.github/workflows/zizmor.yml`). Pin hashes match the
