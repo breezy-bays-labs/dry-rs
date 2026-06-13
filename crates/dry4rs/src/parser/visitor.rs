@@ -223,6 +223,7 @@ fn walk_fn_arg<S: SubformSink>(sink: &mut S, arg: &syn::FnArg) -> S::Out {
     }
 }
 
+#[must_use]
 pub(super) fn walk_type<S: SubformSink>(sink: &mut S, ty: &syn::Type) -> S::Out {
     let node = match ty {
         syn::Type::Path(tp) => {
@@ -507,6 +508,7 @@ fn walk_stmt<S: SubformSink>(sink: &mut S, stmt: &syn::Stmt) -> S::Out {
 /// Walk a `syn::Expr`. Dispatches by category to keep each helper small;
 /// less-common shapes (`Group`, `Verbatim`, `Const` block, `TryBlock`,
 /// `Yield`, …) fall through to the `ExprOther` discriminator.
+#[must_use]
 pub(super) fn walk_expr<S: SubformSink>(sink: &mut S, expr: &syn::Expr) -> S::Out {
     let mut node = sink.begin_node();
     if !walk_expr_dispatch(sink, &mut node, expr) {
