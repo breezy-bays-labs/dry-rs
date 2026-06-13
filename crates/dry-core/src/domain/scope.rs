@@ -86,6 +86,26 @@ impl Default for ResolvedScope {
 }
 
 impl ResolvedScope {
+    /// True when ALL four axes are allowed — the scope cannot disallow
+    /// ANY pair, so [`ResolvedScope::allows`] is unconditionally `true`
+    /// regardless of `crate_aware` or the two locations.
+    ///
+    /// This is the cheap O(1) short-circuit the comparison engine checks
+    /// before running the O(k²) per-bucket scope scan: on the unrestricted
+    /// (default) scope, no pair can ever be pruned, so the engine takes
+    /// the fast n-ary path with no `allows()` calls at all.
+    ///
+    /// `crate_aware` is intentionally NOT consulted: it only ever WIDENS
+    /// the allowed set (it forces the two crate axes to no-op when no
+    /// crate-id was derivable). When all four axes are already `true`,
+    /// `crate_aware` cannot tighten anything, so a scope with every axis
+    /// `true` permits every pair whether `crate_aware` is `true` or
+    /// `false`.
+    #[must_use]
+    pub const fn permits_all(&self) -> bool {
+        self.within_crate && self.across_crate && self.within_module && self.across_module
+    }
+
     /// Decide whether the pair `(a, b)` is allowed to cluster.
     ///
     /// Evaluates the two axes (crate, module) independently and requires
@@ -180,6 +200,56 @@ mod tests {
         assert!(s.allows(&same, &diff));
         assert!(s.allows(&same, &same));
         assert!(s.allows(&diff, &diff));
+    }
+
+    #[test]
+    fn permits_all_true_only_when_every_axis_is_true() {
+        // Default (all four axes true) -> permits_all is true. Kills the
+        // `-> false` whole-fn mutant.
+        assert!(
+            ResolvedScope::default().permits_all(),
+            "default (all axes true) must permit all"
+        );
+
+        // Each single axis flipped to false -> permits_all is false. Each
+        // case isolates one `&&` term, so the per-operator `&& -> ||`
+        // mutants (which would keep returning true when one axis is false)
+        // are all killed; the `-> true` whole-fn mutant dies on any of
+        // these four.
+        for tweak in [
+            ResolvedScope {
+                within_crate: false,
+                ..ResolvedScope::default()
+            },
+            ResolvedScope {
+                across_crate: false,
+                ..ResolvedScope::default()
+            },
+            ResolvedScope {
+                within_module: false,
+                ..ResolvedScope::default()
+            },
+            ResolvedScope {
+                across_module: false,
+                ..ResolvedScope::default()
+            },
+        ] {
+            assert!(
+                !tweak.permits_all(),
+                "any single axis false must make permits_all false: {tweak:?}"
+            );
+        }
+
+        // `crate_aware` is NOT a permits_all axis: all four axes true with
+        // crate_aware=false still permits all (crate_aware only widens).
+        let crate_unaware = ResolvedScope {
+            crate_aware: false,
+            ..ResolvedScope::default()
+        };
+        assert!(
+            crate_unaware.permits_all(),
+            "crate_aware must not gate permits_all when all four axes are true"
+        );
     }
 
     #[test]

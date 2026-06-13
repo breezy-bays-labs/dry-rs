@@ -26,7 +26,7 @@
 mod envelope;
 
 pub use envelope::{
-    Envelope, EnvelopeMeta, LANGUAGE_RUST, SCHEMA_VERSION, THRESHOLD_MODE_DEFAULT,
+    Envelope, EnvelopeMeta, LANGUAGE_RUST, SCHEMA_VERSION, ScopeApplied, THRESHOLD_MODE_DEFAULT,
     TOOL_NAME_DRY4RS, ViewProjection,
 };
 

@@ -349,6 +349,13 @@
     }
   },
   "schema_version": 1,
+  "scope": {
+    "across_crate": true,
+    "across_module": true,
+    "crate_aware": true,
+    "within_crate": true,
+    "within_module": true
+  },
   "threshold_mode": "default",
   "timestamp": "TIMESTAMP_REDACTED",
   "tool": "dry4rs",

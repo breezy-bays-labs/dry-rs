@@ -122,7 +122,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::hash::BuildHasher;
 
-use crate::domain::{FilePath, FormRef, LineColumn, Match, NormalizedForm, Tier};
+use crate::domain::{FilePath, FormRef, LineColumn, Match, NormalizedForm, ResolvedScope, Tier};
 
 mod antiunify;
 
@@ -183,7 +183,11 @@ const CLUSTER_COMPONENT_CAP: usize = 512;
 /// (`dry_core::cli`, PR 8) is the input-validation boundary.
 #[must_use]
 pub fn compare(forms: &[NormalizedForm], threshold: f64) -> Vec<Match> {
-    compare_with(forms, threshold, &SyntheticPathResolver)
+    compare_with(
+        forms,
+        threshold,
+        &CompareCtx::new(&SyntheticPathResolver, ResolvedScope::default()),
+    )
 }
 
 /// Compare with caller-supplied file paths attached to each form by
@@ -214,6 +218,41 @@ pub fn compare_with_paths(
     paths: &[FilePath],
     threshold: f64,
 ) -> Vec<Match> {
+    compare_with_paths_scoped(forms, paths, threshold, ResolvedScope::default())
+}
+
+/// Compare with caller-supplied paths AND a relatedness-scoping
+/// predicate ([`ResolvedScope`], dry-rs#124).
+///
+/// Identical to [`compare_with_paths`] except the engine prunes
+/// candidate pairs by the supplied `scope`: a pair the predicate
+/// disallows (different crate when `across_crate == false`, same module
+/// when `within_module == false`, …) never clusters — neither as a
+/// Pass 1 exact-match group member nor as a Pass 2 pairwise edge. The
+/// default `ResolvedScope` (all axes allowed) reproduces
+/// [`compare_with_paths`] exactly (byte-identical output), so this is a
+/// strict superset entry point: the CLI run loop calls it with the
+/// resolved scope, and the legacy facade delegates here with the
+/// all-true default.
+///
+/// The predicate reads each form's [`crate::domain::StructuralLocation`]
+/// (`forms[i].location`) — the engine never mutates it. Pairs are
+/// gated on `forms[i].location` vs `forms[j].location`; the wire-visible
+/// [`FormRef`] never carries the location (it stays on the engine-
+/// internal [`NormalizedForm`]).
+///
+/// # Panics
+///
+/// Same as [`compare_with_paths`]: panics on a `forms` / `paths` length
+/// mismatch in both debug and release builds; `debug_assert!`s the
+/// threshold range.
+#[must_use]
+pub fn compare_with_paths_scoped(
+    forms: &[NormalizedForm],
+    paths: &[FilePath],
+    threshold: f64,
+    scope: ResolvedScope,
+) -> Vec<Match> {
     assert_eq!(
         forms.len(),
         paths.len(),
@@ -222,15 +261,46 @@ pub fn compare_with_paths(
         forms.len(),
         paths.len()
     );
-    compare_with(forms, threshold, &IndexedPathResolver { paths })
+    compare_with(
+        forms,
+        threshold,
+        &CompareCtx::new(&IndexedPathResolver { paths }, scope),
+    )
 }
 
-/// Internal entry point parameterized by a path-resolver strategy.
-fn compare_with(
-    forms: &[NormalizedForm],
-    threshold: f64,
-    resolver: &dyn PathResolver,
-) -> Vec<Match> {
+/// Engine invocation context — the bundle of strategy objects threaded
+/// through the three comparison passes.
+///
+/// Introduced (dry-rs#124) so the engine grows new orthogonal concerns
+/// (path resolution; relatedness scoping; the v0.5 rayon-parallelism
+/// param) without stacking positional arguments on every helper. The
+/// public facades ([`compare`], [`compare_with_paths`]) build a context
+/// internally; only [`compare_with_paths_scoped`] (the CLI run-loop
+/// entry) supplies a non-default `scope`.
+///
+/// Holds borrows (`'a`), so it is constructed per `compare_with` call
+/// and never retained.
+struct CompareCtx<'a> {
+    /// Strategy that maps `forms[i]` to the [`FilePath`] embedded in its
+    /// emitted [`FormRef`] (synthetic-from-qualified-name for the
+    /// library facade; indexed-from-caller-paths for the CLI run loop).
+    resolver: &'a dyn PathResolver,
+    /// Relatedness-scoping predicate. [`ResolvedScope::default`] (all
+    /// axes allowed) is the no-op identity — every pair is allowed to
+    /// cluster, exactly as the pre-scoping engine behaved.
+    scope: ResolvedScope,
+}
+
+impl<'a> CompareCtx<'a> {
+    /// Construct an engine context from a path resolver + scope
+    /// predicate.
+    const fn new(resolver: &'a dyn PathResolver, scope: ResolvedScope) -> Self {
+        Self { resolver, scope }
+    }
+}
+
+/// Internal entry point parameterized by the engine [`CompareCtx`].
+fn compare_with(forms: &[NormalizedForm], threshold: f64, ctx: &CompareCtx) -> Vec<Match> {
     debug_assert!(
         threshold > 0.0 && threshold <= 1.0,
         "compare() threshold must lie in (0.0, 1.0]; got {threshold}"
@@ -241,24 +311,29 @@ fn compare_with(
 
     // Pass 1 — hash-bucket clustering. Verified exact matches are
     // emitted and their indices are marked `claimed`. XOR
-    // collisions and partial-bucket mismatches leave their indices
-    // unclaimed so Pass 2 (sliding-window) can compare them
-    // pairwise.
-    pass1_hash_bucket(forms, resolver, &mut matches, &mut claimed);
+    // collisions, partial-bucket mismatches, AND scope-disallowed
+    // members leave their indices unclaimed so Pass 2 (sliding-window)
+    // can compare them pairwise (where the scope gate applies again).
+    pass1_hash_bucket(forms, ctx, &mut matches, &mut claimed);
 
     // Pass 2 — sliding-window Jaccard over forms NOT claimed by
     // Pass 1. Sorted ascending by `node_count` with the
     // break-math shortcut. Collects the >= threshold pairwise edges
-    // instead of emitting matches directly.
-    let edges = pass2_sliding_window(forms, threshold, &claimed);
+    // (scope-disallowed pairs are skipped before Jaccard) instead of
+    // emitting matches directly.
+    let edges = pass2_sliding_window(forms, threshold, &claimed, ctx.scope);
 
     // Pass 3 — clique carving over the collected edge graph
-    // (dry-rs#97, adr-cluster-output). Maximal cliques emit as
-    // n-ary matches; leftover edges emit as residual binary
-    // matches (edge conservation — nothing Pass 2 found is lost).
+    // (dry-rs#97, adr-cluster-output). UNCHANGED by scoping: the edge
+    // graph already contains only scope-allowed pairs, and
+    // `grow_clique`'s adjacent-to-all invariant structurally cannot
+    // admit a pair with no edge — so a disallowed pair (which has no
+    // edge) can never enter a clique (edge conservation). Maximal
+    // cliques emit as n-ary matches; leftover edges emit as residual
+    // binary matches.
     emit_pass2_clusters(
         forms,
-        resolver,
+        ctx.resolver,
         threshold,
         &edges,
         CLUSTER_COMPONENT_CAP,
@@ -321,7 +396,7 @@ impl PathResolver for IndexedPathResolver<'_> {
 /// unverified ones leave their indices unclaimed for Pass 2.
 fn pass1_hash_bucket(
     forms: &[NormalizedForm],
-    resolver: &dyn PathResolver,
+    ctx: &CompareCtx,
     matches: &mut Vec<Match>,
     claimed: &mut HashSet<usize>,
 ) {
@@ -330,7 +405,7 @@ fn pass1_hash_bucket(
         if indices.len() < 2 {
             continue;
         }
-        emit_clusters_for_bucket(forms, resolver, indices, matches, claimed);
+        emit_clusters_for_bucket(forms, ctx, indices, matches, claimed);
     }
 }
 
@@ -366,7 +441,7 @@ fn group_forms_by_bucket_key(forms: &[NormalizedForm]) -> BTreeMap<u64, Vec<usiz
 /// pairwise scan.
 fn emit_clusters_for_bucket(
     forms: &[NormalizedForm],
-    resolver: &dyn PathResolver,
+    ctx: &CompareCtx,
     mut indices: Vec<usize>,
     matches: &mut Vec<Match>,
     claimed: &mut HashSet<usize>,
@@ -379,7 +454,7 @@ fn emit_clusters_for_bucket(
             .partition(|&i| forms[i].fingerprint_set == *canonical_set);
 
         if cluster.len() >= 2 {
-            emit_pass1_cluster(forms, resolver, &cluster, matches, claimed);
+            emit_pass1_cluster(forms, ctx, &cluster, matches, claimed);
         }
         // Canonical (and any singleton from this partition step)
         // landed in `cluster` — drop it from the working set either
@@ -388,9 +463,93 @@ fn emit_clusters_for_bucket(
     }
 }
 
-/// Emit a single Pass 1 n-ary [`Match`] for an equal-set cluster and
-/// mark every member index as `claimed`.
+/// Emit Pass 1 matches for an equal-set cluster (every member's
+/// `fingerprint_set` is byte-identical, so every intra-cluster pair has
+/// Jaccard 1.0).
+///
+/// ## Scope sub-partition (dry-rs#124)
+///
+/// When the relatedness-scoping predicate ([`CompareCtx::scope`]) allows
+/// EVERY pair in the cluster (always true under the all-true default),
+/// the whole cluster surfaces as ONE n-ary score-1.0 [`Match`] — the
+/// fast path, byte-identical to the pre-scoping engine. When the
+/// predicate disallows some pair (e.g. two identical forms in different
+/// crates under `across_crate == false`), the cluster is sub-partitioned
+/// into scope-allowed groups via the SAME clique-carving machinery Pass 3
+/// uses ([`emit_pass2_clusters`], over synthetic score-1.0 edges): every
+/// emitted group is a scope-allowed clique, leftover allowed pairs emit
+/// as residual score-1.0 binary matches, and a member with NO
+/// scope-allowed equal partner stays unclaimed (its only equal pairs are
+/// disallowed, which Pass 2's gate skips — so no score-1.0 pair ever
+/// leaks into Pass 2's defensive guard).
+///
+/// EVERY member that participates in any scope-allowed exact pair is
+/// claimed here, so Pass 2 never re-derives a score-1.0 equal-set pair.
+///
+/// ## Fast-path short-circuit (Qodo, dry-rs#124)
+///
+/// Two sequential fast-path gates, cheapest first:
+///
+/// 1. [`ResolvedScope::permits_all`] — O(1). When every axis is `true`
+///    the scope CANNOT disallow any pair, so the default (no-`[scope]`)
+///    run never pays the O(k²) `allows()` scan on a large identical
+///    bucket. This is the Qodo perf fix: the common case is O(1) per
+///    cluster.
+/// 2. [`cluster_is_one_scope_allowed_clique`] — O(k²). Only reached when
+///    the scope IS restricted; confirms a restricted-scope cluster
+///    happens to be wholly mutually-allowed (e.g. an all-same-crate
+///    bucket under `across_crate == false`), so it still emits as one
+///    n-ary match rather than carving.
+///
+/// Both gates route to the same [`emit_pass1_fast_path`]; only when BOTH
+/// fail does the cluster carve. Kept as two `if`s (not one `||`) so each
+/// gate is independently exercised — the cheap O(1) gate is not fused
+/// with the expensive scan.
 fn emit_pass1_cluster(
+    forms: &[NormalizedForm],
+    ctx: &CompareCtx,
+    cluster: &[usize],
+    matches: &mut Vec<Match>,
+    claimed: &mut HashSet<usize>,
+) {
+    // Gate 1 (O(1)): unrestricted scope cannot disallow any pair — take
+    // the fast path without ever running the per-pair scan.
+    if ctx.scope.permits_all() {
+        emit_pass1_fast_path(forms, ctx.resolver, cluster, matches, claimed);
+        return;
+    }
+
+    // Gate 2 (O(k²)): the scope restricts SOMETHING, but this particular
+    // cluster may still be wholly mutually-allowed.
+    if cluster_is_one_scope_allowed_clique(forms, ctx.scope, cluster) {
+        emit_pass1_fast_path(forms, ctx.resolver, cluster, matches, claimed);
+        return;
+    }
+
+    // Slow path — some intra-cluster pair is scope-disallowed. Carve the
+    // scope-allowed sub-graph with the shared Pass 3 machinery over
+    // synthetic score-1.0 edges, then mark every claimed member.
+    let edges = scope_allowed_unit_edges(forms, ctx.scope, cluster);
+    let before = matches.len();
+    emit_pass2_clusters(
+        forms,
+        ctx.resolver,
+        // Threshold below the score (1.0) so `tier_for` routes every
+        // emitted exact group / residual to `AutoRefactor`, matching the
+        // fast path's tier.
+        1.0,
+        &edges,
+        CLUSTER_COMPONENT_CAP,
+        matches,
+    );
+    mark_emitted_members_claimed(&matches[before..], cluster, forms, ctx.resolver, claimed);
+}
+
+/// Emit one n-ary score-1.0 [`Match`] for a whole equal-set cluster and
+/// claim every member — the Pass 1 fast path. Byte-identical to the
+/// pre-scoping engine, which is what keeps the default-scope output
+/// stable.
+fn emit_pass1_fast_path(
     forms: &[NormalizedForm],
     resolver: &dyn PathResolver,
     cluster: &[usize],
@@ -404,6 +563,75 @@ fn emit_pass1_cluster(
     matches.push(Match::new(forms_refs, 1.0, Tier::AutoRefactor));
     for &i in cluster {
         claimed.insert(i);
+    }
+}
+
+/// True when every pair in an equal-set cluster is scope-allowed — the
+/// fast-path test that keeps the default-scope (all-true) output
+/// byte-identical to the pre-scoping engine. `O(k²)` over the (small)
+/// equal-set group; under the all-true default the first pair already
+/// short-circuits to `true` for the common single-location group.
+fn cluster_is_one_scope_allowed_clique(
+    forms: &[NormalizedForm],
+    scope: ResolvedScope,
+    cluster: &[usize],
+) -> bool {
+    for (pos, &a) in cluster.iter().enumerate() {
+        for &b in &cluster[pos + 1..] {
+            if !scope.allows(&forms[a].location, &forms[b].location) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Build the synthetic score-1.0 edge set over the scope-ALLOWED pairs of
+/// an equal-set cluster. Every intra-cluster pair has Jaccard 1.0, so the
+/// only filter is the scope predicate; the resulting edges feed the
+/// shared Pass 3 carving so exact-match scope sub-partitioning reuses the
+/// near-match clique guarantee + edge conservation.
+fn scope_allowed_unit_edges(
+    forms: &[NormalizedForm],
+    scope: ResolvedScope,
+    cluster: &[usize],
+) -> Vec<PairwiseEdge> {
+    let mut edges = Vec::new();
+    for (pos, &i) in cluster.iter().enumerate() {
+        for &j in &cluster[pos + 1..] {
+            if scope.allows(&forms[i].location, &forms[j].location) {
+                edges.push(PairwiseEdge { i, j, score: 1.0 });
+            }
+        }
+    }
+    edges
+}
+
+/// Mark every cluster member that appeared in a freshly-emitted Pass 1
+/// scope sub-partition match as `claimed`, so Pass 2 never re-derives the
+/// score-1.0 equal-set pairs the sub-partition already represented.
+///
+/// `emitted` is the slice of matches the carving just pushed; a member's
+/// `(file, span)` identity links its [`FormRef`] back to its input index.
+/// A member absent from every emitted match (no scope-allowed equal
+/// partner) is intentionally left unclaimed.
+fn mark_emitted_members_claimed(
+    emitted: &[Match],
+    cluster: &[usize],
+    forms: &[NormalizedForm],
+    resolver: &dyn PathResolver,
+    claimed: &mut HashSet<usize>,
+) {
+    for &i in cluster {
+        let want = form_ref_for(&forms[i], i, resolver);
+        let appears = emitted.iter().any(|m| {
+            m.forms
+                .iter()
+                .any(|f| f.file == want.file && f.span == want.span)
+        });
+        if appears {
+            claimed.insert(i);
+        }
     }
 }
 
@@ -429,6 +657,7 @@ fn pass2_sliding_window(
     forms: &[NormalizedForm],
     threshold: f64,
     claimed: &HashSet<usize>,
+    scope: ResolvedScope,
 ) -> Vec<PairwiseEdge> {
     let sorted = sort_unclaimed_by_node_count(forms, claimed);
     let mut edges: Vec<PairwiseEdge> = Vec::new();
@@ -445,7 +674,7 @@ fn pass2_sliding_window(
             if f64::from(forms[j].node_count) > bound {
                 break;
             }
-            if let Some(edge) = try_collect_pass2_edge(forms, threshold, i, j) {
+            if let Some(edge) = try_collect_pass2_edge(forms, threshold, i, j, scope) {
                 edges.push(edge);
             }
         }
@@ -474,12 +703,24 @@ fn try_collect_pass2_edge(
     threshold: f64,
     i: usize,
     j: usize,
+    scope: ResolvedScope,
 ) -> Option<PairwiseEdge> {
-    let score = jaccard(&forms[i].fingerprint_set, &forms[j].fingerprint_set);
-    if score < threshold {
+    // Relatedness-scoping gate (dry-rs#124): a pair the predicate
+    // disallows (by crate / module boundary) is pruned BEFORE Jaccard,
+    // so a disallowed pair never becomes an edge — and therefore (by
+    // Pass 3's adjacent-to-all clique invariant) never enters any
+    // cluster. Checked first because it is a cheap field comparison and
+    // short-circuits the Jaccard intersection on disallowed pairs.
+    if !scope.allows(&forms[i].location, &forms[j].location) {
         return None;
     }
-    let final_score = resolve_pass2_score(score, i, j);
+    // `jaccard_score` (not `score`) to stay clear of the `scope` param
+    // under clippy::similar_names; the wire field stays `score`.
+    let jaccard_score = jaccard(&forms[i].fingerprint_set, &forms[j].fingerprint_set);
+    if jaccard_score < threshold {
+        return None;
+    }
+    let final_score = resolve_pass2_score(jaccard_score, i, j);
     Some(PairwiseEdge {
         i,
         j,
@@ -1891,7 +2132,7 @@ mod tests {
             .collect();
         let forms: Vec<NormalizedForm> = sets.iter().map(|s| make_form(s, 10)).collect();
         let claimed: HashSet<usize> = HashSet::new();
-        let edges = pass2_sliding_window(&forms, 0.8, &claimed);
+        let edges = pass2_sliding_window(&forms, 0.8, &claimed, ResolvedScope::default());
         assert_eq!(edges.len(), 6, "4-clique has six edges");
 
         let mut capped: Vec<Match> = Vec::new();
@@ -1944,7 +2185,7 @@ mod tests {
         // relational mutants without ever excluding the boundary.
         let forms = four_clique_forms();
         let claimed: HashSet<usize> = HashSet::new();
-        let edges = pass2_sliding_window(&forms, 0.8, &claimed);
+        let edges = pass2_sliding_window(&forms, 0.8, &claimed, ResolvedScope::default());
         assert_eq!(edges.len(), 6, "4-clique has six edges");
 
         // cap == component size -> NOT capped -> one 4-clique.
@@ -2230,7 +2471,7 @@ mod tests {
         // cap is controllable (the production cap is 512).
         let forms = two_disjoint_triangles();
         let claimed: HashSet<usize> = HashSet::new();
-        let edges = pass2_sliding_window(&forms, 0.8, &claimed);
+        let edges = pass2_sliding_window(&forms, 0.8, &claimed, ResolvedScope::default());
         // Each triangle contributes three edges; the two are disjoint.
         assert_eq!(edges.len(), 6, "two triangles contribute six edges total");
 
@@ -2272,7 +2513,7 @@ mod tests {
         // the cap below the real component size.
         let forms = triangle_forms();
         let claimed: HashSet<usize> = HashSet::new();
-        let edges = pass2_sliding_window(&forms, 0.8, &claimed);
+        let edges = pass2_sliding_window(&forms, 0.8, &claimed, ResolvedScope::default());
         assert_eq!(edges.len(), 3, "triangle has three edges");
 
         let mut out: Vec<Match> = Vec::new();
@@ -2781,5 +3022,518 @@ mod tests {
             has_pair("b.rs", "c.rs"),
             "B-C must remain a binary clique (M joined A-D, not B-C): {matches:?}"
         );
+    }
+
+    // --- Relatedness scoping via CompareCtx (dry-rs#124) ---
+
+    use crate::domain::{Span, StructuralLocation};
+
+    /// Build a form with a structural location (crate + single-segment
+    /// module) so the scope predicate has something to gate on. The
+    /// `(file, span)` identity stays distinct via the qualified name so
+    /// permutation-stability tests can address members by name.
+    fn make_located_form(
+        fps: &[u64],
+        crate_id: Option<&str>,
+        module: &str,
+        qname: &str,
+        node_count: u32,
+    ) -> NormalizedForm {
+        make_form_with_qualified_name(fps, &[qname], node_count).with_location(StructuralLocation {
+            crate_id: crate_id.map(str::to_string),
+            module_path: vec![module.to_string()],
+        })
+    }
+
+    /// The all-true default context — the no-op identity the equivalence
+    /// oracle pins against `compare()`.
+    fn default_ctx() -> CompareCtx<'static> {
+        CompareCtx::new(&SyntheticPathResolver, ResolvedScope::default())
+    }
+
+    /// A representative spread of the engine's fixture inputs — exact
+    /// (Pass 1), near (Pass 2), cliques + residuals (Pass 3), XOR
+    /// collisions, empty, and singletons — each paired with the threshold
+    /// the corresponding fixture test uses. The equivalence oracle runs
+    /// the no-op-scope engine over every one and asserts byte-identical
+    /// output against `compare()`.
+    fn equivalence_fixtures() -> Vec<(Vec<NormalizedForm>, f64)> {
+        vec![
+            (Vec::new(), 0.85),
+            (vec![make_form(&[1, 2, 3], 3)], 0.85),
+            (
+                vec![make_form(&[1, 2, 3], 3), make_form(&[3, 2, 1], 3)],
+                0.85,
+            ),
+            (
+                vec![
+                    make_form(&[1, 2, 3], 3),
+                    make_form(&[1, 2, 3], 3),
+                    make_form(&[1, 2, 3], 3),
+                ],
+                0.85,
+            ),
+            (vec![make_form(&[], 0), make_form(&[], 0)], 0.85),
+            (
+                vec![
+                    make_form(&[1, 2], 2),
+                    make_form(&[1, 2], 2),
+                    make_form(&[4, 7], 2),
+                    make_form(&[4, 7], 2),
+                ],
+                0.85,
+            ),
+            (
+                vec![make_form(&[1, 2, 3, 4], 4), make_form(&[1, 2, 3, 4, 5], 5)],
+                0.7,
+            ),
+            (triangle_forms(), 0.8),
+            (four_clique_forms(), 0.8),
+            (two_disjoint_triangles(), 0.8),
+            (
+                vec![
+                    make_form(&[1, 2, 3], 3),
+                    make_form(&[100, 200], 2),
+                    make_form(&[1000], 1),
+                ],
+                0.5,
+            ),
+            (
+                vec![
+                    make_form_with_qualified_name(&[1, 2, 3], &["zeta"], 3),
+                    make_form_with_qualified_name(&[1, 2, 3], &["zeta"], 3),
+                    make_form_with_qualified_name(&[4, 5, 6], &["alpha"], 3),
+                    make_form_with_qualified_name(&[4, 5, 6], &["alpha"], 3),
+                    make_form_with_qualified_name(&[7, 8, 9], &["mid"], 3),
+                    make_form_with_qualified_name(&[7, 8, 9], &["mid"], 3),
+                ],
+                0.85,
+            ),
+        ]
+    }
+
+    #[test]
+    fn equivalence_oracle_default_scope_matches_compare_byte_for_byte() {
+        // SAFETY NET: the no-op (all-true) scope must produce output
+        // byte-identical to the legacy `compare()` over every engine
+        // fixture. `compare_with(forms, t, default_ctx)` exercises the
+        // SAME internal entry the public facade uses, only with the
+        // explicit default context — so this also pins that the facade's
+        // default-context construction is the no-op identity.
+        for (forms, threshold) in equivalence_fixtures() {
+            let oracle = compare_with(&forms, threshold, &default_ctx());
+            let legacy = compare(&forms, threshold);
+            assert_eq!(
+                oracle, legacy,
+                "default-scope compare_with must equal compare() for threshold {threshold}"
+            );
+        }
+    }
+
+    #[test]
+    fn equivalence_oracle_holds_even_when_forms_carry_locations() {
+        // Locations are present but the default scope allows every pair,
+        // so attaching a `StructuralLocation` to each form changes
+        // NOTHING — the engine still clusters identically. Guards against
+        // the predicate accidentally reading location under the default.
+        let located: Vec<NormalizedForm> = vec![
+            make_located_form(&[1, 2, 3], Some("a"), "m1", "f0", 3),
+            make_located_form(&[1, 2, 3], Some("b"), "m2", "f1", 3),
+            make_located_form(&[1, 2, 3, 4], Some("a"), "m1", "f2", 4),
+            make_located_form(&[1, 2, 3, 4, 5], Some("b"), "m2", "f3", 5),
+        ];
+        let unlocated: Vec<NormalizedForm> = vec![
+            make_form_with_qualified_name(&[1, 2, 3], &["f0"], 3),
+            make_form_with_qualified_name(&[1, 2, 3], &["f1"], 3),
+            make_form_with_qualified_name(&[1, 2, 3, 4], &["f2"], 4),
+            make_form_with_qualified_name(&[1, 2, 3, 4, 5], &["f3"], 5),
+        ];
+        assert_eq!(
+            compare_with(&located, 0.7, &default_ctx()),
+            compare(&unlocated, 0.7),
+            "default scope must ignore locations entirely"
+        );
+    }
+
+    /// Build a `CompareCtx` over the synthetic resolver with the given
+    /// scope — locations drive the predicate, so the synthetic resolver's
+    /// qualified-name paths are fine for the `FormRef` identities.
+    fn scoped_ctx(scope: ResolvedScope) -> CompareCtx<'static> {
+        // The resolver is a unit struct; leak a 'static reference via a
+        // const so the returned ctx can outlive the call (test-only).
+        CompareCtx::new(&SyntheticPathResolver, scope)
+    }
+
+    /// Collect every emitted pair `(qname_a, qname_b)` from a match set,
+    /// expanding each n-ary match into all its intra-match pairs. Used to
+    /// assert "every emitted pair is scope-allowed".
+    fn emitted_pairs(matches: &[Match]) -> Vec<(String, String)> {
+        let mut pairs = Vec::new();
+        for m in matches {
+            for (pos, a) in m.forms.iter().enumerate() {
+                for b in &m.forms[pos + 1..] {
+                    let mut ab = [a.file.to_string(), b.file.to_string()];
+                    ab.sort();
+                    pairs.push((ab[0].clone(), ab[1].clone()));
+                }
+            }
+        }
+        pairs
+    }
+
+    #[test]
+    fn complement_across_crate_false_drops_pass1_cross_crate_exact_pair() {
+        // Two byte-identical forms in DIFFERENT crates. Under the default
+        // scope they cluster (one Pass 1 score-1.0 match); under
+        // across_crate=false the cross-crate pair is disallowed, so NO
+        // match is emitted (the lone scope-allowed partner each form has
+        // is the other — which is now disallowed).
+        let forms = vec![
+            make_located_form(&[1, 2, 3], Some("crate_a"), "m", "a", 3),
+            make_located_form(&[1, 2, 3], Some("crate_b"), "m", "b", 3),
+        ];
+        // Default scope: they cluster.
+        let baseline = compare_with(&forms, 0.85, &default_ctx());
+        assert_eq!(
+            baseline.len(),
+            1,
+            "default scope clusters the cross-crate exact pair"
+        );
+        assert_eq!(baseline[0].forms.len(), 2);
+
+        // across_crate=false: the cross-crate pair is dropped.
+        let scope = ResolvedScope {
+            across_crate: false,
+            ..ResolvedScope::default()
+        };
+        let scoped = compare_with(&forms, 0.85, &scoped_ctx(scope));
+        assert!(
+            scoped.is_empty(),
+            "across_crate=false must drop the cross-crate exact pair, got {scoped:?}"
+        );
+    }
+
+    #[test]
+    fn complement_across_crate_false_drops_pass2_cross_crate_near_pair() {
+        // Two NEAR-duplicate forms (Jaccard 4/5 = 0.8) in different
+        // crates. Default scope -> one Pass 2 residual match; across_crate
+        // =false -> the pair is pruned BEFORE Jaccard, so nothing emits.
+        let forms = vec![
+            make_located_form(&[1, 2, 3, 4], Some("crate_a"), "m", "a", 4),
+            make_located_form(&[1, 2, 3, 4, 5], Some("crate_b"), "m", "b", 5),
+        ];
+        let baseline = compare_with(&forms, 0.7, &default_ctx());
+        assert_eq!(
+            baseline.len(),
+            1,
+            "default scope clusters the cross-crate near pair"
+        );
+
+        let scope = ResolvedScope {
+            across_crate: false,
+            ..ResolvedScope::default()
+        };
+        let scoped = compare_with(&forms, 0.7, &scoped_ctx(scope));
+        assert!(
+            scoped.is_empty(),
+            "across_crate=false must prune the cross-crate near pair, got {scoped:?}"
+        );
+    }
+
+    #[test]
+    fn complement_every_emitted_pair_is_scope_allowed_not_vacuous() {
+        // A mixed corpus: a same-crate exact pair (ALLOWED, must survive)
+        // and a cross-crate exact pair (DISALLOWED under across_crate
+        // =false, must be dropped). Asserts BOTH directions — the allowed
+        // pair survives (non-vacuous) AND every emitted pair is allowed.
+        //
+        // f0,f1 share crate_a (same module) -> within_crate&within_module
+        //   allowed -> they cluster.
+        // f2,f3 are crate_a vs crate_b -> across_crate=false drops them.
+        // f0/f2 share fps too? No — distinct fp sets per pair to isolate.
+        let forms = vec![
+            make_located_form(&[1, 2, 3], Some("crate_a"), "m", "f0", 3),
+            make_located_form(&[1, 2, 3], Some("crate_a"), "m", "f1", 3),
+            make_located_form(&[9, 8, 7], Some("crate_a"), "m", "f2", 3),
+            make_located_form(&[9, 8, 7], Some("crate_b"), "m", "f3", 3),
+        ];
+        let scope = ResolvedScope {
+            across_crate: false,
+            ..ResolvedScope::default()
+        };
+        let matches = compare_with(&forms, 0.85, &scoped_ctx(scope));
+
+        // Non-vacuous: the same-crate {f0,f1} pair MUST survive.
+        let pairs = emitted_pairs(&matches);
+        assert!(
+            pairs.contains(&("f0".to_string(), "f1".to_string())),
+            "the allowed same-crate exact pair must still cluster (non-vacuous), got {pairs:?}"
+        );
+        // The disallowed cross-crate {f2,f3} pair must be ABSENT.
+        assert!(
+            !pairs.contains(&("f2".to_string(), "f3".to_string())),
+            "the cross-crate pair must be dropped under across_crate=false, got {pairs:?}"
+        );
+
+        // Soundness: EVERY emitted pair is scope-allowed. Map qname ->
+        // location to re-check the predicate on each surviving pair.
+        let loc_of = |name: &str| -> StructuralLocation {
+            forms
+                .iter()
+                .find(|f| f.qualified_name == vec![name.to_string()])
+                .map(|f| f.location.clone())
+                .expect("emitted pair member must exist in the input")
+        };
+        for (a, b) in &pairs {
+            assert!(
+                scope.allows(&loc_of(a), &loc_of(b)),
+                "emitted pair ({a},{b}) must be scope-allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn complement_within_module_false_drops_pass2_same_module_pair() {
+        // Module axis is independent of crate_aware — a same-module near
+        // pair is dropped under within_module=false even with crate-ids
+        // present.
+        let forms = vec![
+            make_located_form(&[1, 2, 3, 4], Some("k"), "m", "a", 4),
+            make_located_form(&[1, 2, 3, 4, 5], Some("k"), "m", "b", 5),
+        ];
+        let scope = ResolvedScope {
+            within_module: false,
+            ..ResolvedScope::default()
+        };
+        let scoped = compare_with(&forms, 0.7, &scoped_ctx(scope));
+        assert!(
+            scoped.is_empty(),
+            "within_module=false must drop the same-module near pair, got {scoped:?}"
+        );
+    }
+
+    #[test]
+    fn pass1_scope_subpartition_membership_stable_across_permutation() {
+        // Three byte-identical forms across two crates:
+        //   a,b in crate_a (same module); c in crate_b.
+        // Under across_crate=false: a-b allowed, a-c & b-c disallowed.
+        // So the ONLY emitted Pass 1 group is {a,b}; c stays unclaimed
+        // (its equal partners are all cross-crate -> Pass 2 gate skips
+        // them too). The sub-partition membership must be identical
+        // regardless of input order.
+        let scope = ResolvedScope {
+            across_crate: false,
+            ..ResolvedScope::default()
+        };
+        let canonical = |ms: &[Match]| -> Vec<Vec<String>> {
+            let mut groups: Vec<Vec<String>> = ms
+                .iter()
+                .map(|m| {
+                    let mut names: Vec<String> =
+                        m.forms.iter().map(|f| f.file.to_string()).collect();
+                    names.sort();
+                    names
+                })
+                .collect();
+            groups.sort();
+            groups
+        };
+
+        let forward = vec![
+            make_located_form(&[1, 2, 3], Some("crate_a"), "m", "a", 3),
+            make_located_form(&[1, 2, 3], Some("crate_a"), "m", "b", 3),
+            make_located_form(&[1, 2, 3], Some("crate_b"), "m", "c", 3),
+        ];
+        let permuted = vec![forward[2].clone(), forward[0].clone(), forward[1].clone()];
+
+        let f = compare_with(&forward, 0.85, &scoped_ctx(scope));
+        let p = compare_with(&permuted, 0.85, &scoped_ctx(scope));
+
+        assert_eq!(
+            canonical(&f),
+            vec![vec!["a".to_string(), "b".to_string()]],
+            "only the same-crate {{a,b}} group should emit under across_crate=false: {f:?}"
+        );
+        assert_eq!(
+            canonical(&f),
+            canonical(&p),
+            "Pass 1 scope sub-partition membership must be permutation-stable"
+        );
+    }
+
+    #[test]
+    fn pass1_scope_subpartition_carves_two_same_crate_groups() {
+        // Four byte-identical forms: {a,b} in crate_a, {c,d} in crate_b.
+        // Under across_crate=false the two same-crate pairs are allowed
+        // but cross-crate pairs are not, so the equal-set group carves
+        // into TWO score-1.0 cliques ({a,b} and {c,d}) — edge
+        // conservation across the scope sub-partition.
+        let scope = ResolvedScope {
+            across_crate: false,
+            ..ResolvedScope::default()
+        };
+        let forms = vec![
+            make_located_form(&[5, 6, 7], Some("crate_a"), "m", "a", 3),
+            make_located_form(&[5, 6, 7], Some("crate_a"), "m", "b", 3),
+            make_located_form(&[5, 6, 7], Some("crate_b"), "m", "c", 3),
+            make_located_form(&[5, 6, 7], Some("crate_b"), "m", "d", 3),
+        ];
+        let matches = compare_with(&forms, 0.85, &scoped_ctx(scope));
+        assert_eq!(
+            matches.len(),
+            2,
+            "two same-crate exact groups must carve out independently, got {matches:?}"
+        );
+        for m in &matches {
+            assert_eq!(m.forms.len(), 2, "each scope-allowed group is a 2-clique");
+            assert!(
+                (m.score - 1.0).abs() < f64::EPSILON,
+                "exact group keeps score 1.0"
+            );
+            assert_eq!(m.tier, Tier::AutoRefactor);
+        }
+        // Every emitted pair is same-crate (scope-allowed).
+        for (a, b) in emitted_pairs(&matches) {
+            let same = (a == "a" && b == "b") || (a == "c" && b == "d");
+            assert!(same, "emitted pair ({a},{b}) must be a same-crate pair");
+        }
+    }
+
+    #[test]
+    fn crate_aware_false_noops_crate_axes_in_engine() {
+        // End-to-end through the engine: two byte-identical forms with NO
+        // crate-id (single-dir run) and across_crate=false BUT
+        // crate_aware=false. The crate axis no-ops, so the pair (same
+        // module) survives via within_crate/within_module — it is NOT
+        // dropped. This is the single-dir guard exercised at the engine
+        // boundary, not just on the predicate.
+        let forms = vec![
+            make_located_form(&[1, 2, 3], None, "m", "a", 3),
+            make_located_form(&[1, 2, 3], None, "m", "b", 3),
+        ];
+        let scope = ResolvedScope {
+            within_crate: false,
+            across_crate: false,
+            crate_aware: false,
+            ..ResolvedScope::default()
+        };
+        let matches = compare_with(&forms, 0.85, &scoped_ctx(scope));
+        assert_eq!(
+            matches.len(),
+            1,
+            "crate_aware=false must no-op the crate axes so the None-id pair survives, got {matches:?}"
+        );
+    }
+
+    // --- Scope sub-partition helper mutation hardening (dry-rs#124) ---
+
+    #[test]
+    fn cluster_is_one_scope_allowed_clique_skips_self_pairs_and_reads_real_pairs() {
+        // Pins `cluster_is_one_scope_allowed_clique` against BOTH the
+        // `-> false` whole-fn mutant and the `cluster[pos + 1..]` range
+        // `+ -> *` mutant.
+        //
+        // Scope: within_crate=false (same-crate pairs disallowed) but
+        // across_crate=true (cross-crate allowed). Cluster: two equal-set
+        // forms in DIFFERENT crates.
+        //   - The only REAL pair (a,b) is cross-crate -> ALLOWED, so the
+        //     correct fn returns `true` (kills `-> false`, which returns
+        //     `false`).
+        //   - The `+ -> *` mutant turns `cluster[0 + 1..]` into
+        //     `cluster[0 * 1..]` = `cluster[0..]`, which re-checks the
+        //     SELF pair (a,a): same crate -> within_crate=false ->
+        //     DISALLOWED -> the mutant returns `false`. The strict `+ 1`
+        //     skips self-pairs, so only the mutant trips.
+        let scope = ResolvedScope {
+            within_crate: false,
+            across_crate: true,
+            within_module: true,
+            across_module: true,
+            crate_aware: true,
+        };
+        let forms = vec![
+            make_located_form(&[1, 2, 3], Some("crate_a"), "m", "a", 3),
+            make_located_form(&[1, 2, 3], Some("crate_b"), "m", "b", 3),
+        ];
+        assert!(
+            cluster_is_one_scope_allowed_clique(&forms, scope, &[0, 1]),
+            "the lone cross-crate pair is allowed (within_crate=false only \
+             gates SAME-crate pairs); self-pairs must be skipped by `pos + 1`"
+        );
+
+        // Contrast: a SAME-crate cluster under within_crate=false is NOT a
+        // scope-allowed clique (the real pair is disallowed) -> false.
+        let same_crate = vec![
+            make_located_form(&[4, 5, 6], Some("crate_a"), "m", "c", 3),
+            make_located_form(&[4, 5, 6], Some("crate_a"), "m", "d", 3),
+        ];
+        assert!(
+            !cluster_is_one_scope_allowed_clique(&same_crate, scope, &[0, 1]),
+            "a same-crate real pair is disallowed under within_crate=false"
+        );
+    }
+
+    #[test]
+    fn mark_emitted_members_claimed_requires_exact_file_and_span_identity() {
+        // Pins `mark_emitted_members_claimed`'s identity predicate
+        // (`f.file == want.file && f.span == want.span`) against the
+        // `== -> !=` (file) and `&& -> ||` mutants.
+        //
+        // Two forms share the SAME synthetic file ("shared") but carry
+        // DISTINCT spans. The emitted match contains ONLY form 0's
+        // FormRef. The correct predicate claims EXACTLY form 0 (file AND
+        // span match). The mutants diverge:
+        //   - `&& -> ||`: form 1 matches on file alone (same "shared")
+        //     -> wrongly claimed too -> claimed = {0, 1}.
+        //   - `== -> !=` (file): form 0's `file != want.file` is false
+        //     -> form 0 NOT claimed -> claimed = {} (or {1}).
+        let span0 = Span::try_new(LineColumn::new(1, 0), LineColumn::new(2, 0)).unwrap();
+        let span1 = Span::try_new(LineColumn::new(10, 0), LineColumn::new(11, 0)).unwrap();
+        let forms = vec![
+            located_form_with_span(&[1, 2, 3], "shared", span0, 3),
+            located_form_with_span(&[1, 2, 3], "shared", span1, 3),
+        ];
+        let resolver = SyntheticPathResolver;
+        // Emitted: one match carrying only form 0's projected FormRef.
+        let emitted = vec![Match::new(
+            vec![form_ref_for(&forms[0], 0, &resolver)],
+            1.0,
+            Tier::AutoRefactor,
+        )];
+
+        let mut claimed: HashSet<usize> = HashSet::new();
+        mark_emitted_members_claimed(&emitted, &[0, 1], &forms, &resolver, &mut claimed);
+
+        assert!(
+            claimed.contains(&0),
+            "form 0 (exact file+span identity) must be claimed (kills `== -> !=` on file)"
+        );
+        assert!(
+            !claimed.contains(&1),
+            "form 1 shares the file but NOT the span -> must NOT be claimed \
+             (kills `&& -> ||`)"
+        );
+    }
+
+    /// Build a located form with an explicit span (so two forms can share
+    /// a synthetic file path via qualified name while carrying distinct
+    /// `(file, span)` identities). Crate/module default to the
+    /// single-location group used by the claim-identity test.
+    fn located_form_with_span(
+        fps: &[u64],
+        qname: &str,
+        span: Span,
+        node_count: u32,
+    ) -> NormalizedForm {
+        use crate::domain::FormKind;
+        NormalizedForm::with_context(
+            FormKind::Production,
+            fps.iter().copied().collect(),
+            Vec::new(),
+            vec![qname.to_string()],
+            span,
+            node_count,
+            1,
+        )
     }
 }

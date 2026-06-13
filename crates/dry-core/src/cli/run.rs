@@ -30,20 +30,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap_complete::Shell;
 
 use super::AnalysisConfig;
-use super::ResolvedScope;
 use super::adapter_meta::AdapterMeta;
 use super::args::{Args, Command, Format, ThresholdMode};
 use super::build_command::build_command;
 use super::effective::EffectiveConfig;
 use crate::adapters::config::{ConfigError, discover_config, load_config};
-use crate::adapters::reporters::json::{Envelope, EnvelopeMeta, ViewProjection};
+use crate::adapters::reporters::json::{Envelope, EnvelopeMeta, ScopeApplied, ViewProjection};
 use crate::adapters::reporters::{markdown, text};
 use crate::adapters::source::{
     CrateIdResolver, SourceError, SourceOutcome, SourceWarning, enumerate,
 };
-use crate::comparison::{antiunify, compare_with_paths};
+use crate::comparison::{antiunify, compare_with_paths_scoped};
 use crate::domain::{
-    Config, FilePath, Match, NormalizedForm, NormalizedTree, Report, Span, Summary, Template,
+    Config, FilePath, Match, NormalizedForm, NormalizedTree, Report, ResolvedScope, Span, Summary,
+    Template,
 };
 use crate::ports::{NormalizerPort, TreeDeriverPort};
 
@@ -176,8 +176,10 @@ fn run_with_args<N: NormalizerPort + TreeDeriverPort + Default>(
 
     // Apply precedence: CLI > config > AdapterMeta default > compiled
     // fallback (per ADR D3). The merger consumes args, the optional
-    // file config, AND the adapter meta.
-    let config = merge_effective_inputs(meta, file_config.as_ref(), args);
+    // file config, AND the adapter meta. Mutable so the run loop can
+    // overwrite `scope.crate_aware` with the runtime fact once crate-ids
+    // are enriched (dry-rs#124).
+    let mut config = merge_effective_inputs(meta, file_config.as_ref(), args);
 
     // Enumerate the source tree. The walker rejects empty roots with
     // `NoRoots`; clap defaults `paths` to `.` so this is unreachable
@@ -210,13 +212,27 @@ fn run_with_args<N: NormalizerPort + TreeDeriverPort + Default>(
     // `module_path`.
     enrich_crate_ids(&mut forms, &form_paths, &config);
 
+    // Relatedness-scoping `crate_aware` runtime fact (dry-rs#124). The
+    // merger left `config.scope.crate_aware` at its `true` default; flip
+    // it to the RUNTIME truth now that crate-ids are enriched — `true`
+    // iff ANY form resolved a crate-id this run. When `false` (single-dir
+    // run, no `Cargo.toml`), `ResolvedScope::allows` no-ops the two crate
+    // axes so the run never silently drops every pair. Stored on `config`
+    // as the single source of truth: the comparison engine prunes with
+    // it AND the JSON envelope echoes it via `Envelope.scope`.
+    config.scope.crate_aware = forms.iter().any(|f| f.location.crate_id.is_some());
+
     // Compare. The comparison engine is `debug_assert!`-only on
     // threshold range; clap's value parser is the production-build
-    // input-validation boundary. We use the path-aware entry point so
-    // each emitted `FormRef.file` carries the real source path (not
-    // the qualified-name fallback that the library-facing `compare()`
-    // synthesizes).
-    let mut matches = compare_with_paths(&forms, &form_paths, config.threshold);
+    // input-validation boundary. We use the scoped, path-aware entry
+    // point so each emitted `FormRef.file` carries the real source path
+    // (not the qualified-name fallback that the library-facing
+    // `compare()` synthesizes) AND the relatedness-scoping predicate
+    // prunes pairs by crate / module boundary (Pass 1 + Pass 2). The
+    // all-true default scope is a no-op (byte-identical to the
+    // pre-scoping engine), so an unscoped run is unaffected.
+    let mut matches =
+        compare_with_paths_scoped(&forms, &form_paths, config.threshold, config.scope);
 
     // Anti-unification overlay (epic #107, dry-rs#135). For every
     // MULTI-member match, re-read each cluster member's source file
@@ -605,7 +621,7 @@ fn emit_warnings(outcome: &SourceOutcome) {
 ///
 /// Returns parallel arrays `(forms, paths)` indexed identically:
 /// `paths[i]` is the source [`FilePath`] of `forms[i]`. The CLI run
-/// loop threads both into [`compare_with_paths`] so the emitted
+/// loop threads both into [`compare_with_paths_scoped`] so the emitted
 /// matches carry real paths on each [`crate::domain::FormRef`].
 fn normalize_files<N: NormalizerPort>(
     normalizer: &N,
@@ -1093,10 +1109,34 @@ fn print_json_envelope<N: NormalizerPort>(
         // preserving the v0.1 wire-envelope snapshot.
         title: config.title.clone(),
         subtitle: config.subtitle.clone(),
+        // Relatedness-scoping echo (dry-rs#124, Track B). Mirrors the
+        // resolved predicate the comparison engine pruned with — the four
+        // axes plus the runtime `crate_aware` flag — so reporters render a
+        // read-only scope banner without re-deriving it. Always populated
+        // by the run loop (the predicate is always resolved); the `None`
+        // omission case exists for the library-facing `Envelope::new`
+        // constructor and unit-test envelopes, which keep the v0.1
+        // snapshot byte-identical.
+        scope: Some(scope_applied(config)),
     };
     match serde_json::to_string_pretty(&envelope) {
         Ok(json) => println!("{json}"),
         Err(err) => eprintln!("error: failed to serialize JSON envelope: {err}"),
+    }
+}
+
+/// Project the run's resolved [`ResolvedScope`] onto the wire
+/// [`ScopeApplied`] echo (dry-rs#124). A flat field-for-field copy of the
+/// five axes the comparison engine pruned with; reporters read it to
+/// render a read-only scope banner.
+const fn scope_applied(config: &AnalysisConfig) -> ScopeApplied {
+    let s = config.scope;
+    ScopeApplied {
+        within_crate: s.within_crate,
+        across_crate: s.across_crate,
+        within_module: s.within_module,
+        across_module: s.across_module,
+        crate_aware: s.crate_aware,
     }
 }
 
