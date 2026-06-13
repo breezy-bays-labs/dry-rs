@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc ddc22d82a901101d9b565ed3ed27ea03295b9c32f8da7226719331ff3e78d5cc # shrinks to members = [NormalizedTree { label: "L0", fp: 2, children: [], leaf: Some(LeafToken { class: Ident, lexeme: "a" }), span: Span { start: LineColumn { line: 1, column: 0 }, end: LineColumn { line: 1, column: 0 } } }, NormalizedTree { label: "L0", fp: 2, children: [], leaf: Some(LeafToken { class: Ident, lexeme: "b" }), span: Span { start: LineColumn { line: 1, column: 0 }, end: LineColumn { line: 1, column: 0 } } }]
