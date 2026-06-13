@@ -77,6 +77,7 @@ impl StructuralLocation {
     /// Not `const fn`: `Vec::is_empty` only became const-stable in Rust
     /// 1.87, but the workspace MSRV is pinned at 1.85.
     #[must_use]
+    #[inline]
     pub fn is_default(&self) -> bool {
         self.crate_id.is_none() && self.module_path.is_empty()
     }
@@ -229,6 +230,7 @@ impl NormalizedForm {
     /// the comparison engine behaves identically whether or not it is
     /// set.
     #[must_use]
+    #[inline]
     pub fn with_location(mut self, location: StructuralLocation) -> Self {
         self.location = location;
         self
@@ -471,6 +473,11 @@ mod tests {
         let json = serde_json::to_string(&crate_only).unwrap();
         assert!(json.contains("crate_id"));
         assert!(!json.contains("module_path"));
+        assert_eq!(
+            serde_json::from_str::<StructuralLocation>(&json).unwrap(),
+            crate_only,
+            "crate-only location must round-trip"
+        );
         // crate_id None + module_path non-empty → only module_path.
         let module_only = StructuralLocation {
             crate_id: None,
@@ -479,6 +486,11 @@ mod tests {
         let json = serde_json::to_string(&module_only).unwrap();
         assert!(!json.contains("crate_id"));
         assert!(json.contains("module_path"));
+        assert_eq!(
+            serde_json::from_str::<StructuralLocation>(&json).unwrap(),
+            module_only,
+            "module-only location must round-trip"
+        );
     }
 
     // ---- NormalizedForm.location wire gate (PR 8 / #122) ----
