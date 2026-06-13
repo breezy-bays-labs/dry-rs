@@ -342,15 +342,51 @@ fn lcs_children(nodes: &[&NormalizedTree], alloc: &mut HoleAllocator) -> Vec<Tem
 }
 
 /// The ordered list of child fingerprints present (in order) in EVERY
-/// member — the alignment anchors. Computed by folding the first
-/// member's child-fp sequence against each other member via a longest-
-/// common-subsequence intersection, so the result is a subsequence of
-/// every member's child order (deterministic, position-stable).
+/// member — the alignment anchors. Computed by folding each member's
+/// child-fp sequence through a pairwise longest-common-subsequence
+/// intersection, so the result is a subsequence of every member's child
+/// order.
+///
+/// # Permutation invariance (property P2, dry-rs#133)
+///
+/// Pairwise LCS is **not associative**: `lcs(lcs(a, b), c)` can differ
+/// from `lcs(lcs(c, b), a)` whenever a child `fp` collides under a
+/// differing-arity alignment. The canonical trigger is the
+/// [`ABSENT_FP`] / fp:0 sentinel value reused as a *real* subtree `fp`
+/// (so an "absent" slot and a present child share the key the LCS
+/// matches on) — the LCS tie-break then picks a different anchor
+/// depending on which member seeds the fold. Folding in raw `members`
+/// order therefore leaks the input order into the emitted [`Template`],
+/// breaking P2 (it tripped randomly on `main` for clusters carrying an
+/// fp:0 collision plus an arity mismatch).
+///
+/// The fix folds the members' child-fp sequences in a CANONICAL
+/// intrinsic order — the sequences themselves sorted lexicographically
+/// over their `fp`s — rather than input order. Sorting is the only step
+/// that touches order; the caller ([`lcs_children`]) still walks the
+/// ORIGINAL `nodes` slice, so each hole's substitutions stay
+/// index-joined with `members`. Because every permutation of the same
+/// member set sorts to the identical sequence-of-sequences, the fold —
+/// and hence the anchor set — is a pure function of the member multiset,
+/// never the slice order. (P2 needs permutation invariance, which
+/// sorting gives directly; it does NOT need LCS associativity, which no
+/// pairwise fold can provide.) The result is still a common subsequence
+/// of every member, so reconstruction (property P1) is unaffected.
 fn common_anchor_fps(nodes: &[&NormalizedTree]) -> Vec<u64> {
-    let mut anchors: Vec<u64> = nodes[0].children.iter().map(|c| c.fp).collect();
-    for node in &nodes[1..] {
-        let other: Vec<u64> = node.children.iter().map(|c| c.fp).collect();
-        anchors = lcs_fp_sequence(&anchors, &other);
+    let mut child_fp_seqs: Vec<Vec<u64>> = nodes
+        .iter()
+        .map(|n| n.children.iter().map(|c| c.fp).collect())
+        .collect();
+    // Canonical fold order: the child-fp sequences sorted as `Vec<u64>`
+    // (lexicographic over the intrinsic `fp`s). Any permutation of the
+    // members yields the same sorted multiset ⟹ the same fold result.
+    child_fp_seqs.sort_unstable();
+    let (seed, rest) = child_fp_seqs
+        .split_first()
+        .expect("align_many guarantees >= 2 members");
+    let mut anchors = seed.clone();
+    for other in rest {
+        anchors = lcs_fp_sequence(&anchors, other);
         if anchors.is_empty() {
             break;
         }
