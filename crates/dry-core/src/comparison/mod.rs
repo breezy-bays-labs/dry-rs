@@ -2560,4 +2560,116 @@ mod tests {
             "residual members must be identity-ordered (b_mid before c_tail): {residual:?}"
         );
     }
+
+    /// Overlapping-adjacency fixture for the `best_clique_candidate`
+    /// membership guard (dry-rs#116). A node X is carved into an EARLIER
+    /// clique A, then is adjacent (at a lower score) to every member of
+    /// a LATER-seeded clique B. The `clique_of.contains_key(&cand)` arm
+    /// of the skip guard is the only thing keeping X out of B.
+    ///
+    /// Layout (threshold 0.3): P,Q,X share `1..=20`; X additionally
+    /// carries the bridge `100..=119` that R,S share (`100..=115`). P,Q
+    /// have NO bridge element, so they are NOT adjacent to R,S — X is the
+    /// UNIQUE bridge between the two cliques.
+    ///
+    /// Edge scores (descending):
+    ///   P-Q 0.913 (A seed) > R-S 0.895 (B seed)
+    ///     > P-X = Q-X 0.465 (X joins A) > R-X = S-X 0.372 (X bridges B).
+    ///
+    /// Carving: A={P,Q,X} seeds at P-Q, admits X. R-S then seeds B; X is
+    /// adjacent to both R and S, so it is a growth candidate — but X is
+    /// already in `clique_of` (it was carved into A), so the OR-guard
+    /// skips it and B stays {R,S}. R-X / S-X emit as cross-clique
+    /// residual pairs.
+    fn overlapping_bridge_forms() -> (Vec<NormalizedForm>, Vec<FilePath>) {
+        let p: Vec<u64> = (1..=20).chain([901, 902]).collect();
+        let q: Vec<u64> = (1..=20).chain([901, 903]).collect();
+        let x: Vec<u64> = (1..=20).chain(100..=119).chain([904]).collect();
+        let r: Vec<u64> = (100..=115).chain([2001, 2002]).collect();
+        let s: Vec<u64> = (100..=115).chain([2001, 2003]).collect();
+        let forms = vec![
+            make_form(&p, 22),
+            make_form(&q, 22),
+            make_form(&x, 41),
+            make_form(&r, 18),
+            make_form(&s, 18),
+        ];
+        let paths = ["p.rs", "q.rs", "x.rs", "r.rs", "s.rs"]
+            .iter()
+            .map(|n| FilePath::from(std::path::PathBuf::from(n)))
+            .collect();
+        (forms, paths)
+    }
+
+    #[test]
+    fn carved_node_is_not_re_admitted_to_a_later_clique() {
+        // Kills `774 || -> &&` (the `clique_of.contains_key(&cand) ||
+        // clique.contains(&cand)` membership skip guard in
+        // `best_clique_candidate`). When B={R,S} grows, X is adjacent to
+        // both members and would join — but X is already carved into A,
+        // so it is in `clique_of` (NOT in the growing clique B). The
+        // correct OR-guard skips X via `clique_of.contains_key`. The
+        // `&&` mutant requires BOTH conditions, so X (in clique_of but
+        // not in B) is NOT skipped -> X is wrongly admitted to B,
+        // appearing in TWO n-ary cliques and stealing the R-X / S-X
+        // residual edges.
+        //
+        // The existing disjoint-triangle / K4-minus-edge fixtures cannot
+        // catch this: they never present a candidate that is in
+        // `clique_of` but absent from the current clique (a candidate
+        // already in the current clique is independently rejected by
+        // `min_edge_into_clique` returning None for the self-edge, which
+        // masks the `&&` flip). Overlapping adjacency is required.
+        let (forms, paths) = overlapping_bridge_forms();
+        let matches = compare_with_paths(&forms, &paths, 0.3);
+
+        let members_of = |m: &Match| -> Vec<String> {
+            let mut v: Vec<String> = m.forms.iter().map(|f| f.file.to_string()).collect();
+            v.sort();
+            v
+        };
+
+        // Exactly one >=3-member clique: {P,Q,X}. The `&&` mutant emits a
+        // SECOND ({R,S,X}).
+        let nary: Vec<Vec<String>> = matches
+            .iter()
+            .filter(|m| m.forms.len() >= 3)
+            .map(members_of)
+            .collect();
+        assert_eq!(
+            nary.len(),
+            1,
+            "exactly one n-ary clique expected ({{P,Q,X}}); the && mutant \
+             also emits {{R,S,X}}: {matches:?}"
+        );
+        assert_eq!(nary[0], vec!["p.rs", "q.rs", "x.rs"]);
+
+        // X (x.rs) must appear in exactly ONE n-ary clique — never two.
+        let xt = "x.rs".to_string();
+        let x_in_nary = matches
+            .iter()
+            .filter(|m| m.forms.len() >= 3 && members_of(m).contains(&xt))
+            .count();
+        assert_eq!(
+            x_in_nary, 1,
+            "a carved node must not be re-admitted to a second clique: {matches:?}"
+        );
+
+        // {R,S} stays a binary clique (not absorbed into {R,S,X}); R-X
+        // and S-X survive as cross-clique residual pairs.
+        let has_pair = |a: &str, b: &str| {
+            matches
+                .iter()
+                .any(|m| m.forms.len() == 2 && members_of(m) == vec![a.to_string(), b.to_string()])
+        };
+        assert!(
+            has_pair("r.rs", "s.rs"),
+            "R-S must remain a binary clique, not grow to {{R,S,X}}: {matches:?}"
+        );
+        assert!(
+            has_pair("r.rs", "x.rs") && has_pair("s.rs", "x.rs"),
+            "R-X and S-X must emit as residual pairs (X absorbed into B \
+             under the mutant would consume them): {matches:?}"
+        );
+    }
 }
