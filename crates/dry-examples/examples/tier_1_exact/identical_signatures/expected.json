@@ -33,10 +33,247 @@
             }
           }
         ],
-        "rename_count": null,
-        "rename_density": null,
+        "rename_count": 0,
+        "rename_density": 0.0,
         "score": 0.8571428571428571,
-        "structural_score": null,
+        "structural_score": 0.8571428571428571,
+        "template": {
+          "holes": [
+            {
+              "divergence": {
+                "differing": 1,
+                "distinct": 2,
+                "distinct_values": [
+                  {
+                    "count": 1,
+                    "fp": 12566113310452297225,
+                    "lexeme": "increment"
+                  },
+                  {
+                    "count": 1,
+                    "fp": 15674045663970855387,
+                    "lexeme": "add_one"
+                  }
+                ],
+                "members": 2
+              },
+              "id": {
+                "index": 0
+              },
+              "kind": "sub_expr",
+              "substitutions": [
+                {
+                  "elements": [
+                    {
+                      "fp": 15674045663970855387,
+                      "lexeme": "add_one",
+                      "span": {
+                        "end": {
+                          "column": 1,
+                          "line": 10
+                        },
+                        "start": {
+                          "column": 0,
+                          "line": 6
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "elements": [
+                    {
+                      "fp": 12566113310452297225,
+                      "lexeme": "increment",
+                      "span": {
+                        "end": {
+                          "column": 1,
+                          "line": 16
+                        },
+                        "start": {
+                          "column": 0,
+                          "line": 12
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "root": {
+            "children": [
+              {
+                "children": [
+                  {
+                    "index": 0,
+                    "node": "hole"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "_",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "PatIdent",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [
+                              {
+                                "children": [],
+                                "label": "ident",
+                                "leaf_lexeme": "i32",
+                                "node": "fixed"
+                              }
+                            ],
+                            "label": "Path",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "TypePath",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "TypedArg",
+                    "node": "fixed"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "i32",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "Path",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "TypePath",
+                    "node": "fixed"
+                  }
+                ],
+                "label": "Sig",
+                "node": "fixed"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "children": [],
+                        "label": "keyword",
+                        "leaf_lexeme": "let",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "_",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "PatIdent",
+                        "node": "fixed"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "punct",
+                            "leaf_lexeme": "+",
+                            "node": "fixed"
+                          },
+                          {
+                            "children": [
+                              {
+                                "children": [],
+                                "label": "ident",
+                                "leaf_lexeme": "_",
+                                "node": "fixed"
+                              }
+                            ],
+                            "label": "ExprLocal",
+                            "node": "fixed"
+                          },
+                          {
+                            "children": [
+                              {
+                                "children": [],
+                                "label": "literal",
+                                "leaf_lexeme": "1",
+                                "node": "fixed"
+                              }
+                            ],
+                            "label": "ExprLit",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "ExprBinary",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "StmtLet",
+                    "node": "fixed"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "println!",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "MacroCall",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "StmtMacro",
+                    "node": "fixed"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "label": "ident",
+                            "leaf_lexeme": "_",
+                            "node": "fixed"
+                          }
+                        ],
+                        "label": "ExprLocal",
+                        "node": "fixed"
+                      }
+                    ],
+                    "label": "StmtExpr",
+                    "node": "fixed"
+                  }
+                ],
+                "label": "Block",
+                "node": "fixed"
+              }
+            ],
+            "label": "Form",
+            "node": "fixed"
+          }
+        },
         "tier": "review_first"
       }
     ],
