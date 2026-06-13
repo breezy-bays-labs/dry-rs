@@ -235,6 +235,87 @@ fn threshold_mode_accepts_lenient() {
     assert_eq!(args.threshold_mode, Some(ThresholdMode::Lenient));
 }
 
+// =============================================================================
+// dry-rs#142 — paired scope flags (`--[no-]within-crate` etc.)
+// =============================================================================
+//
+// Each axis is a tri-state `Option<bool>`: `--within-crate` -> Some(true),
+// `--no-within-crate` -> Some(false), neither -> None (the precedence
+// merger then consults [scope]/[rust] in dry.toml, falling back to true).
+// NO clap default — a default would mask the config tier (the
+// clap-defaults-mask rule).
+
+#[test]
+fn scope_flags_default_to_none_when_cli_unset() {
+    let args = parse_test_args(&[]).expect("must parse");
+    assert_eq!(args.within_crate, None);
+    assert_eq!(args.across_crate, None);
+    assert_eq!(args.within_module, None);
+    assert_eq!(args.across_module, None);
+}
+
+#[test]
+fn within_crate_flag_sets_some_true() {
+    let args = parse_test_args(&["--within-crate"]).expect("--within-crate parses");
+    assert_eq!(args.within_crate, Some(true));
+}
+
+#[test]
+fn no_within_crate_flag_sets_some_false() {
+    let args = parse_test_args(&["--no-within-crate"]).expect("--no-within-crate parses");
+    assert_eq!(args.within_crate, Some(false));
+}
+
+#[test]
+fn across_crate_flag_sets_some_true() {
+    let args = parse_test_args(&["--across-crate"]).expect("--across-crate parses");
+    assert_eq!(args.across_crate, Some(true));
+}
+
+#[test]
+fn no_across_crate_flag_sets_some_false() {
+    let args = parse_test_args(&["--no-across-crate"]).expect("--no-across-crate parses");
+    assert_eq!(args.across_crate, Some(false));
+}
+
+#[test]
+fn within_module_flag_sets_some_true() {
+    let args = parse_test_args(&["--within-module"]).expect("--within-module parses");
+    assert_eq!(args.within_module, Some(true));
+}
+
+#[test]
+fn no_within_module_flag_sets_some_false() {
+    let args = parse_test_args(&["--no-within-module"]).expect("--no-within-module parses");
+    assert_eq!(args.within_module, Some(false));
+}
+
+#[test]
+fn across_module_flag_sets_some_true() {
+    let args = parse_test_args(&["--across-module"]).expect("--across-module parses");
+    assert_eq!(args.across_module, Some(true));
+}
+
+#[test]
+fn no_across_module_flag_sets_some_false() {
+    let args = parse_test_args(&["--no-across-module"]).expect("--no-across-module parses");
+    assert_eq!(args.across_module, Some(false));
+}
+
+#[test]
+fn paired_scope_flag_last_one_wins() {
+    // `overrides_with` makes the later flag on the command line win when
+    // both members of a pair are supplied. `--within-crate
+    // --no-within-crate` resolves to the negative (last specified).
+    let args = parse_test_args(&["--within-crate", "--no-within-crate"])
+        .expect("conflicting pair parses (last wins)");
+    assert_eq!(args.within_crate, Some(false));
+
+    let args = parse_test_args(&["--no-within-crate", "--within-crate"])
+        .expect("conflicting pair parses (last wins)");
+    assert_eq!(args.within_crate, Some(true));
+}
+
 #[test]
 fn completions_flag_accepts_known_shells() {
     // `--completions <SHELL>` generates a completion script. Validate

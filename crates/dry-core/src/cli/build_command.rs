@@ -137,6 +137,41 @@ pub fn build_command(meta: &AdapterMeta) -> Command {
                     "Path to dry.toml; bypasses auto-discovery (missing-is-error)",
                 ),
         )
+        // New at dry-rs#142: paired relatedness-scoping flags. Each axis
+        // is a tri-state `--<axis>` / `--no-<axis>` pair that
+        // `overrides_with` its partner (last on the CLI wins).
+        // `Args::from_matches` collapses each pair to `Option<bool>`. NO
+        // clap default on either member — absence at the CLI means "let
+        // the precedence merger consult [scope]/[rust] in dry.toml",
+        // falling back to `true` (the clap-defaults-mask rule).
+        .args(scope_pair(
+            "within_crate",
+            "within-crate",
+            "no_within_crate",
+            "no-within-crate",
+            "Cluster duplication WITHIN the same crate / package (default true; negate with --no-within-crate)",
+        ))
+        .args(scope_pair(
+            "across_crate",
+            "across-crate",
+            "no_across_crate",
+            "no-across-crate",
+            "Cluster duplication ACROSS different crates (default true; negate with --no-across-crate)",
+        ))
+        .args(scope_pair(
+            "within_module",
+            "within-module",
+            "no_within_module",
+            "no-within-module",
+            "Cluster duplication WITHIN the same module path (default true; negate with --no-within-module)",
+        ))
+        .args(scope_pair(
+            "across_module",
+            "across-module",
+            "no_across_module",
+            "no-across-module",
+            "Cluster duplication ACROSS different modules (default true; negate with --no-across-module)",
+        ))
         .subcommand(subcommand_with_paths(
             "report",
             "Full duplication report (default — invokable without an explicit subcommand)",
@@ -175,6 +210,43 @@ pub fn build_command(meta: &AdapterMeta) -> Command {
                         ),
                 ),
         )
+}
+
+/// Build a paired `--<long>` / `--no-<long>` boolean flag set for one
+/// relatedness-scoping axis (dry-rs#142).
+///
+/// Both flags are `ArgAction::SetTrue`, `global(true)` (so they may
+/// appear before or after the subcommand), and `overrides_with` each
+/// other so the LAST one on the command line wins. NEITHER carries a
+/// clap default — `Args::from_matches::resolve_paired_bool` collapses
+/// the pair to `Option<bool>`, and a default would mask the config tier
+/// (the clap-defaults-mask rule).
+///
+/// Parameters are all `&'static str` (clap 4's `Id` / `Str` builders
+/// require static or interned strings): `id` / `long` are the positive
+/// flag's arg id + `--<long>`; `neg_id` / `neg_long` are the negative
+/// flag's arg id + `--<neg_long>`. Only the positive flag carries
+/// `help` — the negative is hidden so `--help` shows one entry per axis.
+fn scope_pair(
+    id: &'static str,
+    long: &'static str,
+    neg_id: &'static str,
+    neg_long: &'static str,
+    help: &'static str,
+) -> [Arg; 2] {
+    let positive = Arg::new(id)
+        .long(long)
+        .global(true)
+        .action(ArgAction::SetTrue)
+        .overrides_with(neg_id)
+        .help(help);
+    let negative = Arg::new(neg_id)
+        .long(neg_long)
+        .global(true)
+        .action(ArgAction::SetTrue)
+        .overrides_with(id)
+        .hide(true);
+    [positive, negative]
 }
 
 /// Build a `report` / `stats` / `check` subcommand carrying an

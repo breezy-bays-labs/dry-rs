@@ -30,6 +30,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap_complete::Shell;
 
 use super::AnalysisConfig;
+use super::ResolvedScope;
 use super::adapter_meta::AdapterMeta;
 use super::args::{Args, Command, Format, ThresholdMode};
 use super::build_command::build_command;
@@ -482,6 +483,18 @@ pub fn merge_effective_inputs(
         .map(|c| EffectiveConfig::resolve(c, meta))
         .unwrap_or_default();
 
+    // Relatedness scoping (dry-rs#142). Overlay the four CLI tri-state
+    // flags onto the cascade-resolved `[scope]` / per-language knobs,
+    // then collapse to a concrete `ResolvedScope`. Per-axis precedence:
+    // CLI `Some` > cascade-resolved `Some` > compiled-in `true`. The
+    // `crate_aware` runtime flag stays at its `true` default here; the
+    // run loop adjusts it once it knows whether ANY form's crate-id was
+    // resolvable this run (PR 11 threads the predicate into the engine).
+    // Computed before the moves below (`extensions` consumes
+    // `resolved.walk.extensions`); `resolve_scope` only reads the Copy
+    // `Option<bool>` scope axes.
+    let scope = resolve_scope(&resolved, args);
+
     // Extensions: resolved > AdapterMeta default. CLI override lands
     // in a future PR (no `--extensions` flag at v0.1).
     let extensions = resolved
@@ -520,7 +533,8 @@ pub fn merge_effective_inputs(
         .with_include_ignored(include_ignored)
         .with_threshold(threshold)
         .with_format(format)
-        .with_threshold_mode(threshold_mode);
+        .with_threshold_mode(threshold_mode)
+        .with_scope(scope);
 
     // Scorecard labels — Option<String> on AnalysisConfig + the
     // wire envelope. Resolved-tier only at v0.1 (no CLI flag).
@@ -532,6 +546,32 @@ pub fn merge_effective_inputs(
     }
 
     analysis
+}
+
+/// Collapse the relatedness-scoping precedence chain into a concrete
+/// [`ResolvedScope`] (dry-rs#142).
+///
+/// Per axis: CLI flag (`Some`) beats the cascade-resolved `[scope]` /
+/// per-language value (`Some`), which beats the compiled-in `true` (the
+/// no-op identity that clusters every pair). The four axes are
+/// independent — each is resolved by the same `cli.or(resolved).unwrap_or(true)`
+/// fold via the [`Args`] tri-state fields.
+///
+/// `crate_aware` is set to `true` here (the [`ResolvedScope::default`]
+/// value); it is a RUNTIME fact, not a config knob — the run loop will
+/// flip it to `false` when no form's crate-id was resolvable this run
+/// (PR 11 of the dry-rs build-plan, when the predicate is threaded into
+/// `compare_with`). Holding it `true` keeps the v0.x merger output
+/// equivalent to the engine's pre-scoping behavior.
+fn resolve_scope(resolved: &EffectiveConfig, args: &Args) -> ResolvedScope {
+    let cascade = &resolved.scope;
+    ResolvedScope {
+        within_crate: args.within_crate.or(cascade.within_crate).unwrap_or(true),
+        across_crate: args.across_crate.or(cascade.across_crate).unwrap_or(true),
+        within_module: args.within_module.or(cascade.within_module).unwrap_or(true),
+        across_module: args.across_module.or(cascade.across_module).unwrap_or(true),
+        crate_aware: true,
+    }
 }
 
 /// Emit any walker warnings to stderr. The walker accumulates these

@@ -257,6 +257,35 @@ pub struct Args {
     /// auto-discovers a `dry.toml` by walking upward from the
     /// analysis-root (per `org/adr-config-file-pattern.md` D2).
     pub config: Option<PathBuf>,
+
+    /// Relatedness-scoping axis: allow clustering pairs whose two forms
+    /// share a crate / package (dry-rs#142).
+    ///
+    /// Tri-state: `Some(true)` from `--within-crate`, `Some(false)` from
+    /// `--no-within-crate`, `None` when NEITHER was passed. `None` lets
+    /// the precedence merger consult `[scope].within_crate` /
+    /// `[rust].within_crate` from `dry.toml`, falling back to `true`
+    /// (the no-op identity). NO clap default — a default would mask the
+    /// config tier (the clap-defaults-mask rule).
+    pub within_crate: Option<bool>,
+
+    /// Relatedness-scoping axis: allow clustering pairs whose two forms
+    /// live in different crates (dry-rs#142). Tri-state from
+    /// `--across-crate` / `--no-across-crate`; see
+    /// [`within_crate`](Self::within_crate).
+    pub across_crate: Option<bool>,
+
+    /// Relatedness-scoping axis: allow clustering pairs whose two forms
+    /// share a module path (dry-rs#142). Tri-state from
+    /// `--within-module` / `--no-within-module`; see
+    /// [`within_crate`](Self::within_crate).
+    pub within_module: Option<bool>,
+
+    /// Relatedness-scoping axis: allow clustering pairs whose two forms
+    /// live in different modules (dry-rs#142). Tri-state from
+    /// `--across-module` / `--no-across-module`; see
+    /// [`within_crate`](Self::within_crate).
+    pub across_module: Option<bool>,
 }
 
 impl Args {
@@ -327,6 +356,16 @@ impl Args {
         let completions = matches.get_one::<Shell>("completions").copied();
         let config = matches.get_one::<PathBuf>("config").cloned();
 
+        // Scope axes are paired `--<axis>` / `--no-<axis>` flags that
+        // `overrides_with` each other (so the last one on the CLI wins).
+        // `resolve_paired_bool` collapses the pair to the tri-state
+        // `Option<bool>` the precedence merger expects: `Some(true)` /
+        // `Some(false)` / `None` (neither passed) — see dry-rs#142.
+        let within_crate = resolve_paired_bool(matches, "within_crate", "no_within_crate");
+        let across_crate = resolve_paired_bool(matches, "across_crate", "no_across_crate");
+        let within_module = resolve_paired_bool(matches, "within_module", "no_within_module");
+        let across_module = resolve_paired_bool(matches, "across_module", "no_across_module");
+
         let command = match matches.subcommand() {
             Some(("report", sub)) => Some(Command::Report {
                 paths: sub
@@ -382,7 +421,37 @@ impl Args {
             include_ignored,
             completions,
             config,
+            within_crate,
+            across_crate,
+            within_module,
+            across_module,
         })
+    }
+}
+
+/// Collapse a `--<axis>` / `--no-<axis>` flag pair into a tri-state
+/// `Option<bool>`.
+///
+/// The two flags are registered as separate `ArgAction::SetTrue` args
+/// that `overrides_with` each other (so the LAST one on the command line
+/// wins — clap clears the earlier flag's value). Resolution:
+///
+/// - positive flag set → `Some(true)`
+/// - negative flag set → `Some(false)`
+/// - neither set → `None`
+///
+/// `None` is the load-bearing case: it signals "the user did not express
+/// a preference at the CLI" so the precedence merger consults the next
+/// tier (`[scope]` / `[rust]` config, then the compiled-in `true`). A
+/// clap default on either flag would collapse `None` into `Some(false)`
+/// and silently mask the config tier (the clap-defaults-mask rule).
+fn resolve_paired_bool(matches: &clap::ArgMatches, pos: &str, neg: &str) -> Option<bool> {
+    if matches.get_flag(pos) {
+        Some(true)
+    } else if matches.get_flag(neg) {
+        Some(false)
+    } else {
+        None
     }
 }
 
