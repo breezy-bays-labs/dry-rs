@@ -192,19 +192,46 @@ The JSON wire envelope is locked at v0.1. Multi-score `Match` shape:
 pub struct Match {
     pub forms: Vec<FormRef>,
     pub score: f64,
-    #[serde(default)] pub structural_score: Option<f64>,
-    #[serde(default)] pub rename_count: Option<u32>,
-    #[serde(default)] pub rename_density: Option<f64>,
+    #[serde(default)] pub structural_score: Option<f64>,           // reserved-then-derived
+    #[serde(default)] pub rename_count: Option<u32>,               // reserved-then-derived
+    #[serde(default)] pub rename_density: Option<f64>,             // reserved-then-derived
     pub tier: Tier,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<Template>,                                // additive (dry-rs#132)
 }
 ```
 
 - **`score: f64`** is a primitive on the wire. Do NOT suggest replacing
   with the `Score` newtype. `Score` is the input-validation gate at
   comparison-engine boundaries; `Match` carries the raw wire value.
-- The three reserved score slots use `#[serde(default)]` ONLY, never
-  `#[serde(skip_serializing_if = "Option::is_none")]`. The v0.1
-  contract requires `null`, not omission.
+- The three reserved score slots use bare `#[serde(default)]` ONLY,
+  never `#[serde(skip_serializing_if = "Option::is_none")]`. The wire
+  contract requires `null`, not omission. **They are now "reserved-
+  then-derived" (dry-rs#132), NOT "null at v0.1":** they emit `null`
+  until a `template` is attached, then `Match::with_template` DERIVES
+  them from the template's holes (`rename_count` = count of pure-rename
+  holes; `rename_density` = `rename_count / total_holes`;
+  `structural_score` = `score` lifted toward 1.0 by the pure-rename
+  fraction, always `>= score`). A populated slot is therefore EXPECTED,
+  not a violation — do NOT flag a non-null reserved slot.
+- **`Match.template: Option<Template>` (dry-rs#132)** is the additive
+  anti-unification field, appended at the END (after `tier`). It uses
+  `#[serde(default, skip_serializing_if = "Option::is_none")]` so it is
+  **OMITTED** when `None` — this keeps the v0.1 wire snapshot
+  byte-identical when the feature is off. **This OMISSION is the
+  OPPOSITE of the reserved-slot null rule above, and is DELIBERATE.** A
+  code-review bot may "helpfully" suggest normalizing one to the other
+  (drop `skip_serializing_if` on `template` to match the reserved slots,
+  or add it to the reserved slots to match `template`) — reject BOTH
+  suggestions. The reserved slots emit `null`; `template` is omitted.
+  The two serde shapes coexist on one struct by design (see the
+  `feedback_bot-suggestion-contract-stricting` memory). `Template` and
+  its component POD types (`TemplateNode`, `HoleId`, `Hole`, `HoleKind`,
+  `Substitution`, `SubElement`, `Divergence`, `DistinctValue`) live in
+  `dry-core::domain::template` (so `domain::Match` can carry a
+  `Template` without `domain` depending on the `comparison` engine that
+  fills it); the LGG algorithm stays in `comparison::antiunify`, which
+  re-exports the types so `comparison::Template` etc. keep resolving.
 - **`NormalizedForm.fingerprint_set: HashSet<u64>`** is intentionally
   raw, not wrapped in `Fingerprint`. The newtype's role is reporter-
   side identity (zero-padded hex display); the set is hot-path input
@@ -294,17 +321,20 @@ pub struct Match {
 
 - Every public **enum** in `dry-core::domain` carries `#[non_exhaustive]`
   (`Tier`, `Severity`, `FormKind`, `NormalizeError`, `SpanError`,
-  `ScoreError`, `ThresholdMode`, `Format`). The `Language` enum on
-  `dry-core::cli::adapter_meta` (dry-rs#78) also carries
-  `#[non_exhaustive]` — new language variants land additively.
+  `ScoreError`, `ThresholdMode`, `Format`, `LeafClass`, plus the
+  anti-unification enums `TemplateNode` and `HoleKind` — dry-rs#132).
+  The `Language` enum on `dry-core::cli::adapter_meta` (dry-rs#78) also
+  carries `#[non_exhaustive]` — new language variants land additively.
 - Public **result structs** (`Match`, `Score`, `Span`, `LineColumn`,
   `Fingerprint`, `Report`, `Summary`, `NormalizedForm`, `FormRef`,
   `AdapterMeta`, `Config`, `GateConfig`, `OutputConfig`, `WalkConfig`,
-  `LanguageConfig`, `Envelope`, `AnalysisConfig`,
-  `EffectiveConfig`) do NOT carry `#[non_exhaustive]`. They evolve
-  via constructor pattern (`Foo::new`, `Foo::try_new`, `Foo::default`,
-  builder methods) and serde versioning (`#[serde(default)]`,
-  `#[serde(rename = ...)]`,
+  `LanguageConfig`, `Envelope`, `AnalysisConfig`, `EffectiveConfig`,
+  `NormalizedTree`, `LeafToken`, plus the anti-unification result
+  structs `Template`, `Hole`, `HoleId`, `Substitution`, `SubElement`,
+  `Divergence`, `DistinctValue` — dry-rs#132) do NOT carry
+  `#[non_exhaustive]`. They evolve via constructor pattern (`Foo::new`,
+  `Foo::try_new`, `Foo::default`, builder methods) and serde versioning
+  (`#[serde(default)]`, `#[serde(rename = ...)]`,
   `#[serde(skip_serializing_if = ...)]`).
 
 Do NOT suggest adding `#[non_exhaustive]` to a result struct, and do
