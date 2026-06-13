@@ -35,8 +35,10 @@ use super::args::{Args, Command, Format, ThresholdMode};
 use super::build_command::build_command;
 use super::effective::EffectiveConfig;
 use crate::adapters::config::{ConfigError, discover_config, load_config};
-use crate::adapters::reporters::json::{Envelope, EnvelopeMeta, ScopeApplied, ViewProjection};
-use crate::adapters::reporters::{markdown, text};
+use crate::adapters::reporters::json::{
+    Capabilities, Envelope, EnvelopeMeta, Mode, ScopeApplied, ViewProjection,
+};
+use crate::adapters::reporters::{html, markdown, text};
 use crate::adapters::source::{
     CrateIdResolver, SourceError, SourceOutcome, SourceWarning, enumerate,
 };
@@ -1011,6 +1013,13 @@ fn emit_full_report<N: NormalizerPort>(
             // settings.
             print_json_envelope(config, normalizer, report, view);
         }
+        Format::Html => {
+            // Self-contained single-file HTML explorer (dry-rs#147). The
+            // full envelope is injected as the `#dry-data` island; the
+            // page renders the overview + cluster views client-side. The
+            // truthful gate stays in `result.*`, immune to view-shaping.
+            print_html(config, normalizer, report, view);
+        }
     }
 }
 
@@ -1059,6 +1068,12 @@ fn emit_stats<N: NormalizerPort>(
             // `report --format json`.
             print_json_envelope(config, normalizer, report, view);
         }
+        Format::Html => {
+            // `stats --format html` reuses the full HTML explorer path —
+            // the overview panel is the stats view, and the same artifact
+            // a `report --format html` produces lets a consumer drill in.
+            print_html(config, normalizer, report, view);
+        }
     }
 }
 
@@ -1074,14 +1089,20 @@ fn view_as_report(view: Option<ViewProjection>, report: &Report) -> Report {
     }
 }
 
-/// Serialize + print the full wire envelope, including the optional
-/// view projection.
-fn print_json_envelope<N: NormalizerPort>(
+/// Build the full run-loop wire [`Envelope`] for `report` (+ optional
+/// `view`), with the timestamp / identity / threshold-mode metadata and
+/// the always-populated scope echo.
+///
+/// Shared by [`print_json_envelope`] and [`print_html`] so the run loop has
+/// ONE envelope-construction site — the JSON and HTML reporters consume the
+/// same wire object (the HTML reporter additionally tags it with the
+/// presentation hints via [`Envelope::with_presentation`]).
+fn build_run_envelope<N: NormalizerPort>(
     config: &AnalysisConfig,
     normalizer: &N,
     report: &Report,
     view: Option<ViewProjection>,
-) {
+) -> Envelope {
     let meta = EnvelopeMeta::new(
         normalizer.tool_name().to_string(),
         normalizer.tool_version().to_string(),
@@ -1089,10 +1110,7 @@ fn print_json_envelope<N: NormalizerPort>(
         current_timestamp(),
         threshold_mode_label(config.threshold_mode).to_string(),
     );
-    // Construct the envelope directly so the view projection can be
-    // attached. The json::render helper takes a Report-only path; we
-    // bypass it here and serialize the Envelope ourselves with serde.
-    let envelope = Envelope {
+    Envelope {
         schema_version: crate::adapters::reporters::json::SCHEMA_VERSION,
         tool: meta.tool,
         tool_version: meta.tool_version,
@@ -1118,10 +1136,48 @@ fn print_json_envelope<N: NormalizerPort>(
         // constructor and unit-test envelopes, which keep the v0.1
         // snapshot byte-identical.
         scope: Some(scope_applied(config)),
-    };
+        // Presentation hints are HTML-reporter-only; the JSON path leaves
+        // them `None` (omitted) so the wire snapshot stays byte-identical.
+        // `print_html` overrides via `Envelope::with_presentation`.
+        mode: None,
+        capabilities: None,
+    }
+}
+
+/// Serialize + print the full wire envelope, including the optional
+/// view projection.
+fn print_json_envelope<N: NormalizerPort>(
+    config: &AnalysisConfig,
+    normalizer: &N,
+    report: &Report,
+    view: Option<ViewProjection>,
+) {
+    let envelope = build_run_envelope(config, normalizer, report, view);
     match serde_json::to_string_pretty(&envelope) {
         Ok(json) => println!("{json}"),
         Err(err) => eprintln!("error: failed to serialize JSON envelope: {err}"),
+    }
+}
+
+/// Render + print the self-contained single-file HTML explorer (dry-rs#147).
+///
+/// Builds the same run-loop envelope the JSON path emits, tags it with the
+/// REPORT-mode presentation hints (`mode` + `capabilities`), and renders the
+/// vanilla single-file page. PR13 always emits [`Mode::Report`] with the
+/// bare-reporter [`Capabilities::report`] (overview + clusters); the
+/// `explore` subcommand + the richer capabilities flip on in later PRs of
+/// epic #111.
+fn print_html<N: NormalizerPort>(
+    config: &AnalysisConfig,
+    normalizer: &N,
+    report: &Report,
+    view: Option<ViewProjection>,
+) {
+    let envelope = build_run_envelope(config, normalizer, report, view)
+        .with_presentation(Mode::Report, Capabilities::report());
+    match html::render(&envelope) {
+        Ok(page) => print!("{page}"),
+        Err(err) => eprintln!("error: failed to render HTML report: {err}"),
     }
 }
 
