@@ -338,6 +338,67 @@ fn lcs_fp_sequence_classic() {
     assert_eq!(lcs_fp_sequence(&[], &[1, 2]), Vec::<u64>::new());
 }
 
+/// Regression for dry-rs#133: the anchor fold MUST be permutation-
+/// invariant when a child carries the `ABSENT_FP` / fp:0 sentinel value
+/// AND the members have a differing arity.
+///
+/// Member A holds children `[fp 0, fp 1]`; member B holds
+/// `[fp 1, fp 0, fp 0]` — an fp:0 collision under an arity mismatch.
+/// Pairwise LCS is not associative, so before the fix the anchor set
+/// depended on which member seeded the fold: forward anchored on fp 1
+/// (yielding a `fixed` middle child) while reversed anchored on fp 0
+/// (yielding three holes). The canonical-order fold in
+/// [`common_anchor_fps`] makes the anchor a function of the member
+/// multiset, so `antiunify` is now byte-identical under reversal.
+#[test]
+fn anchor_fold_permutation_invariant_on_fp0_collision_with_arity_mismatch() {
+    let member_a = node(
+        "N1",
+        900,
+        vec![
+            leaf("L0", 0, "a", sp(2, 0, 0)), // fp:0 sentinel-collision child
+            leaf("L0", 1, "c", sp(3, 0, 0)),
+        ],
+        sp(1, 0, 9),
+    );
+    let member_b = node(
+        "N1",
+        900,
+        vec![
+            leaf("L0", 1, "c", sp(12, 0, 0)),
+            leaf("L0", 0, "b", sp(13, 0, 0)), // fp:0 again — collides
+            leaf("L0", 0, "b", sp(14, 0, 0)),
+        ],
+        sp(11, 0, 9),
+    );
+
+    // The anchor set itself is permutation-invariant.
+    assert_eq!(
+        common_anchor_fps(&[&member_a, &member_b]),
+        common_anchor_fps(&[&member_b, &member_a]),
+        "anchor set must not depend on member input order",
+    );
+
+    let forward = antiunify(&[member_a.clone(), member_b.clone()]);
+    let reversed = antiunify(&[member_b, member_a]);
+
+    // The root skeleton carries no member-order data ⟹ byte-identical.
+    assert_eq!(
+        serde_json::to_string(&forward.root).unwrap(),
+        serde_json::to_string(&reversed.root).unwrap(),
+        "root skeleton must be permutation-invariant (P2)",
+    );
+    // Hole count + per-hole kind + divergence are order-independent.
+    assert_eq!(forward.holes.len(), reversed.holes.len());
+    for (hf, hr) in forward.holes.iter().zip(&reversed.holes) {
+        assert_eq!(hf.kind, hr.kind, "hole kind must be permutation-invariant");
+        assert_eq!(
+            hf.divergence, hr.divergence,
+            "divergence must be permutation-invariant",
+        );
+    }
+}
+
 // ---- worked 3-member example (build-plan fixture) ----
 
 /// Build the build-plan worked example: a `Block` whose first child is
