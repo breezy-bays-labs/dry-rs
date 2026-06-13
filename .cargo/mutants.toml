@@ -45,9 +45,10 @@ exclude_re = [
     # Pass 1's cluster-emission loop. cargo-mutants catches it via the
     # timeout path (exit 3); excluded only to keep the green-CI signal
     # clean per the ADR's timeout-detected handling. Line moved from
-    # 296 -> 311 and the predicate now lives in `emit_clusters_for_bucket`
-    # (extracted in dry-rs#42).
-    "comparison/mod\\.rs:311:.* in emit_clusters_for_bucket",
+    # 296 -> 311 (dry-rs#42 helper extraction) -> 372 (dry-rs#106
+    # clustering merge inserted helpers above); the predicate lives in
+    # `emit_clusters_for_bucket`. tracked: dry-rs#116
+    "comparison/mod\\.rs:372:.* in emit_clusters_for_bucket",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # pass2 score-1.0 defensive guard is unreachable by design
     # (`debug_assert!(false, ...)` proves it). Of the five operator
@@ -55,29 +56,31 @@ exclude_re = [
     # branch and are provably equivalent: `<` -> `==`, `<` -> `<=`,
     # `-` -> `+`, `-` -> `/`. The two patterns below are operator-
     # granular per the ADR and match ONLY those four — never `< with >`.
-    # Line moved from 361 -> 421 and the guard now lives in
-    # `resolve_pass2_score` (extracted in dry-rs#42).
-    "comparison/mod\\.rs:421:.*: replace < with (==|<=) in resolve_pass2_score",
-    "comparison/mod\\.rs:421:.*: replace - with (\\+|/) in resolve_pass2_score",
+    # Line moved from 361 -> 421 (dry-rs#42) -> 869 (dry-rs#106
+    # clustering merge); the guard lives in `resolve_pass2_score`.
+    # tracked: dry-rs#116
+    "comparison/mod\\.rs:869:.*: replace < with (==|<=) in resolve_pass2_score",
+    "comparison/mod\\.rs:869:.*: replace - with (\\+|/) in resolve_pass2_score",
     # NOTE: `replace < with > in resolve_pass2_score` is intentionally
     # NOT excluded — flipping the guard to `>` fires the `debug_assert!`
     # on every non-1.0 Pass-2 score, so existing tests CATCH it. Per the
     # ADR's operator-granularity rule, do NOT re-add a blanket
-    # `comparison/mod\\.rs:421:.*` exclude: it would silently re-mask
+    # `comparison/mod\\.rs:869:.*` exclude: it would silently re-mask
     # this killable mutant.
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # jaccard `||` -> `&&` short-circuit: both branches produce 0.0 for
     # every single-empty case (intersection of an empty set is 0,
     # union > 0, score = 0/N = 0.0), so this is a provably-equivalent
     # mutant — no test can distinguish the two behaviors without changing
-    # the empty-set policy itself. Line moved from 483 -> 535 during the
-    # dry-rs#42 refactor sweep (helper extractions above pushed `jaccard`
-    # further down the file).
-    "comparison/mod\\.rs:535:.*: replace \\|\\| with && in jaccard",
+    # the empty-set policy itself. Line moved from 483 -> 535 (dry-rs#42
+    # refactor sweep) -> 983 (dry-rs#106 clustering merge inserted Pass 3
+    # helpers above `jaccard`). tracked: dry-rs#116
+    "comparison/mod\\.rs:983:.*: replace \\|\\| with && in jaccard",
     # adr: ops/decisions/org/adr-mutation-testing-equivalence.md —
     # jaccard `a.len() <= b.len()` optimization invariant; the source
     # comment literally says "semantically equivalent" (iterating the
     # smaller set is a perf choice, the count is identical either way).
-    # Line moved from 488 -> 540 during the dry-rs#42 refactor sweep.
-    "comparison/mod\\.rs:540:.*: replace <= with > in jaccard",
+    # Line moved from 488 -> 540 (dry-rs#42 refactor sweep) -> 988
+    # (dry-rs#106 clustering merge). tracked: dry-rs#116
+    "comparison/mod\\.rs:988:.*: replace <= with > in jaccard",
 ]
