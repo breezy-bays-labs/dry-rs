@@ -324,9 +324,9 @@ fn form_kind(in_test_module: bool, attrs: &[syn::Attribute]) -> FormKind {
 /// This sink IS the original inline fold — the hashing operations are
 /// reproduced exactly so the refactor is byte-identical on
 /// `fingerprint_set` / `node_count` / `identifier_set`. Form boundaries
-/// (nested fn, closure) are handled by the [`Walker`]'s enumeration, not
-/// the sink: the walker simply never recurses into a nested form's body,
-/// so the dispatch only ever feeds this sink the enclosing form's
+/// (nested fn, closure) are handled by [`enumerate_forms`], not the
+/// sink: the enumeration simply never recurses into a nested form's
+/// body, so the dispatch only ever feeds this sink the enclosing form's
 /// subtree.
 pub(super) struct FormEmitter {
     fingerprint_set: HashSet<u64>,

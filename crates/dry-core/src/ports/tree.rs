@@ -10,12 +10,13 @@
 //! consumes the returned trees to compute a generalized template for a
 //! cluster's members.
 //!
-//! ## Why a second port (not a method on [`NormalizerPort`])
+//! ## Why a second port (not a method on `NormalizerPort`)
 //!
 //! [`TreeDeriverPort`] earns trait status as a genuine SECOND
 //! polymorphism axis — syn (Rust) and swc/oxc (TypeScript) produce
 //! structurally different trees from the same source, exactly the litmus
-//! that earned [`NormalizerPort`]. Each adapter implements BOTH ports
+//! that earned [`NormalizerPort`](crate::ports::NormalizerPort). Each
+//! adapter implements BOTH ports
 //! (the Rust adapter `SynNormalizer` impls `NormalizerPort` AND
 //! `TreeDeriverPort`); the run loop's generic bound widens additively to
 //! `N: NormalizerPort + TreeDeriverPort + Default` (PR 7) — source-
