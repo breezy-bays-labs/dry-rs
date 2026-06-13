@@ -151,13 +151,21 @@ fn format_flag_accepts_markdown() {
 }
 
 #[test]
-fn format_flag_rejects_html_until_later_wave() {
-    // html / sarif land in later waves; text + json + markdown are the
-    // valid `--format` values now (per AC). A still-unsupported value
-    // must reject with an actionable "possible values" message rather
-    // than silently falling through.
-    let err = parse_test_args(&["--format", "html"])
-        .expect_err("--format html must reject until its reporter lands");
+fn format_flag_accepts_html() {
+    // html joined the `Format` enum at PR13 (dry-rs#147) — the
+    // self-contained single-file HTML explorer reporter.
+    let args = parse_test_args(&["--format", "html"]).expect("--format html parses");
+    assert_eq!(args.format, Some(Format::Html));
+}
+
+#[test]
+fn format_flag_rejects_sarif_until_later_wave() {
+    // sarif lands in a later wave; text + json + markdown + html are the
+    // valid `--format` values now. A still-unsupported value must reject
+    // with an actionable "possible values" message rather than silently
+    // falling through.
+    let err = parse_test_args(&["--format", "sarif"])
+        .expect_err("--format sarif must reject until its reporter lands");
     let msg = err.to_string();
     assert!(
         msg.contains("invalid value") || msg.contains("possible"),
