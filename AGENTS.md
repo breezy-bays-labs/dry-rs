@@ -32,7 +32,7 @@ dry4ts (depends on dry-core; adds swc_ecma_parser or oxc, napi-rs)  [v0.6+]
 
 | Crate | Purpose | Allowed deps |
 |-------|---------|--------------|
-| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters), config-file loader, `init`-time annotated example + JSON schema emitter | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `askama` (Template derive, markdown/HTML reporters), `clap` (derive), `clap_complete`, `thiserror`, `toml`, `toml_edit`, `documented`, `schemars` |
+| `dry-core` | Domain types, port traits, comparison engine, generic CLI surface, language-agnostic adapters (file walker, reporters), config-file loader, `init`-time annotated example + JSON schema emitter | `serde` (derive), `serde_json`, `walkdir`, `ignore`, `globset`, `comfy-table`, `askama` (Template derive, markdown/HTML reporters), `base64` (HTML reporter `#dry-data` island), `clap` (derive), `clap_complete`, `thiserror`, `toml`, `toml_edit`, `documented`, `schemars` |
 | `dry4rs` | Rust-source parser adapter + binary | `dry-core`, `syn`, `proc-macro2` (with `span-locations` feature), `xxhash-rust` (with `xxh3` feature) |
 | `dry4ts` | TypeScript-source parser adapter + binary | `dry-core`, `swc_ecma_parser` *or* `oxc_parser`, `napi-rs`, `xxhash-rust` (with `xxh3` feature) |
 | `dry-examples` | Curated DRY-violation corpus + cross-tool benchmark harness (no library logic; fixtures under `examples/<tier>/<fixture>/main.rs` + snapshot harness in `tests/snapshots.rs`; `publish = false`, `autoexamples = false`) | (none) |
@@ -133,9 +133,9 @@ In particular:
   on grounds of "domain purity" are based on a misread of this
   project's rules. The "domain purity" rule scopes only to AST
   libraries (see below); `thiserror`, `serde`, `serde_json`, `clap`,
-  `walkdir`, `ignore`, `globset`, `comfy-table`, `askama`, `toml`,
-  `toml_edit`, `documented`, and `schemars` are explicitly permitted
-  in `dry-core`.
+  `walkdir`, `ignore`, `globset`, `comfy-table`, `askama`, `base64`,
+  `toml`, `toml_edit`, `documented`, and `schemars` are explicitly
+  permitted in `dry-core`.
 - **`toml` IS allowed in `dry-core::adapters::config`** (config-file
   loader landed in dry-rs#71 per
   `ops/decisions/org/adr-config-file-pattern.md` D6). Suggestions to
@@ -146,9 +146,10 @@ In particular:
   `toml::to_string_pretty` (the latter for the round-trip property
   test).
 - **`askama` IS allowed in `dry-core`** (markdown reporter landed in
-  dry-rs#91; HTML reporter follows at v0.3 in dry-rs#92). The
+  dry-rs#91; HTML reporter landed in dry-rs#147, epic #111). The
   `#[derive(Template)]` macro lives on reporter-side view structs in
-  `dry-core::adapters::reporters::markdown`, NOT in `domain/`. askama
+  `dry-core::adapters::reporters::markdown` /
+  `dry-core::adapters::reporters::html`, NOT in `domain/`. askama
   is a compile-time templating library — it generates rendering code
   from `.md` / `.html` templates under `crates/dry-core/templates/`,
   type-checked against the struct fields. It is in the proc-macro
@@ -334,6 +335,44 @@ pub struct Match {
   facades `compare()` / `compare_with_paths()` stay the stable entry
   points (default all-true scope = no-op), and the scoped run-loop entry
   is `compare_with_paths_scoped(forms, paths, threshold, scope)`.
+- **`Envelope.mode: Option<Mode>` and `Envelope.capabilities:
+  Option<Capabilities>` (dry-rs#147, epic #111)** are the HTML-explorer
+  presentation hints, appended at the END of `Envelope` (AFTER `scope`),
+  EACH `#[serde(default, skip_serializing_if = "Option::is_none")]` so
+  they are OMITTED when `None`. Only the HTML reporter populates them;
+  JSON / text / markdown leave them `None`, keeping the v0.1 wire snapshot
+  byte-identical (the all-additive-fields-None case asserts both omit).
+  Do NOT suggest dropping `skip_serializing_if` (that would break the
+  byte-identical-when-off lock) and do NOT suggest matching the reserved
+  score slots' bare-`#[serde(default)]`-null shape — the omission is
+  deliberate, the same coexisting-serde-shapes rule as `template` /
+  `scope`. `Mode` is an enum (`Report` / `Explore`, `#[non_exhaustive]`,
+  `snake_case` wire tags) — PR13 emits `Mode::Report`; the `explore`
+  subcommand emits `Mode::Explore`. `Capabilities` is a result struct (NO
+  `#[non_exhaustive]`; evolves via `Capabilities::report()` /
+  `Capabilities::new(...)`) carrying five orthogonal feature flags —
+  `overview` / `clusters` / `substitution_grid` / `d_slider` /
+  `scope_banner` — telling the frontend which payload-backed views are
+  renderable. `clippy::struct_excessive_bools` (struct) +
+  `clippy::fn_params_excessive_bools` (the `new` constructor) are allowed
+  — orthogonal flags, the frontend's mental model, NOT a bitflag
+  candidate (same rationale as `ScopeApplied` / `ResolvedScope`). Do NOT
+  suggest collapsing the five bools. `Mode` + `Capabilities` live in
+  `dry-core::adapters::reporters::json::envelope` alongside `ScopeApplied`
+  (serialization-layer companion types, not domain types). The HTML
+  reporter (`dry-core::adapters::reporters::html`) injects the FULL
+  serialized envelope ONCE into a `<script id="dry-data"
+  type="application/json">…</script>` island, **base64-encoded** (`base64`
+  dep): base64's `[A-Za-z0-9+/=]` alphabet has zero HTML-special chars, so
+  the island injects with askama's DEFAULT escaping (a no-op) — NO `|safe`,
+  no `</script>` break-out possible. Do NOT suggest adding `|safe` to the
+  island or hand-rolling a `</`→`<\/` sanitizer — base64 makes both
+  unnecessary, and `|safe` would re-open the raw-injection surface. The
+  client JS base64-decodes (`atob` + `TextDecoder`, UTF-8-safe) and builds
+  ALL DOM via `document.createElement` + `textContent` (a tiny `h(...)`
+  helper) — NO `innerHTML`/`outerHTML`/`document.write`, so user-controlled
+  values are inert by construction (do NOT suggest reintroducing `innerHTML`
+  for brevity). See `ops/decisions/dry-rs/adr-dual-mode-html-reporter.md`.
 
 ### `#[non_exhaustive]` discipline — enums YES, structs NO
 
@@ -343,14 +382,17 @@ pub struct Match {
   anti-unification enums `TemplateNode` and `HoleKind` — dry-rs#132).
   The `Language` enum on `dry-core::cli::adapter_meta` (dry-rs#78) also
   carries `#[non_exhaustive]` — new language variants land additively.
+  The `Mode` enum on `dry-core::adapters::reporters::json::envelope`
+  (dry-rs#147) also carries `#[non_exhaustive]` — new presentation modes
+  land additively.
 - Public **result structs** (`Match`, `Score`, `Span`, `LineColumn`,
   `Fingerprint`, `Report`, `Summary`, `NormalizedForm`, `FormRef`,
   `AdapterMeta`, `Config`, `GateConfig`, `OutputConfig`, `WalkConfig`,
-  `LanguageConfig`, `Envelope`, `AnalysisConfig`, `EffectiveConfig`,
-  `NormalizedTree`, `LeafToken`, plus the anti-unification result
-  structs `Template`, `Hole`, `HoleId`, `Substitution`, `SubElement`,
-  `Divergence`, `DistinctValue` — dry-rs#132) do NOT carry
-  `#[non_exhaustive]`. They evolve via constructor pattern (`Foo::new`,
+  `LanguageConfig`, `Envelope`, `ScopeApplied`, `Capabilities`,
+  `AnalysisConfig`, `EffectiveConfig`, `NormalizedTree`, `LeafToken`,
+  plus the anti-unification result structs `Template`, `Hole`, `HoleId`,
+  `Substitution`, `SubElement`, `Divergence`, `DistinctValue` —
+  dry-rs#132) do NOT carry `#[non_exhaustive]`. They evolve via constructor pattern (`Foo::new`,
   `Foo::try_new`, `Foo::default`, builder methods) and serde versioning
   (`#[serde(default)]`, `#[serde(rename = ...)]`,
   `#[serde(skip_serializing_if = ...)]`).

@@ -67,6 +67,13 @@ comfy-table = { workspace = true }
 # allowlist (Template derive), NOT an AST library, so it clears the
 # `dry-core AST-library purity` gate.
 askama = { workspace = true }
+# Base64 for the HTML reporter's `#dry-data` island (dry-rs#147). The
+# serialized JSON envelope is base64-encoded so it injects as a plain
+# `[A-Za-z0-9+/=]` string — zero HTML-special chars, so askama's default
+# escaping is a no-op (no `|safe` directive, no `</script>` break-out
+# possible). The JS decodes via `atob` + `TextDecoder` (UTF-8-safe). NOT
+# an AST library — clears the `dry-core AST-library purity` gate.
+base64 = { workspace = true }
 # CLI surface (PR 8) — `clap` with `derive` powers `Args` + the
 # subcommand enum; `clap_complete` powers `--completions <SHELL>`.
 # Both ship inside `dry-core::cli` because the CLI surface is

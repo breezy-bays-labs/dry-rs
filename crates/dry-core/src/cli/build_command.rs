@@ -78,7 +78,7 @@ pub fn build_command(meta: &AdapterMeta) -> Command {
                 .long("format")
                 .global(true)
                 .value_parser(value_parser!(Format))
-                .help("Output format (`text` or `json`); defaults to text"),
+                .help("Output format (`text` / `json` / `markdown` / `html`); defaults to text"),
         )
         .arg(
             Arg::new("threshold_mode")

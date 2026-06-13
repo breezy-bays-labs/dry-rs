@@ -32,7 +32,7 @@
   "additionalProperties": false,
   "$defs": {
     "Format": {
-      "description": "Output format selector. `--format` accepts `text` / `json` /\n`markdown`; `html` and `sarif` land in later waves and are\ndeliberately omitted from the value enum so clap rejects them at\nparse time with an actionable message.\n\n`#[non_exhaustive]` per the AGENTS.md `#[non_exhaustive]` discipline\n— enums YES, result structs NO.\n\nSerde uses lowercase tags so TOML config files can use `format =\n\"text\"` / `format = \"json\"` / `format = \"markdown\"` symmetrically\nwith the CLI flag.",
+      "description": "Output format selector. `--format` accepts `text` / `json` /\n`markdown` / `html`; `sarif` lands in a later wave and is\ndeliberately omitted from the value enum so clap rejects it at\nparse time with an actionable message.\n\n`#[non_exhaustive]` per the AGENTS.md `#[non_exhaustive]` discipline\n— enums YES, result structs NO.\n\nSerde uses lowercase tags so TOML config files can use `format =\n\"text\"` / `format = \"json\"` / `format = \"markdown\"` / `format =\n\"html\"` symmetrically with the CLI flag.",
       "oneOf": [
         {
           "description": "Human-friendly terminal output (default).",
@@ -48,6 +48,11 @@
           "description": "GitHub-flavored Markdown grouped by tier\n(`dry_core::adapters::reporters::markdown`, dry-rs#91) — suitable\nfor PR comments, issue bodies, or `report.md`.",
           "type": "string",
           "const": "markdown"
+        },
+        {
+          "description": "Self-contained single-file HTML explorer\n(`dry_core::adapters::reporters::html`, dry-rs#147) — inlines the\nfull JSON envelope into a vanilla page (no framework, no build\nstep) for `report.html` / GitHub Pages. PR13 ships the bare\nREPORT reporter (overview + cluster views); the substitution\ngrid / d-slider / scope banner join in a later PR of epic #111.",
+          "type": "string",
+          "const": "html"
         }
       ]
     },

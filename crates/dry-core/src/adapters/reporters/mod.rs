@@ -9,6 +9,10 @@
 //! - [`markdown::render`] — GitHub-flavored Markdown grouped by tier
 //!   (askama compile-time template), suitable for PR comments / issue
 //!   bodies / `report.md` (dry-rs#91).
+//! - [`html::render`] — self-contained single-file vanilla HTML explorer
+//!   (askama compile-time template) that inlines the full JSON envelope
+//!   into a `#dry-data` island and renders interactive views client-side
+//!   (dry-rs#147, epic #111).
 //! - [`github_annotations::render`] — GitHub Actions workflow commands
 //!   (`::error::` / `::warning::` / `::notice::`) so duplications
 //!   surface inline on the PR "Files Changed" tab without GHAS / Code
@@ -23,6 +27,7 @@
 //! scrap-rs".
 
 pub mod github_annotations;
+pub mod html;
 pub mod json;
 pub mod markdown;
 pub mod text;

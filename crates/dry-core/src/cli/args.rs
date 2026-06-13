@@ -23,16 +23,16 @@ use clap_complete::Shell;
 use serde::{Deserialize, Serialize};
 
 /// Output format selector. `--format` accepts `text` / `json` /
-/// `markdown`; `html` and `sarif` land in later waves and are
-/// deliberately omitted from the value enum so clap rejects them at
+/// `markdown` / `html`; `sarif` lands in a later wave and is
+/// deliberately omitted from the value enum so clap rejects it at
 /// parse time with an actionable message.
 ///
 /// `#[non_exhaustive]` per the AGENTS.md `#[non_exhaustive]` discipline
 /// — enums YES, result structs NO.
 ///
 /// Serde uses lowercase tags so TOML config files can use `format =
-/// "text"` / `format = "json"` / `format = "markdown"` symmetrically
-/// with the CLI flag.
+/// "text"` / `format = "json"` / `format = "markdown"` / `format =
+/// "html"` symmetrically with the CLI flag.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -47,6 +47,13 @@ pub enum Format {
     /// (`dry_core::adapters::reporters::markdown`, dry-rs#91) — suitable
     /// for PR comments, issue bodies, or `report.md`.
     Markdown,
+    /// Self-contained single-file HTML explorer
+    /// (`dry_core::adapters::reporters::html`, dry-rs#147) — inlines the
+    /// full JSON envelope into a vanilla page (no framework, no build
+    /// step) for `report.html` / GitHub Pages. PR13 ships the bare
+    /// REPORT reporter (overview + cluster views); the substitution
+    /// grid / d-slider / scope banner join in a later PR of epic #111.
+    Html,
 }
 
 /// Threshold-mode preset selector. v0.1 accepts the three named
@@ -205,8 +212,8 @@ pub struct Args {
     /// exit).
     pub threshold: Option<f64>,
 
-    /// Output format. v0.1: `text` (default) or `json`; markdown /
-    /// html / sarif land in later waves.
+    /// Output format. `text` (default) / `json` / `markdown` / `html`;
+    /// `sarif` lands in a later wave.
     ///
     /// `None` when the user did NOT pass `--format` (the precedence
     /// merger then consults `[output] format` from `dry.toml`,

@@ -71,3 +71,8 @@ insta = { workspace = true }
 # empty). Confined to dev-deps; production runtime stays on
 # `dry_core::adapters::config`'s loader. dry-rs#77.
 toml = { workspace = true }
+# Base64 decode for the HTML reporter's end-to-end pipeline test
+# (dry-rs#147). The binary emits the `#dry-data` island as base64; the
+# test decodes it back to JSON to assert the envelope shape. Confined to
+# dev-deps; production never decodes (the JS does, in the browser).
+base64 = { workspace = true }

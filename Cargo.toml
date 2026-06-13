@@ -97,6 +97,14 @@ askama = "0.16"
 # shell-completion generation and is treated as part of the clap family).
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
+# Base64 for the HTML reporter's `#dry-data` island (dry-rs#147). The full
+# JSON envelope is base64-encoded in Rust and injected as a plain
+# `[A-Za-z0-9+/=]` string — an alphabet with zero HTML-special chars, so
+# askama's default escaping is a byte-level no-op (no `|safe`, no
+# `</script>` break-out possible). Restricted to `dry-core` — the HTML
+# reporter lives in the language-agnostic core. NOT an AST library, so it
+# clears the `dry-core AST-library purity` gate.
+base64 = "0.22"
 # Rust AST parser for dry4rs's SynNormalizer (lands with PR 5). The
 # `full` feature enables every syn item / expr / stmt visitor needed
 # to walk function bodies; `extra-traits` derives `Debug` / `PartialEq`
