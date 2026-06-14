@@ -1291,31 +1291,78 @@ fn env_no_open() -> bool {
     }
 }
 
-/// Open `path` in the user's browser (dry-rs#151).
+/// The resolved program + leading arguments to launch for the browser-open
+/// (dry-rs#151) — the PURE decision, decoupled from the impure spawn.
+///
+/// [`select_opener`] computes this from `$BROWSER` (or the OS default); the
+/// path to open is appended by the caller at spawn time, so `OpenPlan`
+/// carries no I/O and is trivially unit-testable. `leading_args` are the
+/// extra tokens a `$BROWSER` like `"firefox --new-window"` contributes
+/// ahead of the path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OpenPlan {
+    /// The opener program (`firefox` / `open` / `xdg-open`).
+    program: String,
+    /// Leading arguments before the path (from extra `$BROWSER` tokens).
+    leading_args: Vec<String>,
+}
+
+/// Compile-time OS default opener: `open` on macOS, `xdg-open` elsewhere.
+///
+/// `cfg!` resolves at compile time, so this is a const-ish selection the
+/// build target fixes — there is no runtime branch for coverage to miss.
+const fn os_default_opener() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    }
+}
+
+/// Decide which program + leading args to launch for the browser-open
+/// (dry-rs#151) — the PURE branching, NO I/O.
 ///
 /// Precedence: `$BROWSER` (split on whitespace; first token is the program,
-/// the rest are leading args) → `open` (macOS) → `xdg-open` (Linux). The
-/// spawn is fire-and-forget — `explore` does not wait for the browser, and
-/// a launch failure is a stderr note, never a non-zero exit. Callers gate
-/// this behind the `--no-open` / `$DRY_NO_OPEN` CI-safe escape.
-fn open_in_browser(path: &Path) {
-    use std::process::Command as ProcessCommand;
-
-    let result = if let Some(browser) = std::env::var_os("BROWSER") {
-        let browser = browser.to_string_lossy();
+/// the rest are leading args ahead of the path) → the OS default
+/// ([`os_default_opener`]: `open` on macOS, `xdg-open` elsewhere). A
+/// `$BROWSER` that is empty or all-whitespace falls back to the OS default
+/// (an unusable `$BROWSER=""` must not produce an empty program name).
+///
+/// Pure + total: same input → same output, no spawn, no env read (the
+/// caller passes the already-read `$BROWSER` value). Unit-tested directly
+/// for every branch so its CRAP collapses to ~CC.
+fn select_opener(browser_env: Option<&str>) -> OpenPlan {
+    if let Some(browser) = browser_env {
         let mut parts = browser.split_whitespace();
-        match parts.next() {
-            Some(program) => ProcessCommand::new(program)
-                .args(parts)
-                .arg(path)
-                .spawn()
-                .map(|_| ()),
-            // `$BROWSER` was set but blank — fall through to the OS opener.
-            None => spawn_os_opener(path),
+        if let Some(program) = parts.next() {
+            return OpenPlan {
+                program: program.to_string(),
+                leading_args: parts.map(str::to_string).collect(),
+            };
         }
-    } else {
-        spawn_os_opener(path)
-    };
+    }
+    // `$BROWSER` unset, or set-but-blank: use the OS default.
+    OpenPlan {
+        program: os_default_opener().to_string(),
+        leading_args: Vec::new(),
+    }
+}
+
+/// Open `path` in the user's browser (dry-rs#151).
+///
+/// Thin impure shell over the pure [`select_opener`] decision: read
+/// `$BROWSER`, resolve the [`OpenPlan`], then spawn it with the path
+/// appended. The spawn is fire-and-forget — `explore` does not wait for the
+/// browser, and a launch failure is a stderr note, never a non-zero exit.
+/// Callers gate this behind the `--no-open` / `$DRY_NO_OPEN` CI-safe escape.
+fn open_in_browser(path: &Path) {
+    let browser_env = std::env::var("BROWSER").ok();
+    let plan = select_opener(browser_env.as_deref());
+
+    let result = std::process::Command::new(&plan.program)
+        .args(&plan.leading_args)
+        .arg(path)
+        .spawn();
 
     if let Err(err) = result {
         eprintln!(
@@ -1323,19 +1370,6 @@ fn open_in_browser(path: &Path) {
             path.display()
         );
     }
-}
-
-/// Spawn the platform default opener (`open` on macOS, `xdg-open`
-/// elsewhere) for `path`. Used when `$BROWSER` is unset / blank.
-fn spawn_os_opener(path: &Path) -> std::io::Result<()> {
-    use std::process::Command as ProcessCommand;
-
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    ProcessCommand::new(opener).arg(path).spawn().map(|_| ())
 }
 
 /// Project the run's resolved [`ResolvedScope`] onto the wire
@@ -2214,5 +2248,74 @@ mod tests {
             forms[0].location.crate_id, None,
             "single-dir no-Cargo.toml run must leave crate_id None"
         );
+    }
+
+    // ---- select_opener (pure browser-open decision, dry-rs#151) --------
+    // The PURE branching extracted out of `open_in_browser` so the
+    // $BROWSER / OS-default decision is unit-testable WITHOUT spawning a
+    // browser (the impure spawn stays a thin near-branchless shell). Every
+    // branch is covered here so its CRAP collapses to ~CC (was 30.0 when
+    // the branching lived in the uncovered `open_in_browser`).
+
+    #[test]
+    fn select_opener_uses_browser_env_program_and_args() {
+        // `$BROWSER` with extra tokens: the first is the program, the rest
+        // are leading args ahead of the path.
+        let plan = select_opener(Some("firefox --new-window --private"));
+        assert_eq!(plan.program, "firefox");
+        assert_eq!(
+            plan.leading_args,
+            vec!["--new-window".to_string(), "--private".to_string()]
+        );
+    }
+
+    #[test]
+    fn select_opener_single_token_browser_has_no_leading_args() {
+        let plan = select_opener(Some("google-chrome"));
+        assert_eq!(plan.program, "google-chrome");
+        assert!(
+            plan.leading_args.is_empty(),
+            "a bare program name carries no leading args"
+        );
+    }
+
+    #[test]
+    fn select_opener_falls_back_to_os_default_when_browser_unset() {
+        // `$BROWSER` unset → the OS default opener, no leading args.
+        let plan = select_opener(None);
+        assert_eq!(plan.program, os_default_opener());
+        assert!(plan.leading_args.is_empty());
+    }
+
+    #[test]
+    fn select_opener_falls_back_to_os_default_when_browser_blank() {
+        // `$BROWSER=""` or all-whitespace must NOT yield an empty program —
+        // it falls back to the OS default (an empty program name is
+        // unspawnable).
+        for blank in ["", "   ", "\t\n "] {
+            let plan = select_opener(Some(blank));
+            assert_eq!(
+                plan.program,
+                os_default_opener(),
+                "blank $BROWSER {blank:?} must use the OS default"
+            );
+            assert!(plan.leading_args.is_empty());
+        }
+    }
+
+    #[test]
+    fn os_default_opener_is_open_or_xdg_open() {
+        // Compile-time selection: `open` on macOS, `xdg-open` elsewhere.
+        // Assert it is one of the two valid openers for the build target.
+        let opener = os_default_opener();
+        assert!(
+            opener == "open" || opener == "xdg-open",
+            "OS default opener must be `open` or `xdg-open`, got {opener:?}"
+        );
+        if cfg!(target_os = "macos") {
+            assert_eq!(opener, "open", "macOS default opener is `open`");
+        } else {
+            assert_eq!(opener, "xdg-open", "non-macOS default opener is `xdg-open`");
+        }
     }
 }
