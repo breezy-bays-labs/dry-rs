@@ -321,6 +321,27 @@ impl Capabilities {
         }
     }
 
+    /// Capabilities for the dry-rs#149 SHOWCASE HTML reporter: every view
+    /// renderable. The template skeleton, substitution grid, d-slider, and
+    /// scope banner all exist in the frontend now (epic #111), so the three
+    /// PR13-reserved flags flip on alongside `overview` / `clusters`.
+    ///
+    /// The frontend still degrades per-cluster: a cluster whose `template`
+    /// is absent (exact-dup with no holes) shows the concrete shared form
+    /// and no empty grid even though the capability advertises grid support
+    /// — capability = "the reporter CAN render this when the data backs it",
+    /// not "every cluster has it".
+    #[must_use]
+    pub const fn showcase() -> Self {
+        Self {
+            overview: true,
+            clusters: true,
+            substitution_grid: true,
+            d_slider: true,
+            scope_banner: true,
+        }
+    }
+
     /// Construct a capability set with every flag explicitly supplied —
     /// the constructor path later PRs use as they flip the showcase views
     /// on.
@@ -472,6 +493,19 @@ mod tests {
         assert!(!caps.substitution_grid);
         assert!(!caps.d_slider);
         assert!(!caps.scope_banner);
+    }
+
+    #[test]
+    fn capabilities_showcase_advertises_every_view() {
+        // The showcase HTML reporter (dry-rs#149) renders the template
+        // skeleton, substitution grid, d-slider, and scope banner — every
+        // flag flips on now that the backing views exist in the frontend.
+        let caps = Capabilities::showcase();
+        assert!(caps.overview);
+        assert!(caps.clusters);
+        assert!(caps.substitution_grid);
+        assert!(caps.d_slider);
+        assert!(caps.scope_banner);
     }
 
     #[test]

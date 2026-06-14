@@ -350,10 +350,21 @@ pub struct Match {
   `snake_case` wire tags) — PR13 emits `Mode::Report`; the `explore`
   subcommand emits `Mode::Explore`. `Capabilities` is a result struct (NO
   `#[non_exhaustive]`; evolves via `Capabilities::report()` /
-  `Capabilities::new(...)`) carrying five orthogonal feature flags —
-  `overview` / `clusters` / `substitution_grid` / `d_slider` /
-  `scope_banner` — telling the frontend which payload-backed views are
-  renderable. `clippy::struct_excessive_bools` (struct) +
+  `Capabilities::showcase()` / `Capabilities::new(...)`) carrying five
+  orthogonal feature flags — `overview` / `clusters` / `substitution_grid`
+  / `d_slider` / `scope_banner` — telling the frontend which payload-backed
+  views are renderable. **As of the showcase PR (dry-rs#149), the run-loop
+  HTML path emits `Capabilities::showcase()` — ALL FIVE flags `true`**
+  (the frontend now renders the template skeleton + substitution grid +
+  d-slider + scope banner). `Capabilities::report()` (overview + clusters
+  only, the three showcase flags `false`) survives as the bare-reporter
+  constructor for tests / future callers; do NOT flag a non-false
+  `substitution_grid` / `d_slider` / `scope_banner` in the HTML island as
+  a regression — the showcase flip is deliberate. The flags are
+  capability advertisements ("the reporter CAN render this view"), NOT
+  per-cluster guarantees: an exact-dup cluster (null / 0-hole `template`)
+  still degrades to the concrete shared form with no grid even when
+  `substitution_grid == true`. `clippy::struct_excessive_bools` (struct) +
   `clippy::fn_params_excessive_bools` (the `new` constructor) are allowed
   — orthogonal flags, the frontend's mental model, NOT a bitflag
   candidate (same rationale as `ScopeApplied` / `ResolvedScope`). Do NOT

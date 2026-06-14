@@ -10,13 +10,19 @@
 //! detail, tier/score filters) client-side. The inline `<style>` block
 //! carries all CSS.
 //!
-//! This is the BASIC reference frontend — Claude Design polishes later. PR13
-//! ships the bare REPORT reporter (overview + cluster views); the
-//! substitution grid / d-slider / scope banner join in a later PR of epic
-//! #111 as their backing wire fields (`Match.template`, `Envelope.scope`)
-//! populate. The frontend degrades gracefully when `template` / `scope` /
-//! `mode` / `capabilities` are absent (it MUST NOT throw on a missing
-//! optional field).
+//! This is the reference frontend — Claude Design polishes later. PR13
+//! shipped the bare REPORT reporter (overview + cluster views); the SHOWCASE
+//! (dry-rs#149) wires the remaining views the backing wire fields enable:
+//! the per-cluster anti-unification **template skeleton** (the
+//! [`crate::domain::TemplateNode`] tree with numbered hole markers), the
+//! **substitution grid** (one row per member, one column per hole, variadic
+//! cells holding multiple lexemes), the **d-slider** (monotonically hides
+//! holes whose `divergence.differing < d`), and the read-only **scope
+//! banner** (from `Envelope.scope`, graying the crate axes when
+//! `crate_aware == false`). The frontend degrades gracefully when `template`
+//! / `scope` / `mode` / `capabilities` are absent — an exact-dup cluster
+//! (no holes / null template) shows the concrete shared form and no empty
+//! grid, and a missing optional field never throws.
 //!
 //! ## Single injection contract — base64 island, default escaping
 //!
@@ -442,6 +448,152 @@ mod tests {
         );
         let parsed = decode_island(&html);
         assert_eq!(parsed["title"], "a</script>b", "value round-trips");
+    }
+
+    /// Build a 2-member near-dup match carrying a template with one
+    /// `SubExpr` hole (a pure rename: `total` vs `sum`) plus one `Variadic`
+    /// hole (member 0 binds two elements, member 1 binds one) — the showcase
+    /// data the substitution grid + d-slider render.
+    fn match_with_template() -> Match {
+        use crate::domain::{
+            DistinctValue, Divergence, Hole, HoleId, HoleKind, SubElement, Substitution, Template,
+            TemplateNode,
+        };
+        fn sp(line: u32) -> Span {
+            Span::try_new(LineColumn::new(line, 4), LineColumn::new(line, 8)).unwrap()
+        }
+        let root = TemplateNode::Fixed {
+            label: "Block".into(),
+            children: vec![
+                TemplateNode::Hole(HoleId::new(0)),
+                TemplateNode::Fixed {
+                    label: "ExprLocal".into(),
+                    children: vec![],
+                    leaf_lexeme: Some("x".into()),
+                },
+                TemplateNode::Hole(HoleId::new(1)),
+            ],
+            leaf_lexeme: None,
+        };
+        let holes = vec![
+            Hole::new(
+                HoleId::new(0),
+                HoleKind::SubExpr,
+                vec![
+                    Substitution::new(vec![SubElement::new("total".into(), 111, sp(12))]),
+                    Substitution::new(vec![SubElement::new("sum".into(), 222, sp(24))]),
+                ],
+                Divergence::new(
+                    2,
+                    1,
+                    2,
+                    vec![
+                        DistinctValue::new(111, "total".into(), 1),
+                        DistinctValue::new(222, "sum".into(), 1),
+                    ],
+                ),
+            ),
+            Hole::new(
+                HoleId::new(1),
+                HoleKind::Variadic,
+                vec![
+                    Substitution::new(vec![
+                        SubElement::new("a".into(), 333, sp(13)),
+                        SubElement::new("b".into(), 444, sp(13)),
+                    ]),
+                    Substitution::new(vec![SubElement::new("c".into(), 555, sp(25))]),
+                ],
+                Divergence::new(3, 2, 2, vec![]),
+            ),
+        ];
+        let template = Template::new(root, holes);
+        Match::new(
+            vec![form_ref("src/a.rs", 10), form_ref("src/b.rs", 22)],
+            0.88,
+            Tier::ReviewFirst,
+        )
+        .with_template(template)
+    }
+
+    fn report_with_template() -> Report {
+        let mut by_tier = BTreeMap::new();
+        by_tier.insert(Tier::ReviewFirst, 1);
+        let mut by_kind = BTreeMap::new();
+        by_kind.insert(FormKind::Production, 2);
+        let summary = Summary {
+            total_forms: 2,
+            by_tier,
+            by_kind,
+        };
+        Report::new(vec![match_with_template()], summary, false)
+    }
+
+    #[test]
+    fn showcase_capabilities_ride_the_island() {
+        // The showcase HTML path flips every capability flag true — the
+        // frontend now renders the template skeleton, substitution grid,
+        // d-slider, and scope banner. The flags travel in the payload so the
+        // JS can gate its views on them.
+        let env = Envelope::new(report_with_template(), fixed_meta())
+            .with_presentation(Mode::Report, Capabilities::showcase());
+        let html = render(&env).unwrap();
+        let parsed = decode_island(&html);
+        assert_eq!(parsed["capabilities"]["overview"], true);
+        assert_eq!(parsed["capabilities"]["clusters"], true);
+        assert_eq!(parsed["capabilities"]["substitution_grid"], true);
+        assert_eq!(parsed["capabilities"]["d_slider"], true);
+        assert_eq!(parsed["capabilities"]["scope_banner"], true);
+    }
+
+    #[test]
+    fn template_payload_carries_skeleton_holes_and_variadic_cell() {
+        // The full template (root skeleton + per-hole substitutions, incl.
+        // the variadic member binding two elements) survives base64 + JSON
+        // round-trip into the island, so the client JS has everything it
+        // needs to draw the skeleton + grid.
+        let env = Envelope::new(report_with_template(), fixed_meta())
+            .with_presentation(Mode::Report, Capabilities::showcase());
+        let html = render(&env).unwrap();
+        let parsed = decode_island(&html);
+        let tmpl = &parsed["result"]["matches"][0]["template"];
+        assert_eq!(tmpl["root"]["node"], "fixed");
+        assert_eq!(tmpl["holes"].as_array().unwrap().len(), 2);
+        // Hole 1 is variadic: member 0 binds two elements.
+        let var_member0 = &tmpl["holes"][1]["substitutions"][0]["elements"];
+        assert_eq!(var_member0.as_array().unwrap().len(), 2);
+        assert_eq!(tmpl["holes"][1]["kind"], "variadic");
+        // The reserved score slots are now DERIVED from the template (a
+        // pure-rename SubExpr hole lifts structural_score above raw score).
+        let m = &parsed["result"]["matches"][0];
+        assert!(m["structural_score"].as_f64().unwrap() >= m["score"].as_f64().unwrap());
+    }
+
+    #[test]
+    fn render_includes_dslider_and_scope_dom_hooks() {
+        // The template carries the JS markers the showcase mounts into: the
+        // d-slider control and the scope banner. They are CSS / JS surface
+        // (the DOM is built client-side), so assert the static template ships
+        // the supporting style hooks + the scope-banner section anchor.
+        let mut env = Envelope::new(report_with_template(), fixed_meta())
+            .with_presentation(Mode::Report, Capabilities::showcase());
+        env.scope = Some(crate::adapters::reporters::json::ScopeApplied {
+            within_crate: true,
+            across_crate: true,
+            within_module: true,
+            across_module: false,
+            crate_aware: false,
+        });
+        let html = render(&env).unwrap();
+        // Scope banner travels in the payload (read client-side).
+        let parsed = decode_island(&html);
+        assert_eq!(parsed["scope"]["crate_aware"], false);
+        assert_eq!(parsed["scope"]["across_module"], false);
+        // The template ships the showcase CSS classes the JS attaches.
+        assert!(html.contains("skeleton"), "skeleton CSS hook expected");
+        assert!(
+            html.contains("d-slider") || html.contains("dslider"),
+            "{html}"
+        );
     }
 
     #[test]

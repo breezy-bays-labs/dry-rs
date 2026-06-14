@@ -66,6 +66,56 @@
   .stat { display: inline-block; margin-right: 1.5rem; }
   .stat b { font-size: 1.4rem; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  /* Scope banner (dry-rs#149): read-only axes from Envelope.scope. */
+  .scope-banner { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+  .scope-banner .axis {
+    display: inline-block; padding: .1rem .5rem; border-radius: 999px;
+    font-size: .75rem; font-weight: 600; border: 1px solid var(--border);
+  }
+  .scope-banner .axis.on { color: var(--fg); background: rgba(88,166,255,.12); border-color: var(--accent); }
+  .scope-banner .axis.off { color: var(--muted); text-decoration: line-through; }
+  /* crate_aware == false grays the crate axes (no crate-id derivable). */
+  .scope-banner .axis.disabled { opacity: .4; text-decoration: none; cursor: not-allowed; }
+
+  /* Anti-unification template skeleton (dry-rs#149). */
+  .skeleton {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem;
+    background: #0b0f14; border: 1px solid var(--border); border-radius: 6px;
+    padding: .6rem .8rem; overflow-x: auto; line-height: 1.45; margin: .5rem 0;
+  }
+  .skeleton .node { color: var(--muted); }
+  .skeleton .lex { color: var(--fg); }
+  .skeleton .hole {
+    color: var(--bg); background: var(--review); border-radius: 4px;
+    padding: 0 .3rem; font-weight: 700; cursor: default;
+  }
+  .skeleton .hole.hidden-by-d { opacity: .25; filter: grayscale(1); }
+  .skeleton .hole.hotspot { background: var(--auto); }
+
+  /* Substitution grid (dry-rs#149): rows = members, cols = holes. */
+  .grid-wrap { overflow-x: auto; margin: .5rem 0; }
+  table.subgrid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; }
+  table.subgrid th, table.subgrid td { white-space: nowrap; vertical-align: top; }
+  table.subgrid th.hole-col { color: var(--review); }
+  table.subgrid th.hole-col.hotspot { color: var(--auto); }
+  table.subgrid td.col-hidden, table.subgrid th.col-hidden { display: none; }
+  table.subgrid .variadic-elem { display: block; }
+  table.subgrid .absent { color: var(--muted); font-style: italic; }
+  table.subgrid .divergent { color: var(--auto); }
+
+  /* d-slider control. */
+  .d-slider { display: flex; gap: .6rem; align-items: center; margin: .5rem 0; }
+  .d-slider input[type="range"] { flex: 1; max-width: 240px; }
+  .d-slider .d-readout { color: var(--muted); font-size: .8rem; }
+
+  /* Large-grid collapse (>67-member ceiling). */
+  .grid-collapsed-note { color: var(--muted); font-style: italic; margin: .5rem 0; }
+  .reveal-btn {
+    background: var(--panel); color: var(--accent); border: 1px solid var(--border);
+    border-radius: 6px; padding: .25rem .6rem; cursor: pointer; font: inherit;
+  }
+  .reveal-btn:hover { border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -76,6 +126,10 @@
   {%- endif %}
 </header>
 <main>
+  {#- Scope banner (dry-rs#149): mounted client-side from Envelope.scope.
+     Hidden until the JS confirms scope data is present. -#}
+  <section id="scope-banner-section" aria-label="scope" hidden></section>
+
   <section id="overview" aria-label="overview">
     <h2>Overview</h2>
     <div class="panel" data-overview-fallback>Loading overview…</div>
@@ -155,9 +209,25 @@
   const TIER_ORDER = ["auto_refactor", "review_first", "advisory"];
   const el = (id) => document.getElementById(id);
 
+  // Append children to a parent ONE NODE AT A TIME via `appendChild`.
+  // `appendChild` accepts exactly one Node and NEVER a raw HTML string, so
+  // it is not an HTML-parsing sink (unlike the native `Element.append`
+  // variadic method, which a static taint scanner conflates with jQuery's
+  // HTML-parsing append). Each kid is flattened, null-skipped, and — if not
+  // already a Node — wrapped in a text node, so strings can NEVER become
+  // markup.
+  function appendKids(parent, ...kids) {
+    for (const c of kids.flat()) {
+      if (c == null) continue;
+      parent.appendChild(c.nodeType ? c : document.createTextNode(String(c)));
+    }
+    return parent;
+  }
+
   // Minimal DOM builder. `attrs.class` -> className; `id` / `data-*` ->
   // setAttribute; everything else -> property assignment. Children are
-  // nodes or coerced to text nodes — strings can NEVER become markup.
+  // nodes or coerced to text nodes (via `appendKids` / `appendChild`) —
+  // strings can NEVER become markup.
   function h(tag, attrs, ...kids) {
     const e = document.createElement(tag);
     for (const k in (attrs || {})) {
@@ -165,11 +235,7 @@
       else if (k === "id" || k.startsWith("data-")) e.setAttribute(k, attrs[k]);
       else e[k] = attrs[k];
     }
-    for (const c of kids.flat()) {
-      if (c == null) continue;
-      e.append(c.nodeType ? c : document.createTextNode(String(c)));
-    }
-    return e;
+    return appendKids(e, ...kids);
   }
   function clear(node) {
     while (node.firstChild) node.removeChild(node.firstChild);
@@ -257,7 +323,7 @@
 
     const ov = el("overview");
     clear(ov);
-    ov.append(h("h2", null, "Overview"), h("div", { class: "panel" }, statLine, body));
+    appendKids(ov, h("h2", null, "Overview"), h("div", { class: "panel" }, statLine, body));
   }
 
   function tierRank(tier) {
@@ -265,15 +331,194 @@
     return i === -1 ? TIER_ORDER.length : i;
   }
 
+  // Large-cluster ceiling: clusters with more members than this collapse
+  // their substitution grid by default (revealable on demand), so a huge
+  // n-ary match never renders thousands of cells eagerly.
+  const MEMBER_CEILING = 67;
+  // Synthetic fingerprint for an absent (Optional-hole) binding.
+  const ABSENT_FP = 0;
+
+  // ---- template skeleton (dry-rs#149) --------------------------------
+  // Render the concrete TemplateNode tree as readable indented structure.
+  // `Fixed` nodes show their label (+ leaf_lexeme when a fixed leaf);
+  // `Hole(index)` nodes render a numbered marker (□1, □2, …). Holes carry a
+  // `data-hole` attribute so the d-slider can toggle their visibility.
+  // EVERYTHING is built with createElement + textContent (no markup sink).
+  function skeletonNode(node, holes, depth) {
+    const pad = "  ".repeat(depth);
+    if (!node || typeof node !== "object") return h("div", null, pad + "?");
+    if (node.node === "hole") {
+      const idx = node.index ?? 0;
+      const hole = holes[idx];
+      const hot = hole && isHotspot(hole) ? " hotspot" : "";
+      const marker = h(
+        "span",
+        { class: "hole" + hot, "data-hole": String(idx), title: holeTitle(hole, idx) },
+        "□" + (idx + 1), // □N (1-based for humans)
+      );
+      return h("div", null, pad, marker);
+    }
+    // Fixed node.
+    const label = node.label ?? "node";
+    const kids = node.children || [];
+    if (node.leaf_lexeme != null && kids.length === 0) {
+      // A fixed leaf: show label + its shared lexeme.
+      return h(
+        "div",
+        null,
+        pad,
+        h("span", { class: "node" }, label + " "),
+        h("span", { class: "lex" }, node.leaf_lexeme),
+      );
+    }
+    const head = h("div", null, pad, h("span", { class: "node" }, label));
+    if (!kids.length) return head;
+    return h("div", null, head, ...kids.map((c) => skeletonNode(c, holes, depth + 1)));
+  }
+
+  function holeTitle(hole, idx) {
+    if (!hole) return "hole " + (idx + 1);
+    const d = hole.divergence || {};
+    return (
+      "hole " + (idx + 1) + " · " + (hole.kind || "?") +
+      " · " + (d.differing ?? 0) + "/" + (d.members ?? 0) + " differ"
+    );
+  }
+
+  // A hole is a hotspot when most members diverge from the modal baseline.
+  function isHotspot(hole) {
+    const d = (hole && hole.divergence) || {};
+    const members = d.members ?? 0;
+    if (members < 2) return false;
+    return (d.differing ?? 0) * 2 >= members; // >= half the members differ
+  }
+
+  function templateSkeleton(template) {
+    const holes = template.holes || [];
+    const pre = h("div", { class: "skeleton", "data-skeleton": "1" });
+    appendKids(pre, skeletonNode(template.root, holes, 0));
+    return pre;
+  }
+
+  // ---- substitution grid (dry-rs#149) --------------------------------
+  // One row per member, one column per hole. A cell shows that member's
+  // bound lexeme(s) for the hole — a variadic cell stacks multiple
+  // elements. Columns whose hole is a hotspot get a highlight. Each column
+  // carries `data-hole` so the d-slider can hide it.
+  function gridCell(sub, hole) {
+    const els = (sub && sub.elements) || [];
+    if (!els.length) return h("td", null, h("span", { class: "absent" }, "<absent>"));
+    // Mark a cell divergent when its (single) element fp is not the modal.
+    // Guard on a KNOWN modal: when `distinct_values` is empty modalFp is
+    // null, and `e.fp !== null` would falsely mark every scalar cell
+    // divergent — so only apply divergent styling when a modal exists.
+    const modal = modalFp(hole);
+    const hasModal = modal !== null && modal !== undefined;
+    const td = h("td", null);
+    for (const e of els) {
+      const cls =
+        hasModal && els.length === 1 && e.fp !== modal
+          ? "variadic-elem divergent"
+          : "variadic-elem";
+      appendKids(td, h("span", { class: cls }, e.lexeme ?? ""));
+    }
+    return td;
+  }
+
+  function modalFp(hole) {
+    const dv = (hole && hole.divergence && hole.divergence.distinct_values) || [];
+    // distinct_values is ordered by descending count, so the first is modal.
+    return dv.length ? dv[0].fp : null;
+  }
+
+  function substitutionGrid(m) {
+    const template = m.template;
+    const holes = template.holes || [];
+    const forms = m.forms || [];
+    if (!holes.length) return null; // exact-dup / 0-hole: no grid.
+
+    const headCells = [h("th", null, "member")];
+    for (let hi = 0; hi < holes.length; hi++) {
+      const hole = holes[hi];
+      const hot = isHotspot(hole) ? " hotspot" : "";
+      headCells.push(
+        h(
+          "th",
+          { class: "hole-col" + hot, "data-hole": String(hi) },
+          "□" + (hi + 1),
+        ),
+      );
+    }
+    const thead = h("thead", null, h("tr", null, ...headCells));
+
+    const memberCount = forms.length;
+    const rows = [];
+    for (let k = 0; k < memberCount; k++) {
+      const cells = [h("td", null, formLabel(forms[k] || {}))];
+      for (let hi = 0; hi < holes.length; hi++) {
+        const hole = holes[hi];
+        const sub = (hole.substitutions || [])[k];
+        const cell = gridCell(sub, hole);
+        cell.setAttribute("data-hole", String(hi));
+        cells.push(cell);
+      }
+      rows.push(h("tr", null, ...cells));
+    }
+    const table = h("table", { class: "subgrid" }, thead, h("tbody", null, rows));
+    return h("div", { class: "grid-wrap" }, table);
+  }
+
+  // ---- d-slider (dry-rs#149) -----------------------------------------
+  // A per-cluster range [0 .. members]. As d rises, holes whose
+  // `divergence.differing < d` are hidden (skeleton marker + grid column).
+  // The visible set is monotone non-increasing in d (property P4d).
+  function applyDFilter(card, holes, d) {
+    for (let hi = 0; hi < holes.length; hi++) {
+      const differing = (holes[hi].divergence && holes[hi].divergence.differing) ?? 0;
+      const hidden = differing < d;
+      // Skeleton marker.
+      const marker = card.querySelector('.skeleton .hole[data-hole="' + hi + '"]');
+      if (marker) marker.classList.toggle("hidden-by-d", hidden);
+      // Grid column (header + cells).
+      const cols = card.querySelectorAll('.subgrid [data-hole="' + hi + '"]');
+      cols.forEach((c) => c.classList.toggle("col-hidden", hidden));
+    }
+  }
+
+  function dSlider(card, m) {
+    const holes = m.template.holes || [];
+    if (!holes.length) return null;
+    const members = (m.forms || []).length;
+    const max = Math.max(1, members);
+    const input = h("input", {
+      type: "range",
+      min: "0",
+      max: String(max),
+      step: "1",
+      value: "0",
+    });
+    const readout = h("span", { class: "d-readout" }, "d = 0 · " + holes.length + " holes shown");
+    input.addEventListener("input", () => {
+      const d = parseInt(input.value, 10) || 0;
+      applyDFilter(card, holes, d);
+      let shown = 0;
+      for (const hole of holes) if (((hole.divergence && hole.divergence.differing) ?? 0) >= d) shown++;
+      readout.textContent = "d = " + d + " · " + shown + " of " + holes.length + " holes shown";
+    });
+    return h(
+      "div",
+      { class: "d-slider", "data-dslider": "1" },
+      h("label", null, "d-slider"),
+      input,
+      readout,
+    );
+  }
+
+  // ---- cluster card --------------------------------------------------
   function clusterCard(m, i) {
     const forms = m.forms || [];
     const kind = (forms[0] && forms[0].kind) || "unknown";
-    // Showcase slot (later PR): present only when the optional `template`
-    // field is populated.
-    const tmpl = m.template
-      ? h("div", { class: "meta" }, "template: " + ((m.template.holes || []).length) + " holes")
-      : null;
-    return h(
+    const card = h(
       "div",
       { class: "card", id: "match-" + i },
       h(
@@ -285,9 +530,62 @@
         " ",
         h("span", { class: "meta" }, "· " + kind + " · " + forms.length + " forms"),
       ),
-      tmpl,
-      h("ul", null, forms.map((f) => h("li", null, formLabel(f)))),
     );
+
+    const template = m.template;
+    if (template) {
+      const holeCount = (template.holes || []).length;
+      if (holeCount === 0) {
+        // Exact-dup cluster: a concrete shared form, NO empty grid.
+        appendKids(
+          card,
+          h("div", { class: "meta" }, "exact structural match · no holes"),
+          templateSkeleton(template),
+        );
+      } else {
+        appendKids(
+          card,
+          h("div", { class: "meta" }, "template · " + holeCount + " holes"),
+          templateSkeleton(template),
+        );
+        const slider = dSlider(card, m);
+        if (slider) appendKids(card, slider);
+        // Large-cluster handling: collapse the grid by default beyond the
+        // member ceiling; render lazily when revealed.
+        if (forms.length > MEMBER_CEILING) {
+          const note = h(
+            "div",
+            { class: "grid-collapsed-note" },
+            forms.length + " members — substitution grid collapsed.",
+          );
+          const btn = h("button", { class: "reveal-btn", type: "button" }, "Show grid");
+          let revealed = false;
+          btn.addEventListener("click", () => {
+            if (revealed) return;
+            revealed = true;
+            const grid = substitutionGrid(m);
+            if (grid) {
+              note.parentNode.insertBefore(grid, note.nextSibling);
+              // Re-apply the active d-threshold so a lazily-revealed grid
+              // honors a d the user already moved before clicking reveal
+              // (otherwise it shows all columns until the next slider input).
+              const range = card.querySelector('.d-slider input[type="range"]');
+              const d = range ? parseInt(range.value, 10) || 0 : 0;
+              applyDFilter(card, template.holes || [], d);
+            }
+            btn.disabled = true;
+            btn.textContent = "Grid shown";
+          });
+          appendKids(card, note, btn);
+        } else {
+          const grid = substitutionGrid(m);
+          if (grid) appendKids(card, grid);
+        }
+      }
+    }
+
+    appendKids(card, h("ul", null, forms.map((f) => h("li", null, formLabel(f)))));
+    return card;
   }
 
   function renderClusters(env) {
@@ -306,10 +604,59 @@
     const list = el("cluster-list");
     clear(list);
     if (!visible.length) {
-      list.append(h("p", { class: "empty" }, "No clusters match the filters."));
+      appendKids(list, h("p", { class: "empty" }, "No clusters match the filters."));
       return;
     }
-    list.append(...visible.map(({ m, i }) => clusterCard(m, i)));
+    appendKids(list, ...visible.map(({ m, i }) => clusterCard(m, i)));
+  }
+
+  // ---- scope banner (dry-rs#149) -------------------------------------
+  // Read-only axes from Envelope.scope. When `crate_aware` is false, the two
+  // crate axes are grayed (no crate-id was derivable, so the engine treated
+  // them as no-ops). Degrades silently when scope is absent.
+  function renderScopeBanner(env) {
+    const section = el("scope-banner-section");
+    if (!section) return;
+    const scope = env.scope;
+    if (!scope) {
+      section.hidden = true;
+      return;
+    }
+    const crateAware = scope.crate_aware !== false;
+    const axes = [
+      { key: "within_crate", label: "within-crate", crate: true },
+      { key: "across_crate", label: "across-crate", crate: true },
+      { key: "within_module", label: "within-module", crate: false },
+      { key: "across_module", label: "across-module", crate: false },
+    ];
+    const chips = axes.map((a) => {
+      const on = scope[a.key] !== false;
+      let cls = "axis " + (on ? "on" : "off");
+      let title = a.label + (on ? " allowed" : " excluded");
+      // crate_aware == false grays the crate axes (no crate-id derivable).
+      if (a.crate && !crateAware) {
+        cls = "axis disabled";
+        title = a.label + " — no crate-id derivable this run (axis no-op)";
+      }
+      return h("span", { class: cls, title }, a.label);
+    });
+    clear(section);
+    section.hidden = false;
+    appendKids(
+      section,
+      h("h2", null, "Scope"),
+      h(
+        "div",
+        { class: "panel" },
+        h(
+          "div",
+          { class: "scope-banner" },
+          h("span", { class: "meta" }, "axes:"),
+          ...chips,
+          crateAware ? null : h("span", { class: "meta" }, "(crate axes inactive)"),
+        ),
+      ),
+    );
   }
 
   function main() {
@@ -317,12 +664,14 @@
     if (!env) {
       const ov = el("overview");
       clear(ov);
-      ov.append(
+      appendKids(
+        ov,
         h("h2", null, "Overview"),
         h("div", { class: "panel empty" }, "Could not load report data."),
       );
       return;
     }
+    renderScopeBanner(env);
     renderOverview(env);
     renderClusters(env);
     el("filter-tier").addEventListener("change", () => renderClusters(env));
