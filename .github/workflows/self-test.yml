@@ -347,3 +347,123 @@ jobs:
           echo "  scrap-rs's eventual public input/output contract is unknown;"
           echo "  guessing it now means rewriting this job on first contact"
           echo "  rather than ratcheting in once the contract stabilizes."
+
+  report-html:
+    name: report-html (self-contained HTML explorer artifact)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Job-level least-privilege, mirroring `dry-self-scorecard`: the
+    # workflow-wide block is `contents: read`; this job opts in to
+    # `pull-requests: write` so the marocchino sticky-comment step can
+    # post on PR events. The build / run / artifact-upload steps don't
+    # exercise the elevated token — only the final post step touches it.
+    #
+    # NOTE: deliberately NO `contents: write` here. The GitHub Pages
+    # *deploy* (which needs `contents: write` to push to `gh-pages`)
+    # lives in a SEPARATE `publish-pages` job in PR17 (dry-rs#113-gated)
+    # so the Pages-deploy scope never co-resides with
+    # `pull-requests: write` — zizmor's excessive-permissions audit
+    # requires the split. adr: ops/decisions/dry-rs/adr-report-mode-ci-pages.md
+    permissions:
+      contents: read
+      pull-requests: write
+    # The first REPORT-mode artifact. Mirrors `dry-self-scorecard`:
+    # bare `dry4rs report` against the production source, auto-discovers
+    # `dry.toml`, measurement-only (`--no-fail`). Distinct from the
+    # scorecard jobs in WHAT it emits: this job renders the SELF-
+    # CONTAINED HTML duplication explorer (the dual-mode askama reporter
+    # shipped in dry-rs#147 / #149 — overview + cluster list + template
+    # skeleton + substitution grid + d-slider + scope banner, the full
+    # showcase `Capabilities`) and uploads it as a downloadable build
+    # artifact, alongside a JSON envelope parsed for the sticky's
+    # Forms / Matches / per-tier stats.
+    #
+    # The live Open-on-Pages link lands in PR17 (dry-rs#113-gated): this
+    # job emits a clearly-marked placeholder via the composer's
+    # `PAGES_URL` env knob (unset here), so PR17 flips the link live by
+    # setting that env var — no body rework.
+    #
+    # Security note: the only `${{ ... }}` interpolations in this job
+    # reference TRUSTED GitHub context — `github.ref` (cache scoping),
+    # `github.event_name` (sticky skip-on-main gate), and
+    # `github.server_url` / `github.repository` / `github.run_id`
+    # (the artifact run URL). No untrusted strings (PR title, branch
+    # name, commit message) flow into `run:` blocks; the sticky body is
+    # composed by `scripts/compose-report-html-comment.sh` reading the
+    # committed JSON envelope on disk, never interpolated PR-author text.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # tracks @stable branch
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: dry-rs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build dry4rs (release)
+        run: cargo build --release -p dry4rs --locked
+      - name: Render the HTML explorer + JSON envelope
+        # ONE binary, TWO emissions over the SAME production source
+        # (auto-discovers `dry.toml`; `--format` is passed explicitly
+        # per emission so the `dry.toml` `[output].format` value does
+        # not pick the surface). `site/index.html` is the self-contained
+        # explorer uploaded as the artifact; `report.json` is the v0.1
+        # wire envelope parsed by the composer for the sticky stats.
+        # Measurement-only (`--no-fail`) — this surface never gates the
+        # workflow.
+        run: |
+          set -euo pipefail
+          mkdir -p site
+          ./target/release/dry4rs report \
+            --no-fail \
+            --format html \
+            crates/dry-core/src \
+            crates/dry4rs/src \
+            > site/index.html
+          ./target/release/dry4rs report \
+            --no-fail \
+            --format json \
+            crates/dry-core/src \
+            crates/dry4rs/src \
+            > report.json
+          echo "HTML explorer: $(wc -c < site/index.html) bytes -> site/index.html"
+      - name: Upload HTML explorer artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: report-html
+          path: site/
+          if-no-files-found: error
+      - name: Compose report-html sticky comment body
+        # The sticky body is composed by a script (not inline `run:`)
+        # so its empty-state branch is testable — see the negative-test
+        # step below. ARTIFACT_RUN_URL is built from TRUSTED github
+        # context only; PAGES_URL is left UNSET (PR16) so the composer
+        # renders the PR17 placeholder. No PR-author-controlled text
+        # ever reaches the script — template-injection-safe. The body
+        # also goes to `$GITHUB_STEP_SUMMARY` so push-to-main runs
+        # (no PR) still surface the stats.
+        env:
+          ARTIFACT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          bash scripts/compose-report-html-comment.sh report.json \
+            | tee report-html-comment.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Gate-pattern negative test — sticky body renders empty + populated
+        # Per the gate-pattern-negative-test rule: prove the composer
+        # renders BOTH with findings (positive) AND with zero findings
+        # (negative) — dry4rs OMITS zero-count tiers from `by_tier`, so
+        # the empty-state branch is real. A positive-only check could
+        # silently break the empty rendering.
+        run: bash scripts/test-compose-report-html-comment.sh
+      - name: Post report-html sticky PR comment
+        # Sticky edition of the step-summary rendering. Skipped on
+        # push-to-main (no PR to comment on); on PR events marocchino
+        # locates any prior comment by `header:` and updates in place.
+        # The header value (HTML-comment dedup marker) is DISTINCT from
+        # the dry/crap/corpus scorecard stickies so all four coexist on
+        # the PR; it mirrors the body H2.
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: "dry-rs · report-html explorer"
+          path: report-html-comment.md
