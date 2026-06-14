@@ -38,6 +38,12 @@ pub mod comparison;
 pub mod domain;
 pub mod ports;
 
+/// Shared test fixtures (`make_form_ref` / `make_span` builders),
+/// consolidated from per-module copies (dry-rs#124). Compiled only
+/// under `cfg(test)`, so it never reaches the production binary.
+#[cfg(test)]
+mod test_support;
+
 #[cfg(test)]
 mod tests {
     #[test]

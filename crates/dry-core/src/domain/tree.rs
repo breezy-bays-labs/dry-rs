@@ -222,11 +222,7 @@ impl NormalizedTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::LineColumn;
-
-    fn make_span() -> Span {
-        Span::try_new(LineColumn::new(1, 0), LineColumn::new(3, 12)).unwrap()
-    }
+    use crate::test_support::make_span;
 
     #[test]
     fn leaf_class_serializes_snake_case() {

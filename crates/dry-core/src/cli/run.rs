@@ -1457,6 +1457,7 @@ mod tests {
         FilePath, FormKind, FormRef, LineColumn, Match, NormalizedForm, Report, Span, Summary, Tier,
     };
     use crate::ports::{NormalizeError, NormalizerPort, PlaceholderPolicy};
+    use crate::test_support::make_form_ref_col5 as make_form_ref;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -1490,14 +1491,6 @@ mod tests {
         fn language(&self) -> &'static str {
             "stub"
         }
-    }
-
-    fn make_form_ref(path: &str, line: u32) -> FormRef {
-        FormRef::new(
-            FilePath::from(PathBuf::from(path)),
-            Span::try_new(LineColumn::new(line, 0), LineColumn::new(line + 2, 5)).unwrap(),
-            FormKind::Production,
-        )
     }
 
     fn make_match(score: f64, tier: Tier) -> Match {
