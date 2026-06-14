@@ -45,6 +45,39 @@ fn parses_with_explicit_report_subcommand() {
 }
 
 #[test]
+fn parses_with_explore_subcommand() {
+    let args = parse_test_args(&["explore"]).expect("explore subcommand must parse");
+    assert!(matches!(args.command, Some(Command::Explore { .. })));
+    // explore IS an analysis command and defaults paths to "." when none
+    // are supplied (same contract as report / stats / check).
+    assert_eq!(args.analysis_paths(), vec![PathBuf::from(".")]);
+}
+
+#[test]
+fn parses_explore_subcommand_with_paths_and_no_open() {
+    let args = parse_test_args(&["explore", "--no-open", "src/"])
+        .expect("explore subcommand accepts a path + --no-open");
+    assert!(args.no_open, "--no-open must set the no_open flag");
+    match args.command {
+        Some(Command::Explore { paths }) => {
+            assert_eq!(paths, vec![PathBuf::from("src/")]);
+        }
+        other => panic!("expected Explore with paths, got {other:?}"),
+    }
+}
+
+#[test]
+fn no_open_flag_defaults_to_false() {
+    // Absent `--no-open`, the flag is false (the browser-open is gated only
+    // by the explore path itself + the $DRY_NO_OPEN env escape).
+    let args = parse_test_args(&["report"]).expect("must parse");
+    assert!(
+        !args.no_open,
+        "no_open must default to false without the flag"
+    );
+}
+
+#[test]
 fn parses_with_stats_subcommand() {
     let args = parse_test_args(&["stats"]).expect("stats subcommand must parse");
     assert!(matches!(args.command, Some(Command::Stats { .. })));
