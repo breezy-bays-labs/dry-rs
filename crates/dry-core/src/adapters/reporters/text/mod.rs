@@ -75,15 +75,8 @@ pub fn render(report: &Report) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{FilePath, FormKind, FormRef, LineColumn, Match, Span, Summary, Tier};
-
-    fn make_form_ref(path: &str, line: u32) -> FormRef {
-        FormRef::new(
-            FilePath::from(std::path::PathBuf::from(path)),
-            Span::try_new(LineColumn::new(line, 0), LineColumn::new(line + 2, 12)).unwrap(),
-            FormKind::Production,
-        )
-    }
+    use crate::domain::{Match, Summary, Tier};
+    use crate::test_support::make_form_ref_at as make_form_ref;
 
     #[test]
     fn empty_report_renders_single_line() {

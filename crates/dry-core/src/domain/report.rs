@@ -60,18 +60,9 @@ impl Default for Report {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
-    use crate::domain::{FilePath, FormKind, FormRef, LineColumn, Span, Tier};
-
-    fn make_form_ref() -> FormRef {
-        FormRef::new(
-            FilePath::from(PathBuf::from("src/foo.rs")),
-            Span::try_new(LineColumn::new(1, 0), LineColumn::new(3, 12)).unwrap(),
-            FormKind::Production,
-        )
-    }
+    use crate::domain::Tier;
+    use crate::test_support::make_form_ref_default as make_form_ref;
 
     #[test]
     fn empty_passed_is_passing_with_no_matches() {

@@ -251,13 +251,12 @@ fn structural_score(score: f64, renames: usize, total_holes: usize) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
     use crate::domain::{
-        DistinctValue, Divergence, FilePath, FormKind, HoleId, HoleKind, LineColumn, Span,
-        SubElement, Substitution, TemplateNode,
+        DistinctValue, Divergence, HoleId, HoleKind, LineColumn, Span, SubElement, Substitution,
+        TemplateNode,
     };
+    use crate::test_support::make_form_ref_default as make_form_ref;
 
     /// A span helper for template fixtures.
     fn tsp() -> Span {
@@ -315,14 +314,6 @@ mod tests {
                 leaf_lexeme: None,
             },
             holes,
-        )
-    }
-
-    fn make_form_ref() -> FormRef {
-        FormRef::new(
-            FilePath::from(PathBuf::from("src/foo.rs")),
-            Span::try_new(LineColumn::new(1, 0), LineColumn::new(3, 12)).unwrap(),
-            FormKind::Production,
         )
     }
 

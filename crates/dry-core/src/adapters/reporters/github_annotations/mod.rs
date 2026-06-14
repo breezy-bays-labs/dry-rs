@@ -149,18 +149,7 @@ fn gha_escape_property(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::domain::{FilePath, FormKind, FormRef, LineColumn, Match, Span, Summary, Tier};
-
-    fn make_form_ref(path: &str, start_line: u32, end_line: u32) -> FormRef {
-        FormRef::new(
-            FilePath::from(std::path::PathBuf::from(path)),
-            Span::try_new(
-                LineColumn::new(start_line, 0),
-                LineColumn::new(end_line, 12),
-            )
-            .unwrap(),
-            FormKind::Production,
-        )
-    }
+    use crate::test_support::make_form_ref_lines as make_form_ref;
 
     fn match_with_tier(tier: Tier) -> Match {
         Match::new(
