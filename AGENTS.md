@@ -54,6 +54,19 @@ source-level (`dry-core AST-library purity` CI job rejects matching
 - **Symmetric dogfood** — dry4rs's CI also runs `crap4rs` and
   `scrap4rs` against its own production code (`crap-self` /
   `scrap-self` jobs, gated on the production-code CC ladder).
+- **`explore` is a dev tool, never a gate** (dry-rs#151) — the
+  `explore` subcommand runs the SAME analysis as `report`, renders the
+  `Mode::Explore` HTML explorer to `std::env::temp_dir()/dry-explore-
+  <tool_name>.html`, prints the path, opens it (`$BROWSER` → `open` →
+  `xdg-open`), and ALWAYS exits 0 (no `--no-fail` / `result.passed`
+  derivation). The browser launch is suppressed by `--no-open` OR the
+  `$DRY_NO_OPEN` env escape so CI / tests never spawn a browser; the
+  temp file is written REGARDLESS. Per dry-rs#114 the EXPLORE scope
+  change model is a binary re-run (re-invoke `explore` with new scope
+  flags) — there is NO precomputed runtime toggle; the frontend
+  auto-focuses the hottest cluster (cardinality × score × span-lines)
+  client-side. Do NOT suggest precomputing scope combinations or
+  removing the `--no-open` / `$DRY_NO_OPEN` gate.
 - **No release workflow during v0.x** — `release.yml` arrives at
   per-crate v1.0 prep. Tags are git-pinning markers only.
 - **No `tools.toml` Warden pin** in mokumo during v0.x — mokumo
@@ -347,8 +360,9 @@ pub struct Match {
   score slots' bare-`#[serde(default)]`-null shape — the omission is
   deliberate, the same coexisting-serde-shapes rule as `template` /
   `scope`. `Mode` is an enum (`Report` / `Explore`, `#[non_exhaustive]`,
-  `snake_case` wire tags) — PR13 emits `Mode::Report`; the `explore`
-  subcommand emits `Mode::Explore`. `Capabilities` is a result struct (NO
+  `snake_case` wire tags) — `report --format html` emits `Mode::Report`;
+  the `explore` subcommand (dry-rs#151) emits `Mode::Explore`.
+  `Capabilities` is a result struct (NO
   `#[non_exhaustive]`; evolves via `Capabilities::report()` /
   `Capabilities::showcase()` / `Capabilities::new(...)`) carrying five
   orthogonal feature flags — `overview` / `clusters` / `substitution_grid`
