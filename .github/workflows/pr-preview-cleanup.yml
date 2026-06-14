@@ -1,0 +1,86 @@
+# Removes a PR's per-PR Pages preview directory (gh-pages/pr-<N>/) when
+# the PR closes, so stale previews don't accumulate on the gh-pages
+# branch (dry-rs#156, epic #111). peaceiris (used by self-test.yml's
+# `publish-pages` job) has no built-in cleanup, so this is the companion
+# teardown. Mirrors cute-dbt's `pr-preview-cleanup.yml`.
+#
+# Kept as its OWN workflow (NOT a `closed`-typed job inside
+# self-test.yml) so the full build/render/publish pipeline doesn't run
+# on PR close — this fires only the lightweight git-rm.
+#
+# Security note: the only `${{ ... }}` interpolations reference TRUSTED
+# GitHub context — `github.event.pull_request.head.repo.full_name`
+# (fork gate), `github.repository`, and the PR number routed through
+# `env:` (an integer, never attacker text). No untrusted strings flow
+# into the `run:` block.
+
+name: PR preview cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+# Default workflow permissions: least privilege. The cleanup job opts
+# in to `contents: write` (it pushes the prune commit to gh-pages); no
+# other scope is granted.
+permissions:
+  contents: read
+
+# Shared with self-test.yml's `publish-pages` job: every gh-pages push
+# serializes through ONE group so concurrent peaceiris/git pushes can't
+# race + lose commits. `cancel-in-progress: false` — never abandon a
+# half-done branch push.
+concurrency:
+  group: gh-pages
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  cleanup:
+    name: Remove gh-pages/pr-<N>/ on PR close
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Fork PRs get a read-only GITHUB_TOKEN, so the push can't succeed —
+    # skip cleanly (their previews were never published in the first
+    # place, the `publish-pages` job no-ops on forks).
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write   # push the cleanup commit to gh-pages
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: gh-pages
+          # persist-credentials TRUE here (deviates from the repo-wide
+          # default of false): this job pushes the cleanup commit back to
+          # gh-pages using the checkout token.
+          persist-credentials: true
+          fetch-depth: 1
+      - name: Remove this PR's preview directory
+        env:
+          # PR number via env (not direct `${{ }}` interpolation) — the
+          # safe workflow pattern; it's an integer, never user-controlled
+          # text.
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # actions/checkout configures no committer identity — set one,
+          # or `git commit` fails.
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Prune ONLY this PR's subtree. --ignore-unmatch so a PR that
+          # never published a preview (e.g. closed before any push) is a
+          # clean no-op rather than a hard error.
+          git rm -r --ignore-unmatch "pr-${PR_NUMBER}"
+          # Commit + push only when `git rm` actually staged a removal. An
+          # explicit staged-changes check — NOT `git commit … || exit 0`,
+          # which also masks a genuine commit failure (hook/config error)
+          # and silently leaves a stale pr-<N>/ dir.
+          if git diff --cached --quiet; then
+            echo "No pr-${PR_NUMBER}/ preview to remove — nothing to clean up."
+            exit 0
+          fi
+          git commit -m "chore: clean up Pages preview for PR #${PR_NUMBER}"
+          git push

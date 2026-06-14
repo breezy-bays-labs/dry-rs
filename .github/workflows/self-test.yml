@@ -360,10 +360,12 @@ jobs:
     #
     # NOTE: deliberately NO `contents: write` here. The GitHub Pages
     # *deploy* (which needs `contents: write` to push to `gh-pages`)
-    # lives in a SEPARATE `publish-pages` job in PR17 (dry-rs#113-gated)
-    # so the Pages-deploy scope never co-resides with
-    # `pull-requests: write` — zizmor's excessive-permissions audit
-    # requires the split. adr: ops/decisions/dry-rs/adr-report-mode-ci-pages.md
+    # lives in the SEPARATE `publish-pages` job below (dry-rs#156) so the
+    # Pages-deploy scope never co-resides with `pull-requests: write` —
+    # zizmor's excessive-permissions audit requires the split. This job
+    # only ever holds `pull-requests: write` (the sticky post); the
+    # `contents: write` Pages push is the other job's sole scope.
+    # adr: ops/decisions/dry-rs/adr-report-mode-ci-pages.md
     permissions:
       contents: read
       pull-requests: write
@@ -378,19 +380,26 @@ jobs:
     # artifact, alongside a JSON envelope parsed for the sticky's
     # Forms / Matches / per-tier stats.
     #
-    # The live Open-on-Pages link lands in PR17 (dry-rs#113-gated): this
-    # job emits a clearly-marked placeholder via the composer's
-    # `PAGES_URL` env knob (unset here), so PR17 flips the link live by
-    # setting that env var — no body rework.
+    # The live Open-on-Pages link is now WIRED (dry-rs#156): on PR events
+    # the compose step sets `PAGES_URL` to this PR's
+    # `…github.io/<repo>/pr-<N>/` preview (derived from trusted context:
+    # owner + repo name + PR number), so the sticky's `View ↗` cell is a
+    # one-click live link. The companion `publish-pages` job below
+    # actually pushes `site/index.html` to `gh-pages/pr-<N>/`. On
+    # push-to-main `PAGES_URL` stays unset (no PR namespace), so the
+    # step-summary degrades to the artifact-only line.
     #
-    # Security note: the only `${{ ... }}` interpolations in this job
-    # reference TRUSTED GitHub context — `github.ref` (cache scoping),
-    # `github.event_name` (sticky skip-on-main gate), and
+    # Security note: every `${{ ... }}` interpolation in this job
+    # references TRUSTED GitHub context — `github.ref` (cache scoping),
+    # `github.event_name` (sticky skip-on-main gate),
     # `github.server_url` / `github.repository` / `github.run_id`
-    # (the artifact run URL). No untrusted strings (PR title, branch
-    # name, commit message) flow into `run:` blocks; the sticky body is
-    # composed by `scripts/compose-report-html-comment.sh` reading the
-    # committed JSON envelope on disk, never interpolated PR-author text.
+    # (the artifact run URL), and `github.repository_owner` /
+    # `github.event.repository.name` / `github.event.pull_request.number`
+    # (the Pages URL — all workflow-controlled, never attacker text). No
+    # untrusted strings (PR title, branch name, commit message) flow into
+    # `run:` blocks; the sticky body is composed by
+    # `scripts/compose-report-html-comment.sh` reading the JSON envelope
+    # on disk, never interpolated PR-author text.
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -436,14 +445,22 @@ jobs:
       - name: Compose report-html sticky comment body
         # The sticky body is composed by a script (not inline `run:`)
         # so its empty-state branch is testable — see the negative-test
-        # step below. ARTIFACT_RUN_URL is built from TRUSTED github
-        # context only; PAGES_URL is left UNSET (PR16) so the composer
-        # renders the PR17 placeholder. No PR-author-controlled text
-        # ever reaches the script — template-injection-safe. The body
-        # also goes to `$GITHUB_STEP_SUMMARY` so push-to-main runs
-        # (no PR) still surface the stats.
+        # step below. Both ARTIFACT_RUN_URL and PAGES_URL are built from
+        # TRUSTED github context only. On PR events PAGES_URL is the live
+        # `…github.io/<repo>/pr-<N>/` preview (dry-rs#156); on
+        # push-to-main it is left UNSET (no PR namespace) so the composer
+        # degrades the View line to the artifact-only note. No
+        # PR-author-controlled text ever reaches the script —
+        # template-injection-safe. The body also goes to
+        # `$GITHUB_STEP_SUMMARY` so push-to-main runs (no PR) still
+        # surface the stats.
         env:
           ARTIFACT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Live per-PR Pages preview URL. Empty on non-PR events
+          # (`github.event.pull_request.number` is empty), so the
+          # composer renders the artifact-only View note then. Built from
+          # owner + repo name + PR number — all workflow-controlled.
+          PAGES_URL: ${{ github.event_name == 'pull_request' && format('https://{0}.github.io/{1}/pr-{2}/', github.repository_owner, github.event.repository.name, github.event.pull_request.number) || '' }}
         run: |
           set -euo pipefail
           bash scripts/compose-report-html-comment.sh report.json \
@@ -467,3 +484,104 @@ jobs:
         with:
           header: "dry-rs · report-html explorer"
           path: report-html-comment.md
+
+  publish-pages:
+    # Publishes the rendered HTML explorer (`site/index.html`) to this
+    # repo's `gh-pages` branch (dry-rs#156, epic #111, resolves the #113
+    # "Pages ON" decision), so the `report-html` sticky's `View ↗` cell is
+    # a one-click live link. Mirrors cute-dbt's `publish-previews` job:
+    #
+    #   * On PRs   → `gh-pages/pr-<N>/index.html` (`destination_dir:
+    #                pr-<N>`, `keep_files: true` so the root + every OTHER
+    #                pr-*/ dir survives; re-runs overwrite this PR's dir in
+    #                place → exactly one live preview per PR).
+    #   * On main  → `gh-pages/index.html` (ROOT) so the latest report
+    #                lives at the Pages root.
+    #
+    # Permission split (zizmor excessive-permissions, load-bearing): this
+    # job carries `contents: write` ONLY (peaceiris pushes to gh-pages) —
+    # NO `pull-requests: write`. The sticky lives in the `report-html` job,
+    # which carries `pull-requests: write` ONLY — NO `contents: write`.
+    # The two scopes NEVER co-reside on one job. This deploy job ALSO
+    # carries NO build cache (no Swatinem/rust-cache) — a cache-poisoning
+    # vector zizmor's `cache-poisoning` audit forbids on a job that pushes
+    # to a branch other CI reads.
+    #
+    # Fork-PR safety: a fork PR's GITHUB_TOKEN is read-only regardless of
+    # `permissions:`, so peaceiris cannot push. Every step is gated on the
+    # PR coming from the SAME repo (or on a push event), so the job is a
+    # clean no-op (ends green) on fork PRs; the sticky's `View ↗` cell
+    # renders the fork caveat there.
+    #
+    # Security note: every `${{ ... }}` interpolation references TRUSTED
+    # GitHub context only (`github.event_name`,
+    # `github.event.pull_request.head.repo.full_name`,
+    # `github.repository`, the PR number routed through `env:`). No
+    # untrusted strings flow into `run:` blocks. The peaceiris
+    # `destination_dir` is `pr-<N>` built via `format()` from the PR
+    # number — an integer, never attacker text.
+    # adr: ops/decisions/dry-rs/adr-report-mode-ci-pages.md
+    name: publish-pages (GitHub Pages per-PR + main-root preview)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [report-html]
+    # Run on PRs from the SAME repo, and on push-to-main. `if: always()`
+    # so a non-zero (but non-fatal) upstream render still attempts to
+    # publish whatever HTML landed. Fork PRs are excluded here so the job
+    # never even starts its no-op steps on a read-only token.
+    if: |
+      always()
+      && (
+        (github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository)
+        || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      )
+    permissions:
+      contents: write   # peaceiris pushes to the gh-pages branch
+    # Shared with pr-preview-cleanup.yml: every gh-pages push serializes
+    # through one group so concurrent peaceiris pushes can't race + lose
+    # commits. `cancel-in-progress: false` — never abandon a half-done
+    # branch push.
+    concurrency:
+      group: gh-pages
+      cancel-in-progress: false
+    steps:
+      - name: Checkout (peaceiris needs a git workspace)
+        # peaceiris/actions-gh-pages runs git against the repo; without a
+        # checkout the workspace has no .git and the push fails.
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false   # peaceiris authenticates via github_token
+          fetch-depth: 1
+      - name: Download report-html artifact
+        # The `report-html` job uploaded `site/` (the self-contained
+        # explorer) as the `report-html` artifact. Pull it back into
+        # `./site` so peaceiris can publish it. No new third-party action:
+        # `actions/download-artifact` (SHA-pinned) reads THIS run's
+        # artifacts. Pinned to v7 to MATCH the `report-html` job's
+        # `actions/upload-artifact@…# v7.0.1` — the v4 backend cannot read
+        # v7-uploaded artifacts, so the major versions must align.
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: report-html
+          path: site
+      - name: Show site tree
+        run: |
+          set -euo pipefail
+          echo "publish_dir ./site:"
+          find site -type f 2>/dev/null || echo "(empty)"
+      - name: Publish to gh-pages (pr-<N>/ on PRs, root on main)
+        # keep_files: true preserves every OTHER pr-*/ dir AND the root
+        # report (peaceiris would otherwise wipe the branch outside
+        # destination_dir). On PRs, destination_dir scopes the push to
+        # this PR's namespace; re-runs overwrite it in place. On push to
+        # main, destination_dir is empty → publish to the gh-pages ROOT so
+        # the latest report lives at the Pages root.
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          # Empty on push-to-main → root; `pr-<N>` on pull_request. The
+          # PR number is an integer (workflow context), not user text.
+          destination_dir: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || '' }}
+          keep_files: true
