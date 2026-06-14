@@ -32,14 +32,15 @@
 # Environment (all OPTIONAL; trusted GitHub context only):
 #   ARTIFACT_RUN_URL  — link to the workflow run hosting the uploaded
 #                       `report-html` artifact (the HTML explorer). When
-#                       unset, the Download line degrades to a "see the
-#                       run's Artifacts section" note.
-#   PAGES_URL         — live GitHub Pages preview URL for this report.
-#                       PR16 ships WITHOUT a live Pages deploy; PR17
-#                       (dry-rs#113-gated) flips it on. When unset, the
-#                       Open-on-Pages line renders a clearly-marked
-#                       "lands in PR17" placeholder so PR17 only needs
-#                       to set this env var — no body rework.
+#                       unset, the Download cell degrades to a "run's
+#                       Artifacts section" note.
+#   PAGES_URL         — live GitHub Pages preview URL for this report
+#                       (dry-rs#156: `…github.io/<repo>/pr-<N>/`). Set on
+#                       PR events; the `View ↗` cell becomes a one-click
+#                       live link. When unset (push-to-main, or a fork PR
+#                       whose read-only token can't publish), the `View ↗`
+#                       cell renders a clearly-marked "download instead"
+#                       note — no body rework.
 #
 # Output: the markdown comment body on stdout.
 #
@@ -71,29 +72,41 @@ auto_refactor="$(jq -r '.result.summary.by_tier.auto_refactor // 0' "$report")"
 review_first="$(jq -r '.result.summary.by_tier.review_first // 0' "$report")"
 advisory="$(jq -r '.result.summary.by_tier.advisory // 0' "$report")"
 
-# Download-artifact line: prefer a direct run link when the trusted
-# context supplied one, else point at the run's Artifacts section.
-if [[ -n "${ARTIFACT_RUN_URL:-}" ]]; then
-    download_line="[Download the HTML explorer](${ARTIFACT_RUN_URL}) (the \`report-html\` artifact on this run)."
+# The cute-dbt-style action cells (mirrors
+# `breezy-bays-labs/cute-dbt` `report-preview.yml`'s
+# `| Report | View | Download |` table). Each is built from TRUSTED
+# context only — no PR-author text is ever interpolated.
+#
+# View ↗ cell: a one-click live GitHub Pages preview when PAGES_URL is
+# set (PR events, same-repo). When unset (push-to-main, or a fork PR
+# whose read-only token can't publish), it degrades to a clearly-marked
+# "download instead" note rather than a dead 404 link.
+if [[ -n "${PAGES_URL:-}" ]]; then
+    view_cell="[👁 View ↗](${PAGES_URL})"
 else
-    download_line="Download the \`report-html\` artifact from this workflow run's **Artifacts** section."
+    view_cell="_download ↓_"
 fi
 
-# Open-on-Pages line: live in PR17 (dry-rs#113-gated). Until PAGES_URL
-# is set, render a clearly-marked placeholder so PR17 only flips the
-# env var — the body shape never changes.
-if [[ -n "${PAGES_URL:-}" ]]; then
-    pages_line="[Open the live explorer on GitHub Pages](${PAGES_URL})."
+# Download cell: prefer a direct run link when the trusted context
+# supplied one, else point at the run's Artifacts section.
+if [[ -n "${ARTIFACT_RUN_URL:-}" ]]; then
+    download_cell="[⬇ Download](${ARTIFACT_RUN_URL})"
 else
-    pages_line="_Open-on-Pages: the live preview URL lands in PR17 (dry-rs#113-gated GitHub Pages publish). Until then, download the artifact above._"
+    download_cell="_run's **Artifacts** section_"
 fi
 
 # Compose the body. The H2 mirrors the marocchino `header:` dedup
-# marker so the sticky stays visually identifiable on the PR.
+# marker so the sticky stays visually identifiable on the PR. The
+# `| Report | View | Download |` action table (cute-dbt-style) leads;
+# the Forms / Matches + per-tier stats follow.
 cat <<EOF
 ## dry-rs · report-html explorer
 
 Self-contained HTML duplication explorer, rendered by \`dry4rs report --format html\` against \`crates/dry-core/src\` + \`crates/dry4rs/src\` (auto-discovers \`dry.toml\`). Measurement only (\`--no-fail\`) — the production-code DRY gate lives in the \`dry-self-scorecard\` sticky.
+
+| Report | View | Download |
+|---|---|---|
+| \`index.html\` (explorer) | ${view_cell} | ${download_cell} |
 
 | Metric | Count |
 | --- | ---: |
@@ -106,6 +119,7 @@ Self-contained HTML duplication explorer, rendered by \`dry4rs report --format h
 | \`review_first\` (>= 0.85) | ${review_first} |
 | \`advisory\` (>= threshold) | ${advisory} |
 
-- ${download_line}
-- ${pages_line}
+**👁 View ↗** opens the explorer in your browser in one click — published to this repo's GitHub Pages under \`/pr-<N>/\`. **⬇ Download** fetches the same self-contained HTML as a workflow artifact (auth-gated; works fully offline). Either way the explorer makes zero external resource requests.
+
+_The Pages preview may take ~1 min to update after this comment posts. On PRs from forks the View link is unavailable (read-only token) — use Download. If this repo's GitHub Pages site is private (Enterprise), the View link is reachable only to authorized users; otherwise a published report is reachable by anyone with the URL._
 EOF
