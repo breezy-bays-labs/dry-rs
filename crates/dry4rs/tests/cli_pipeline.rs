@@ -498,6 +498,175 @@ fn report_html_no_fail_exits_zero() {
     assert!(status.success(), "html --no-fail must exit 0");
 }
 
+/// Run `dry4rs <args>` against the tempdir corpus with `TMPDIR` /
+/// `DRY_NO_OPEN` overridden so the `explore` path writes its artifact into
+/// an isolated dir and NEVER launches a browser. Returns
+/// (status, stdout, stderr); callers read the printed path off stdout to
+/// find the written `dry-explore-dry4rs.html`.
+///
+/// `TMPDIR` redirects `std::env::temp_dir()` to a per-test directory so
+/// parallel `explore` tests don't race on the shared stable filename.
+/// `DRY_NO_OPEN=1` is belt-and-suspenders with `--no-open` — either alone
+/// suppresses the spawn; setting both makes the CI-safe contract explicit
+/// and keeps the test from hanging on a headless runner.
+fn run_explore(args: &[&str], tmpdir: &Path) -> (std::process::ExitStatus, String, String) {
+    let bin = env!("CARGO_BIN_EXE_dry4rs");
+    let output = Command::new(bin)
+        .env("TMPDIR", tmpdir)
+        .env("DRY_NO_OPEN", "1")
+        .args(args)
+        .output()
+        .expect("dry4rs binary should execute");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    (output.status, stdout, stderr)
+}
+
+#[test]
+fn explore_exits_zero_even_when_findings_present() {
+    // `explore` is a dev tool, NOT a gate — it ALWAYS exits 0, even when
+    // the corpus has a score-1.0 duplication that would FAIL the `check` /
+    // `report` gate. Run with --no-open + DRY_NO_OPEN so no browser opens.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let corpus = tmp.path().join("corpus");
+    write_duplication_fixture(&corpus);
+    let out_dir = tmp.path().join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    let path_arg = corpus.to_string_lossy().into_owned();
+    let (status, _stdout, stderr) = run_explore(&["explore", "--no-open", &path_arg], &out_dir);
+    assert!(
+        status.success(),
+        "explore must exit 0 even with findings; status={status:?}, stderr={stderr}"
+    );
+}
+
+#[test]
+fn explore_writes_well_formed_html_with_explore_mode_island() {
+    // The temp HTML file is ALWAYS written (regardless of --no-open). It
+    // must be a self-contained page whose base64 `#dry-data` island decodes
+    // to the wire envelope tagged `mode == "explore"`, carrying the fixture
+    // cluster. The path is printed to stdout.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let corpus = tmp.path().join("corpus");
+    write_duplication_fixture(&corpus);
+    let out_dir = tmp.path().join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    let path_arg = corpus.to_string_lossy().into_owned();
+
+    let (status, stdout, _stderr) = run_explore(&["explore", "--no-open", &path_arg], &out_dir);
+    assert!(status.success(), "explore must exit 0");
+
+    // The first stdout line is the written file path.
+    let printed_path = stdout.lines().next().expect("explore prints the path");
+    let written = Path::new(printed_path);
+    assert!(
+        written.is_file(),
+        "explore must write the temp HTML file: {printed_path}"
+    );
+    // The artifact lands under the redirected TMPDIR (isolation proof).
+    assert!(
+        written.starts_with(&out_dir),
+        "explore artifact must live under TMPDIR; got {printed_path}"
+    );
+
+    let html = fs::read_to_string(written).expect("explore HTML must be readable");
+    // Single-file shell hooks (well-formed page).
+    assert!(
+        html.starts_with("<!doctype html>") || html.starts_with("<!DOCTYPE html>"),
+        "must be a single HTML file: {html}"
+    );
+    assert!(html.contains("<style>"), "inline CSS expected");
+    assert!(
+        html.contains("type=\"module\""),
+        "inline ES-module expected"
+    );
+    assert!(html.contains("id=\"dry-data\""), "data island expected");
+    // The island is base64 — no `<` so no `</script>` break-out (security).
+    assert!(
+        !extract_data_island(&html).contains('<'),
+        "base64 island must contain no `<`: {html}"
+    );
+
+    // The island decodes to the wire envelope, tagged EXPLORE mode.
+    let envelope = decode_data_island(&html);
+    assert_eq!(envelope["schema_version"], 1);
+    assert_eq!(
+        envelope["mode"], "explore",
+        "explore path must emit mode == explore: {html}"
+    );
+    // Showcase capabilities ride the island so the frontend mounts every
+    // view (template skeleton + grid + d-slider + scope banner).
+    assert_eq!(envelope["capabilities"]["overview"], true);
+    assert_eq!(envelope["capabilities"]["substitution_grid"], true);
+    // The fixture surfaces a cluster; the truthful gate carries it.
+    assert!(
+        envelope["result"]["matches"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false),
+        "result.matches must carry the fixture cluster: {html}"
+    );
+    // The frontend ships the explore-mode hottest-cluster auto-focus.
+    assert!(
+        html.contains("focusHottestCluster"),
+        "explorer JS must include the hottest-cluster focus: {html}"
+    );
+}
+
+#[test]
+fn explore_no_open_flag_suppresses_browser_and_still_writes_file() {
+    // `--no-open` skips the browser spawn; the temp file is STILL written.
+    // The stderr note proves the suppression path ran (no browser process
+    // launched, so the test never hangs). This is the CI-safe contract.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let corpus = tmp.path().join("corpus");
+    write_duplication_fixture(&corpus);
+    let out_dir = tmp.path().join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    let path_arg = corpus.to_string_lossy().into_owned();
+
+    let (status, stdout, stderr) = run_explore(&["explore", "--no-open", &path_arg], &out_dir);
+    assert!(status.success(), "explore --no-open must exit 0");
+    assert!(
+        stderr.contains("browser launch suppressed"),
+        "explore --no-open must report the suppression: {stderr}"
+    );
+    // File written regardless of --no-open.
+    let printed_path = stdout.lines().next().expect("explore prints the path");
+    assert!(
+        Path::new(printed_path).is_file(),
+        "temp file must be written even with --no-open: {printed_path}"
+    );
+}
+
+#[test]
+fn explore_env_dry_no_open_suppresses_browser_without_flag() {
+    // The `$DRY_NO_OPEN` env escape suppresses the browser launch even when
+    // `--no-open` is NOT passed — the env-only opt-out a CI harness can set
+    // globally. `run_explore` always sets `DRY_NO_OPEN=1`, so this run omits
+    // the `--no-open` flag to prove the env path alone gates the spawn (the
+    // test would hang launching a browser if it didn't).
+    let tmp = tempfile::TempDir::new().unwrap();
+    let corpus = tmp.path().join("corpus");
+    write_duplication_fixture(&corpus);
+    let out_dir = tmp.path().join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    let path_arg = corpus.to_string_lossy().into_owned();
+
+    // NOTE: no `--no-open` flag here — only the env escape gates the spawn.
+    let (status, stdout, stderr) = run_explore(&["explore", &path_arg], &out_dir);
+    assert!(status.success(), "explore must exit 0 under $DRY_NO_OPEN");
+    assert!(
+        stderr.contains("browser launch suppressed"),
+        "$DRY_NO_OPEN alone must suppress the browser: {stderr}"
+    );
+    let printed_path = stdout.lines().next().expect("explore prints the path");
+    assert!(
+        Path::new(printed_path).is_file(),
+        "temp file must be written under $DRY_NO_OPEN: {printed_path}"
+    );
+}
+
 #[test]
 fn ignore_subcommand_is_skeletal_at_v0_1() {
     // `ignore <fingerprint>` is a v0.1 stub — emits a stderr note

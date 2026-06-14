@@ -137,6 +137,19 @@ pub fn build_command(meta: &AdapterMeta) -> Command {
                     "Path to dry.toml; bypasses auto-discovery (missing-is-error)",
                 ),
         )
+        // New at dry-rs#151: suppress the browser launch on the `explore`
+        // path. `global(true)` so it may appear before OR after the
+        // subcommand; a no-op for every command except `explore`. The
+        // run loop also honors the `$DRY_NO_OPEN` env escape (CI-safe).
+        .arg(
+            Arg::new("no_open")
+                .long("no-open")
+                .global(true)
+                .action(ArgAction::SetTrue)
+                .help(
+                    "Do not open the generated HTML in a browser (explore only); the temp file is still written. Also honored via $DRY_NO_OPEN",
+                ),
+        )
         // New at dry-rs#142: paired relatedness-scoping flags. Each axis
         // is a tri-state `--<axis>` / `--no-<axis>` pair that
         // `overrides_with` its partner (last on the CLI wins).
@@ -175,6 +188,10 @@ pub fn build_command(meta: &AdapterMeta) -> Command {
         .subcommand(subcommand_with_paths(
             "report",
             "Full duplication report (default — invokable without an explicit subcommand)",
+        ))
+        .subcommand(subcommand_with_paths(
+            "explore",
+            "Generate the self-contained HTML explorer to a temp file and open it in the browser (always exits 0; --no-open / $DRY_NO_OPEN suppress the launch)",
         ))
         .subcommand(subcommand_with_paths(
             "stats",

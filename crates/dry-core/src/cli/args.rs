@@ -103,6 +103,22 @@ pub enum Command {
         /// when omitted; see [`super::Args::analysis_paths`].
         paths: Vec<PathBuf>,
     },
+    /// Generate the self-contained HTML explorer for the analyzed source,
+    /// write it to a temp file, and open it in the browser (dry-rs#151).
+    ///
+    /// Runs the SAME analysis pipeline as [`Report`](Self::Report), then
+    /// renders the [`Format::Html`] explorer tagged
+    /// [`crate::adapters::reporters::json::Mode::Explore`] to
+    /// `std::env::temp_dir()`, prints the path to stdout, and opens it
+    /// (`$BROWSER` / `open` / `xdg-open`). This is a dev tool, NOT a gate:
+    /// it ALWAYS exits 0, even with findings. The browser-open is skippable
+    /// (`--no-open` / `$DRY_NO_OPEN`) so CI / tests never launch a browser;
+    /// the temp file is written regardless.
+    Explore {
+        /// Source roots to analyze. Defaults to the current directory
+        /// when omitted; see [`super::Args::analysis_paths`].
+        paths: Vec<PathBuf>,
+    },
     /// Summary statistics only (no per-match output).
     Stats {
         /// Source roots to analyze. Defaults to the current directory
@@ -142,30 +158,33 @@ impl Command {
     /// Extract the source roots associated with this subcommand
     /// variant, when applicable.
     ///
-    /// `Report` / `Stats` / `Check` carry an analysis path list;
-    /// `Ignore` / `Ignored` / `Cleanup` / `Init` do not (they don't
+    /// `Report` / `Explore` / `Stats` / `Check` carry an analysis path
+    /// list; `Ignore` / `Ignored` / `Cleanup` / `Init` do not (they don't
     /// trigger the analyzer pipeline at v0.1). Returns an empty slice
     /// for the non-analysis variants so callers can treat the absence
     /// of paths as "no walk required."
     #[must_use]
     pub fn paths(&self) -> &[PathBuf] {
         match self {
-            Self::Report { paths } | Self::Stats { paths } | Self::Check { paths } => paths,
+            Self::Report { paths }
+            | Self::Explore { paths }
+            | Self::Stats { paths }
+            | Self::Check { paths } => paths,
             Self::Ignore { .. } | Self::Ignored | Self::Cleanup | Self::Init { .. } => &[],
         }
     }
 
     /// Whether this subcommand triggers the analyzer pipeline.
     ///
-    /// `Report` / `Stats` / `Check` are analysis commands; `Ignore` /
-    /// `Ignored` / `Cleanup` manage the allowlist surface; `Init`
-    /// emits the example config — all four short-circuit before the
+    /// `Report` / `Explore` / `Stats` / `Check` are analysis commands;
+    /// `Ignore` / `Ignored` / `Cleanup` manage the allowlist surface;
+    /// `Init` emits the example config — all four short-circuit before the
     /// file walker runs.
     #[must_use]
     pub const fn is_analysis(&self) -> bool {
         matches!(
             self,
-            Self::Report { .. } | Self::Stats { .. } | Self::Check { .. }
+            Self::Report { .. } | Self::Explore { .. } | Self::Stats { .. } | Self::Check { .. }
         )
     }
 }
@@ -189,7 +208,15 @@ impl Command {
 /// `#[derive(Parser)]` was REMOVED at Stage 5 of dry-rs#71. The
 /// imperative `build_command(meta) -> clap::Command` is the only
 /// parser construction path; `Args` is now a pure POD struct.
+///
+/// `clippy::struct_excessive_bools` is allowed: the boolean fields
+/// (`only_failing` / `no_fail` / `include_ignored` / `no_open`) are
+/// orthogonal CLI flags — the user's mental model, one `--flag` each,
+/// NOT a bitflag candidate. Same rationale as
+/// [`Capabilities`](crate::adapters::reporters::json::Capabilities) /
+/// [`crate::domain::ResolvedScope`] (dry-rs#151 added the fourth).
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Args {
     /// Subcommand to run. Defaults to [`Command::Report`] (with paths
     /// inferred from positional args or `.`) when no subcommand is
@@ -293,6 +320,17 @@ pub struct Args {
     /// `--across-module` / `--no-across-module`; see
     /// [`within_crate`](Self::within_crate).
     pub across_module: Option<bool>,
+
+    /// Suppress the browser launch on the `explore` path (dry-rs#151).
+    ///
+    /// When `true` (from `--no-open` OR the `$DRY_NO_OPEN` env escape),
+    /// the `explore` subcommand still WRITES the temp HTML file and prints
+    /// its path, but skips spawning `$BROWSER` / `open` / `xdg-open`. This
+    /// keeps CI and tests from launching a browser (or hanging on a
+    /// headless runner). The flag is a no-op for every other subcommand.
+    /// `ArgAction::SetTrue` so absence is `false`; an env-only opt-out is
+    /// honored at the run-loop boundary, not here.
+    pub no_open: bool,
 }
 
 impl Args {
@@ -362,6 +400,7 @@ impl Args {
         let include_ignored = matches.get_flag("include_ignored");
         let completions = matches.get_one::<Shell>("completions").copied();
         let config = matches.get_one::<PathBuf>("config").cloned();
+        let no_open = matches.get_flag("no_open");
 
         // Scope axes are paired `--<axis>` / `--no-<axis>` flags that
         // `overrides_with` each other (so the last one on the CLI wins).
@@ -375,6 +414,12 @@ impl Args {
 
         let command = match matches.subcommand() {
             Some(("report", sub)) => Some(Command::Report {
+                paths: sub
+                    .get_many::<PathBuf>("paths")
+                    .map(|vals| vals.cloned().collect())
+                    .unwrap_or_default(),
+            }),
+            Some(("explore", sub)) => Some(Command::Explore {
                 paths: sub
                     .get_many::<PathBuf>("paths")
                     .map(|vals| vals.cloned().collect())
@@ -432,6 +477,7 @@ impl Args {
             across_crate,
             within_module,
             across_module,
+            no_open,
         })
     }
 }

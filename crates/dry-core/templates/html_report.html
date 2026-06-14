@@ -49,6 +49,8 @@
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .cards { display: grid; gap: .75rem; }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: .85rem 1rem; }
+  /* explore mode auto-focuses the hottest cluster (dry-rs#151). */
+  .card.hottest { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(88,166,255,.35); }
   .card .meta { color: var(--muted); font-size: .85rem; }
   .card ul { margin: .5rem 0 0; padding-left: 1.1rem; }
   .card li { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; }
@@ -659,6 +661,66 @@
     );
   }
 
+  // ---- hottest-cluster focus (explore mode, dry-rs#151) --------------
+  // EXPLORE mode opens on the hottest cluster: rank = cardinality × score
+  // × span-lines (the build-plan heuristic). Computed entirely client-side
+  // — the binary re-run model (dry-rs#114) means scope changes re-invoke
+  // `explore`, so there is no precomputed ranking on the wire. Pure DOM
+  // ops: find the rendered card by its `match-<i>` id, scroll it into view,
+  // and add a highlight class via classList — NO raw-markup sink.
+
+  // Total source lines spanned by a match's member forms (end.line -
+  // start.line + 1, summed across members). Spans are end-inclusive
+  // (dry-rs span semantics), so a single-line form contributes 1.
+  function matchSpanLines(m) {
+    const forms = m.forms || [];
+    let total = 0;
+    for (const f of forms) {
+      const s = f.span;
+      if (!s || !s.start || !s.end) continue;
+      const lines = (s.end.line - s.start.line) + 1;
+      total += lines > 0 ? lines : 1;
+    }
+    return total;
+  }
+
+  // Hotness rank: cardinality × score × span-lines. A larger cluster of a
+  // higher-scoring, larger-bodied duplication ranks hottest.
+  function clusterHotness(m) {
+    const cardinality = (m.forms || []).length;
+    const score = m.score ?? 0;
+    return cardinality * score * matchSpanLines(m);
+  }
+
+  // Pick the index (into result.matches) of the hottest cluster, or -1 when
+  // there are none. Deterministic: ties keep the earlier index (stable).
+  function hottestClusterIndex(matches) {
+    let bestIdx = -1;
+    let bestRank = -Infinity;
+    matches.forEach((m, i) => {
+      const rank = clusterHotness(m);
+      if (rank > bestRank) {
+        bestRank = rank;
+        bestIdx = i;
+      }
+    });
+    return bestIdx;
+  }
+
+  function focusHottestCluster(env) {
+    if (!env.mode || env.mode !== "explore") return;
+    const matches = (env.result && env.result.matches) || [];
+    const idx = hottestClusterIndex(matches);
+    if (idx < 0) return;
+    const card = el("match-" + idx);
+    if (!card) return; // filtered out of the current view — degrade silently.
+    card.classList.add("hottest");
+    // `scrollIntoView` is a DOM method, not a markup sink — safe.
+    if (typeof card.scrollIntoView === "function") {
+      card.scrollIntoView({ block: "start" });
+    }
+  }
+
   function main() {
     const env = loadData();
     if (!env) {
@@ -674,6 +736,9 @@
     renderScopeBanner(env);
     renderOverview(env);
     renderClusters(env);
+    // EXPLORE mode auto-focuses the hottest cluster (dry-rs#151). Runs
+    // AFTER renderClusters so the card DOM exists; no-op in REPORT mode.
+    focusHottestCluster(env);
     el("filter-tier").addEventListener("change", () => renderClusters(env));
     el("filter-score").addEventListener("input", () => renderClusters(env));
   }
