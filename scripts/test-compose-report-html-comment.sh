@@ -18,14 +18,21 @@
 # positive-only test can silently break the empty-state rendering.
 #
 # This test feeds the composer four mocked envelopes:
-#   1. POSITIVE — findings across all three tiers + a populated
-#      Pages/artifact context (PR17 placeholder flipped live).
-#   2. NEGATIVE — zero findings: empty `matches`, `by_tier: {}`,
-#      no artifact/Pages context (the PR16 placeholder branch).
+#   1. POSITIVE — findings across all three tiers + a live Pages URL +
+#      an artifact run URL (the View ↗ / Download cells both live).
+#   2. NEGATIVE — zero findings: empty `matches`, `by_tier: {}`, and
+#      NO Pages/artifact context (push-to-main / fork branch: View
+#      degrades to "download ↓", Download degrades to the Artifacts
+#      note).
 #   3. PARTIAL  — some tiers present, others omitted (the real-world
 #      shape — exercises every `// 0` default independently).
-#   4. PR17-LIVE — non-empty PAGES_URL flips the Open-on-Pages line to
-#      a live link, proving PR17 only needs to set the env var.
+#   4. PAGES-LIVE — a non-empty PAGES_URL renders the live `👁 View ↗`
+#      link; an empty PAGES_URL renders the degraded "download ↓" note.
+#
+# Together these keep the 4-state coverage over the new cute-dbt-style
+# `| Report | View | Download |` table: both action cells must render
+# correctly in their live AND degraded forms, and the per-tier stats
+# table must render with findings AND with zero findings.
 #
 # Run locally:  bash scripts/test-compose-report-html-comment.sh
 # Also runs as a CI step in the `report-html` job.
@@ -74,15 +81,17 @@ cat >"$tmp/positive.json" <<'JSON'
   }
 }
 JSON
-out_pos="$(ARTIFACT_RUN_URL="https://example.test/run/1" PAGES_URL="" "$composer" "$tmp/positive.json")"
+out_pos="$(ARTIFACT_RUN_URL="https://example.test/run/1" PAGES_URL="https://example.github.io/dry-rs/pr-1/" "$composer" "$tmp/positive.json")"
 assert_contains "$out_pos" "## dry-rs · report-html explorer" "positive: header"
+assert_contains "$out_pos" "| Report | View | Download |" "positive: action-table header"
 assert_contains "$out_pos" "| Forms analyzed | 890 |" "positive: forms"
 assert_contains "$out_pos" "| Matches | 5 |" "positive: matches count"
 assert_contains "$out_pos" '| `auto_refactor` (>= 0.95) | 11 |' "positive: auto_refactor"
 assert_contains "$out_pos" '| `review_first` (>= 0.85) | 14 |' "positive: review_first"
 assert_contains "$out_pos" '| `advisory` (>= threshold) | 3 |' "positive: advisory"
-assert_contains "$out_pos" "https://example.test/run/1" "positive: artifact link"
-assert_contains "$out_pos" "lands in PR17" "positive: pages placeholder (PAGES_URL empty)"
+assert_contains "$out_pos" "[⬇ Download](https://example.test/run/1)" "positive: download cell live"
+assert_contains "$out_pos" "[👁 View ↗](https://example.github.io/dry-rs/pr-1/)" "positive: view cell live"
+assert_not_contains "$out_pos" "_download ↓_" "positive: no degraded view note when PAGES_URL set"
 
 # --- 2. NEGATIVE: zero findings, omitted tiers, no context ------------
 cat >"$tmp/negative.json" <<'JSON'
@@ -98,15 +107,18 @@ cat >"$tmp/negative.json" <<'JSON'
 JSON
 out_neg="$(ARTIFACT_RUN_URL="" PAGES_URL="" "$composer" "$tmp/negative.json")"
 assert_contains "$out_neg" "## dry-rs · report-html explorer" "negative: header"
+assert_contains "$out_neg" "| Report | View | Download |" "negative: action-table header still renders"
 assert_contains "$out_neg" "| Forms analyzed | 1234 |" "negative: forms"
 assert_contains "$out_neg" "| Matches | 0 |" "negative: zero matches"
 assert_contains "$out_neg" '| `auto_refactor` (>= 0.95) | 0 |' "negative: auto_refactor defaults to 0"
 assert_contains "$out_neg" '| `review_first` (>= 0.85) | 0 |' "negative: review_first defaults to 0"
 assert_contains "$out_neg" '| `advisory` (>= threshold) | 0 |' "negative: advisory defaults to 0"
-assert_contains "$out_neg" "Artifacts** section" "negative: artifact-section fallback"
-assert_contains "$out_neg" "lands in PR17" "negative: pages placeholder"
+assert_contains "$out_neg" "_run's **Artifacts** section_" "negative: download cell degraded note"
+assert_contains "$out_neg" "_download ↓_" "negative: view cell degraded note (PAGES_URL empty)"
 # Negative branch must not crash or emit a bare 'null' from jq.
 assert_not_contains "$out_neg" "| Forms analyzed | null |" "negative: no null leak"
+# The degraded view note must NOT contain a live markdown link.
+assert_not_contains "$out_neg" "👁 View ↗](" "negative: no live View link when PAGES_URL empty"
 
 # --- 3. PARTIAL: some tiers present, others omitted -------------------
 cat >"$tmp/partial.json" <<'JSON'
@@ -126,9 +138,9 @@ assert_contains "$out_part" '| `auto_refactor` (>= 0.95) | 0 |' "partial: missin
 assert_contains "$out_part" '| `review_first` (>= 0.85) | 2 |' "partial: present review_first"
 assert_contains "$out_part" '| `advisory` (>= threshold) | 0 |' "partial: missing advisory -> 0"
 
-# --- 4. PR17-LIVE: PAGES_URL set flips the Open-on-Pages line ---------
-out_live="$(ARTIFACT_RUN_URL="https://example.test/run/9" PAGES_URL="https://pages.test/pr/9/" "$composer" "$tmp/positive.json")"
-assert_contains "$out_live" "https://pages.test/pr/9/" "pr17-live: live pages link"
-assert_not_contains "$out_live" "lands in PR17" "pr17-live: placeholder gone when PAGES_URL set"
+# --- 4. PAGES-LIVE: PAGES_URL set renders the live View ↗ link --------
+out_live="$(ARTIFACT_RUN_URL="https://example.test/run/9" PAGES_URL="https://pages.test/pr-9/" "$composer" "$tmp/positive.json")"
+assert_contains "$out_live" "[👁 View ↗](https://pages.test/pr-9/)" "pages-live: live View link"
+assert_not_contains "$out_live" "_download ↓_" "pages-live: degraded note gone when PAGES_URL set"
 
-echo "OK: compose-report-html-comment.sh renders all branches (positive, negative, partial, pr17-live)"
+echo "OK: compose-report-html-comment.sh renders all branches (positive, negative, partial, pages-live)"
