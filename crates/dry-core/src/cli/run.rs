@@ -267,6 +267,18 @@ fn run_with_args<N: NormalizerPort + TreeDeriverPort + Default>(
         .command
         .clone()
         .unwrap_or_else(|| Command::Report { paths: Vec::new() });
+
+    // `explore` is the DOGFOOD entry point (dry-rs#151): it runs the
+    // SAME analysis as `report`, then renders the HTML explorer (tagged
+    // `Mode::Explore`) to a temp file and opens it in the browser. It is
+    // a dev tool, NOT a gate — it ALWAYS exits 0, even with findings, so
+    // it bypasses the `--no-fail` / `result.passed` exit-code derivation
+    // below. The temp file is written regardless of `--no-open`; only the
+    // browser launch is gated (CI-safe).
+    if matches!(command, Command::Explore { .. }) {
+        return handle_explore(&config, &normalizer, &report, view, args.no_open);
+    }
+
     dispatch_output(&command, &config, &normalizer, &report, view);
 
     // Exit-code derivation: --no-fail suppresses FAILURE; otherwise
@@ -300,6 +312,7 @@ fn emit_allowlist_stub_note(command: &Command) {
         // gated this match in `run_with_args` so we never reach here
         // in production. The fall-through is a defensive no-op.
         Command::Report { .. }
+        | Command::Explore { .. }
         | Command::Stats { .. }
         | Command::Check { .. }
         | Command::Init { .. } => {}
@@ -974,11 +987,14 @@ fn dispatch_output<N: NormalizerPort>(
         Command::Stats { .. } => emit_stats(config, normalizer, report, view),
         // `Check` is exit-code-only — no stdout. The gate verdict drives
         // the exit code in `run_with_args` after `dispatch_output`
-        // returns. `Ignore` / `Ignored` / `Cleanup` / `Init`
-        // short-circuit BEFORE the analyzer pipeline runs (see
-        // [`run_with_args`]); their inclusion here is a defensive
-        // fallback for the exhaustive match.
+        // returns. `Explore` short-circuits BEFORE this dispatch (see
+        // `handle_explore` in [`run_with_args`]) — it renders to a temp
+        // file + opens the browser, never to stdout. `Ignore` / `Ignored`
+        // / `Cleanup` / `Init` short-circuit before the analyzer pipeline
+        // runs; their inclusion here is a defensive fallback for the
+        // exhaustive match.
         Command::Check { .. }
+        | Command::Explore { .. }
         | Command::Ignore { .. }
         | Command::Ignored
         | Command::Cleanup
@@ -1167,8 +1183,9 @@ fn print_json_envelope<N: NormalizerPort>(
 /// vanilla single-file page. Emits [`Mode::Report`] with the SHOWCASE
 /// [`Capabilities::showcase`] (overview + clusters + template skeleton +
 /// substitution grid + d-slider + scope banner — every view the frontend
-/// renders as of dry-rs#149); the `explore` subcommand flips `mode` to
-/// [`Mode::Explore`] in a later PR of epic #111.
+/// renders as of dry-rs#149); the `explore` subcommand (dry-rs#151,
+/// [`handle_explore`]) flips `mode` to [`Mode::Explore`] and renders to a
+/// temp file rather than stdout.
 fn print_html<N: NormalizerPort>(
     config: &AnalysisConfig,
     normalizer: &N,
@@ -1181,6 +1198,144 @@ fn print_html<N: NormalizerPort>(
         Ok(page) => print!("{page}"),
         Err(err) => eprintln!("error: failed to render HTML report: {err}"),
     }
+}
+
+/// Handle the `explore` subcommand (dry-rs#151) — the DOGFOOD entry point.
+///
+/// Runs the SAME analysis as `report` (the caller built `report` + `view`),
+/// then renders the self-contained HTML explorer tagged [`Mode::Explore`]
+/// (with the SHOWCASE [`Capabilities`] — every view the frontend renders)
+/// to a stable file in [`std::env::temp_dir`], prints the path to stdout,
+/// and opens it in the browser. Unlike `report --format html`, the explorer
+/// page goes to a FILE (so the browser can open it), not stdout.
+///
+/// **Always exits 0.** `explore` is a local refactoring-triage dev tool,
+/// never a CI gate — it returns [`ExitCode::SUCCESS`] regardless of
+/// findings (no `--no-fail` / `result.passed` derivation).
+///
+/// **CI-safe browser-open.** The actual spawn is suppressed when
+/// `--no-open` (`no_open` arg) OR the `$DRY_NO_OPEN` env escape is set, so
+/// CI and tests never launch a browser (or hang on a headless runner). The
+/// temp file is written and its path printed REGARDLESS of `--no-open`.
+fn handle_explore<N: NormalizerPort>(
+    config: &AnalysisConfig,
+    normalizer: &N,
+    report: &Report,
+    view: Option<ViewProjection>,
+    no_open: bool,
+) -> ExitCode {
+    // EXPLORE mode + the SHOWCASE capabilities — every view the frontend
+    // renders. The JS reads `env.mode == "explore"` to auto-focus the
+    // hottest cluster (cardinality × score × span-lines, computed
+    // client-side per the dry-rs#114 re-run decision).
+    let envelope = build_run_envelope(config, normalizer, report, view)
+        .with_presentation(Mode::Explore, Capabilities::showcase());
+    let page = match html::render(&envelope) {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("error: failed to render HTML explorer: {err}");
+            // Still exit 0 — explore is never a gate, and a render failure
+            // is a tool bug surfaced on stderr, not a findings verdict.
+            return ExitCode::SUCCESS;
+        }
+    };
+
+    let out_path = explore_output_path(normalizer.tool_name());
+    if let Err(err) = fs::write(&out_path, page.as_bytes()) {
+        eprintln!(
+            "error: failed to write HTML explorer to {}: {err}",
+            out_path.display()
+        );
+        return ExitCode::SUCCESS;
+    }
+    // The path goes to stdout so callers (and humans) can find / pipe it.
+    println!("{}", out_path.display());
+
+    // CI-safe gate: `--no-open` OR `$DRY_NO_OPEN` suppresses the launch.
+    if no_open || env_no_open() {
+        eprintln!("note: browser launch suppressed (--no-open / $DRY_NO_OPEN)");
+    } else {
+        open_in_browser(&out_path);
+    }
+
+    ExitCode::SUCCESS
+}
+
+/// Stable temp-file path for the `explore` HTML artifact (dry-rs#151).
+///
+/// `std::env::temp_dir()/dry-explore-<tool_name>.html`. The filename is
+/// adapter-name-agnostic — `tool_name` is the normalizer's identity
+/// (`dry4rs`, future `dry4ts`), so `dry-core` itself hardcodes no adapter
+/// name. The filename is stable per-tool (not per-run) so repeated
+/// `explore` invocations overwrite one file rather than littering the temp
+/// dir — the re-run model (dry-rs#114) means the user re-invokes `explore`
+/// with different scope flags and wants the freshest artifact at a
+/// predictable location.
+fn explore_output_path(tool_name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("dry-explore-{tool_name}.html"))
+}
+
+/// Whether the `$DRY_NO_OPEN` env escape is set to a truthy value.
+///
+/// Any non-empty value other than `0` / `false` counts as set, mirroring
+/// the conventional env-flag semantics. The CI-safe escape lets a harness
+/// (or a headless runner) suppress the browser launch without threading a
+/// CLI flag through every invocation.
+fn env_no_open() -> bool {
+    match std::env::var("DRY_NO_OPEN") {
+        Ok(v) => {
+            let v = v.trim();
+            !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false")
+        }
+        Err(_) => false,
+    }
+}
+
+/// Open `path` in the user's browser (dry-rs#151).
+///
+/// Precedence: `$BROWSER` (split on whitespace; first token is the program,
+/// the rest are leading args) → `open` (macOS) → `xdg-open` (Linux). The
+/// spawn is fire-and-forget — `explore` does not wait for the browser, and
+/// a launch failure is a stderr note, never a non-zero exit. Callers gate
+/// this behind the `--no-open` / `$DRY_NO_OPEN` CI-safe escape.
+fn open_in_browser(path: &Path) {
+    use std::process::Command as ProcessCommand;
+
+    let result = if let Some(browser) = std::env::var_os("BROWSER") {
+        let browser = browser.to_string_lossy();
+        let mut parts = browser.split_whitespace();
+        match parts.next() {
+            Some(program) => ProcessCommand::new(program)
+                .args(parts)
+                .arg(path)
+                .spawn()
+                .map(|_| ()),
+            // `$BROWSER` was set but blank — fall through to the OS opener.
+            None => spawn_os_opener(path),
+        }
+    } else {
+        spawn_os_opener(path)
+    };
+
+    if let Err(err) = result {
+        eprintln!(
+            "note: could not open a browser ({err}); open this file manually: {}",
+            path.display()
+        );
+    }
+}
+
+/// Spawn the platform default opener (`open` on macOS, `xdg-open`
+/// elsewhere) for `path`. Used when `$BROWSER` is unset / blank.
+fn spawn_os_opener(path: &Path) -> std::io::Result<()> {
+    use std::process::Command as ProcessCommand;
+
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    ProcessCommand::new(opener).arg(path).spawn().map(|_| ())
 }
 
 /// Project the run's resolved [`ResolvedScope`] onto the wire
