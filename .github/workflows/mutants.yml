@@ -75,7 +75,7 @@ jobs:
       # ones in `ci.yml` after PR #38 (zizmor + dependabot hardening
       # for #16) — dependabot updates them in lockstep across both
       # workflows.
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # tracks @stable branch
@@ -88,7 +88,7 @@ jobs:
           # eviction policy doesn't churn on this job's working set.
           shared-key: dry-rs-mutants
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2
+      - uses: taiki-e/install-action@0631aa6515c7d545823c67cfae7ef4fc7f490154 # v2
         with:
           tool: cargo-mutants
       - name: Run cargo mutants on crates/dry-core/src/comparison/mod.rs
