@@ -314,7 +314,7 @@ jobs:
       # refactored the CC>15 hotspots and flipped this gate from
       # measurement-only to production-code real).
       - name: Run crap4rs scorecard (production-code CC ladder)
-        uses: breezy-bays-labs/crap-rs/.github/actions/scorecard@7c05007eaf2d90e95e5b865e8850896d59436a77 # crap4rs-v0.6.0
+        uses: breezy-bays-labs/crap-rs/.github/actions/scorecard@d9792860ce677cc3d96e9eb029b76e1fe4d5a278 # crap4rs-v0.6.0
         with:
           language: rust
           coverage: lcov.info
