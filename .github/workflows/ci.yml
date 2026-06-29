@@ -80,7 +80,7 @@ jobs:
         with:
           shared-key: dry-rs
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2
+      - uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9 # v2
         with:
           tool: cargo-nextest@0.9
       - run: cargo nextest run --workspace --all-targets --locked
@@ -100,10 +100,10 @@ jobs:
         with:
           shared-key: dry-rs
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2
+      - uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9 # v2
         with:
           tool: cargo-nextest@0.9
-      - uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2
+      - uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9 # v2
         with:
           tool: cargo-llvm-cov@0.6
       # Threshold rationale: domain-only achieves >95% line coverage
@@ -157,7 +157,7 @@ jobs:
       # tag-poisoning attack on the action would silently disable every
       # other supply-chain check. Tag v2 -> 91bf2b6 (verified via
       # `gh api repos/EmbarkStudios/cargo-deny-action/git/ref/tags/v2`).
-      - uses: EmbarkStudios/cargo-deny-action@a531616d8ce3b9177443e48a1159bc945a099823 # v2
+      - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2
         with:
           command: check
 

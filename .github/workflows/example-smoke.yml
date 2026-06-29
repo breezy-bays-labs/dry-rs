@@ -314,7 +314,7 @@ jobs:
         with:
           shared-key: dry-rs
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2
+      - uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9 # v2
         with:
           tool: cargo-nextest@0.9
       # The harness invokes dry4rs via `cargo run -p dry4rs --` inside
