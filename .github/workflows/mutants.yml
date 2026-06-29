@@ -88,7 +88,7 @@ jobs:
           # eviction policy doesn't churn on this job's working set.
           shared-key: dry-rs-mutants
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2
+      - uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9 # v2
         with:
           tool: cargo-mutants
       - name: Run cargo mutants on crates/dry-core/src/comparison/mod.rs
