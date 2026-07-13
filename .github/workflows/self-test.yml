@@ -91,7 +91,7 @@ jobs:
         with:
           shared-key: dry-rs
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2
+      - uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2
         with:
           tool: cargo-nextest@0.9
       # The self-check integration test spawns the dry4rs binary
@@ -175,7 +175,7 @@ jobs:
         # Header value (the HTML-comment dedup marker) mirrors the body
         # H2 above so the sticky stays visually identifiable on the PR.
         if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: "dry-rs · production-code DRY scorecard"
           path: dry-self-scorecard-comment.md
@@ -251,7 +251,7 @@ jobs:
         # See `dry-self-scorecard`'s sticky step for the skip-on-main +
         # header-as-dedup-marker rationale.
         if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: "dry-rs · corpus measurement"
           path: dry-corpus-scorecard-comment.md
@@ -276,10 +276,10 @@ jobs:
         with:
           shared-key: dry-rs
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2
+      - uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2
         with:
           tool: cargo-nextest@0.9
-      - uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2
+      - uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2
         with:
           tool: cargo-llvm-cov@0.6
 
@@ -480,7 +480,7 @@ jobs:
         # the dry/crap/corpus scorecard stickies so all four coexist on
         # the PR; it mirrors the body H2.
         if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: "dry-rs · report-html explorer"
           path: report-html-comment.md
